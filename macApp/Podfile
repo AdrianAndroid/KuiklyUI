@@ -2,7 +2,7 @@ source 'https://cdn.cocoapods.org/'
 
 target 'macApp' do
   # use_frameworks!
-  platform :osx, '10.13'
+  platform :osx, '10.15'
   
   pod 'OpenKuiklyIOSRender', :path => '../'
   pod 'demo', :path => '../demo'
@@ -12,5 +12,9 @@ target 'macApp' do
   # pag官方mac版本存在问题不可用，使用定制修改版 '~> 4.5'
   pod 'libpag-macOS', :git => 'https://github.com/wwwcg/pag-mac.git', :commit=> 'fee5879b'
   pod 'VLCKit', '~>3.3.0'
+  # SFTP client deps (§2 / §3 / §21.1.1)
+  # 本地 podspec 包装 riden fork（arm64-ready），保留 NMSSH 模块名以复用现有代码
+  pod 'NMSSH', :podspec => 'NMSSH.podspec'
+  pod 'GCDWebServer', '~> 3.5.4'    # 本地 HTTP 代理
 
 end

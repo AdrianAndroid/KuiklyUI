@@ -12,15 +12,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
+#include <string>
+#include <exception>
 
-import SwiftUI
+namespace kuikly {
+namespace module {
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
-    }
-}
+/**
+ * SFTP 错误格式化器（HarmonyOS，§21.4.3）
+ *
+ * 把 std::exception 映射为 SftpError JSON 字符串。
+ */
+class SftpErrorFormatter {
+ public:
+    static std::string Format(const std::exception &e);
+    static std::string Format(int code, const std::string &msg, const std::string &detail = "");
+};
 
-#Preview {
-    ContentView()
-}
+}  // namespace module
+}  // namespace kuikly

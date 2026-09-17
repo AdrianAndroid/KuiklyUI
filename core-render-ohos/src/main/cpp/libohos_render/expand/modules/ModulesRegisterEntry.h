@@ -29,6 +29,11 @@
 #include "libohos_render/expand/modules/preferences/KROhSharedPreferencesModule.h"
 #include "libohos_render/expand/modules/file/KRFileModule.h"
 #include "libohos_render/expand/modules/vsync/KRVsyncModule.h"
+// SFTP Modules（§3 / §21.7.4）
+#include "libohos_render/expand/modules/sftp/KRSftpModule.h"
+#include "libohos_render/expand/modules/sftp/KRSftpFavoritesModule.h"
+#include "libohos_render/expand/modules/sftp/KRSftpPlaybackHistoryModule.h"
+#include "libohos_render/expand/modules/sftp/KRSftpConnectionModule.h"
 #include "libohos_render/core/KRRenderFactories.h"
 #include "libohos_render/export/IKRRenderModuleExport.h"
 
@@ -79,6 +84,20 @@ static void ModulesRegisterEntry() {
 
     IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRVsyncModule::MODULE_NAME, [] {
         return std::make_shared<kuikly::module::KRVsyncModule>();
+    });
+
+    // SFTP Modules（§3 / §21.7.4）
+    IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRSftpModule::MODULE_NAME, [] {
+        return std::make_shared<kuikly::module::KRSftpModule>();
+    });
+    IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRSftpFavoritesModule::MODULE_NAME, [] {
+        return std::make_shared<kuikly::module::KRSftpFavoritesModule>();
+    });
+    IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRSftpPlaybackHistoryModule::MODULE_NAME, [] {
+        return std::make_shared<kuikly::module::KRSftpPlaybackHistoryModule>();
+    });
+    IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRSftpConnectionModule::MODULE_NAME, [] {
+        return std::make_shared<kuikly::module::KRSftpConnectionModule>();
     });
 
     kuikly::features::RegisterFeatureModules();

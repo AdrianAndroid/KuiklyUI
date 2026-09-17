@@ -12,15 +12,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#import "KRBaseModule.h"
 
-import SwiftUI
+NS_ASSUME_NONNULL_BEGIN
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
-    }
-}
+/**
+ * SFTP 收藏 Module（iOS，§3.4 / §21.4）
+ *
+ * 全局单例，持久化用 `NSUserDefaults` key `sftp_favorites`。
+ */
+@interface KRSftpFavoritesModule : KRBaseModule
+@end
 
-#Preview {
-    ContentView()
-}
+NS_ASSUME_NONNULL_END

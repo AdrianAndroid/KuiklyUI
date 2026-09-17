@@ -12,15 +12,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#import "KRBaseModule.h"
 
-import SwiftUI
+NS_ASSUME_NONNULL_BEGIN
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
-    }
-}
+/**
+ * SFTP 播放历史 Module（iOS，§20.1 / §21.5）
+ *
+ * 全局单例，持久化用 `NSUserDefaults` key `sftp_playback_history`。
+ * 容量 2000 条 LRU（§21.5.1）。
+ */
+@interface KRSftpPlaybackHistoryModule : KRBaseModule
+@end
 
-#Preview {
-    ContentView()
-}
+NS_ASSUME_NONNULL_END

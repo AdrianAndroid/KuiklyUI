@@ -79,4 +79,7 @@ dependencies {
     compileOnly(project(":core"))
     implementation("androidx.appcompat:appcompat:1.2.0")
     implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
+    // SFTP client deps (§2 / §3 / §21.1.1)
+    implementation("com.jcraft:jsch:0.1.55")          // SSH/SFTP
+    implementation("org.nanohttpd:nanohttpd:2.3.1") // 本地 HTTP 代理
 }

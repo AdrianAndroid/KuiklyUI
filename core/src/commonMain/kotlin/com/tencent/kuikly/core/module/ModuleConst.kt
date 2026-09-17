@@ -31,4 +31,14 @@ object ModuleConst {
     const val VSYNC = "KRVsyncModule"
     const val BACK_PRESS = "KRBackPressModule"
     const val FILE = "KRFileModule"
+
+    // —— SFTP 客户端模块（§3.3） ——
+    /** SFTP 主 Module，绑定 Page 生命周期（§3.3 / §15.1） */
+    const val SFTP = "KRSftpModule"
+    /** 收藏 Module，全局单例（§3.4 / §21.7.4） */
+    const val SFTP_FAVORITES = "KRSftpFavoritesModule"
+    /** 播放历史 Module，全局单例（§20.1 / §21.7.4） */
+    const val SFTP_PLAYBACK_HISTORY = "KRSftpPlaybackHistoryModule"
+    /** 连接列表 Module，全局单例（§17.3.1 / §21.7.4）—— 持久化用户保存的 SFTP 连接配置 */
+    const val SFTP_CONNECTION = "KRSftpConnectionModule"
 }

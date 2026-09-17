@@ -12,15 +12,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#import <Foundation/Foundation.h>
 
-import SwiftUI
+NS_ASSUME_NONNULL_BEGIN
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
-    }
-}
+/**
+ * SFTP 错误格式化器（iOS，§21.4.3）
+ *
+ * 把 NSException 映射为 SftpError JSON 字符串。
+ */
+@interface SftpErrorFormatter : NSObject
++ (NSString *)formatException:(NSException *)e;
++ (NSString *)formatNSError:(NSError *)error;
+@end
 
-#Preview {
-    ContentView()
-}
+NS_ASSUME_NONNULL_END

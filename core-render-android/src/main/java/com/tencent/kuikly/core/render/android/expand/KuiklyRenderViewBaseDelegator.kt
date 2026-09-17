@@ -527,6 +527,19 @@ open class KuiklyRenderViewBaseDelegator(private val delegate: KuiklyRenderViewB
             moduleExport(KRBackPressModule.MODULE_NAME) {
                 KRBackPressModule()
             }
+            // SFTP Modules（§3 / §21.7.4）
+            moduleExport(KRSftpModule.MODULE_NAME) {
+                KRSftpModule()
+            }
+            moduleExport(KRSftpFavoritesModule.MODULE_NAME) {
+                KRSftpFavoritesModuleHolder.instance
+            }
+            moduleExport(KRSftpPlaybackHistoryModule.MODULE_NAME) {
+                KRSftpPlaybackHistoryModuleHolder.instance
+            }
+            moduleExport(KRSftpConnectionModule.MODULE_NAME) {
+                KRSftpConnectionModuleHolder.instance
+            }
             delegate.registerExternalModule(this) // 代理给外部，让宿主工程可以暴露自己的module
             delegate.registerTDFModule(this)
         }

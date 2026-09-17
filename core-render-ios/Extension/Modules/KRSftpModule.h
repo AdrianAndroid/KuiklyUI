@@ -12,15 +12,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#import "KRBaseModule.h"
+NS_ASSUME_NONNULL_BEGIN
 
-import SwiftUI
-
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
-    }
-}
-
-#Preview {
-    ContentView()
-}
+/**
+ * SFTP 主 Module（iOS，§3.1 / §3.5 / §7.1 / §21.2）
+ *
+ * 通过 NMSSH 实现 SSH/SFTP；方法表与 commonMain SftpModule 一一对应。
+ */
+@interface KRSftpModule : KRBaseModule
+@end
+NS_ASSUME_NONNULL_END

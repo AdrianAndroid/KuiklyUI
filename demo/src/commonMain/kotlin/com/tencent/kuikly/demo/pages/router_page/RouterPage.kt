@@ -264,6 +264,30 @@ internal class RouterPage : BasePager() {
                     }
                 }
             }
+
+            View {
+                attr {
+                    allCenter()
+                    margin(20f)
+                }
+                Text {
+                    attr {
+                        fontSize(20f)
+                        text("SFTP 客户端")
+                        textDecorationUnderLine()
+                        backgroundLinearGradient(
+                            Direction.TO_RIGHT,
+                            ColorStop(Color(0xFF2D8CFF), 0f),
+                            ColorStop(Color(0xFF00C6FF), 1f)
+                        )
+                    }
+                }
+                event {
+                    click {
+                        ctx.jumpPage("SftpHomePage")
+                    }
+                }
+            }
         }
 
     }

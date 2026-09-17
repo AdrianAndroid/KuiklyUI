@@ -12,15 +12,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "SftpErrorFormatter.h"
+#include <sstream>
 
-import SwiftUI
+namespace kuikly {
+namespace module {
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
+std::string SftpErrorFormatter::Format(const std::exception &e) {
+    int code = 0;
+    std::string msg = e.what();
+    // Phase 1.2: 根据 exception 类型映射 code
+    return Format(code, msg);
+}
+
+std::string SftpErrorFormatter::Format(int code, const std::string &msg, const std::string &detail) {
+    std::ostringstream oss;
+    oss << "{\"code\":" << code << ",\"msg\":\"" << msg << "\"";
+    if (!detail.empty()) {
+        oss << ",\"detail\":\"" << detail << "\"";
     }
+    oss << "}";
+    return oss.str();
 }
 
-#Preview {
-    ContentView()
-}
+}  // namespace module
+}  // namespace kuikly

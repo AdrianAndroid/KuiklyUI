@@ -12,15 +12,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#import <Foundation/Foundation.h>
 
-import SwiftUI
+NS_ASSUME_NONNULL_BEGIN
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:]).ignoresSafeArea()
-    }
-}
+/**
+ * 流式读文件句柄（iOS，§7.1.3）
+ */
+@interface KRSftpFileHandle : NSObject
 
-#Preview {
-    ContentView()
-}
++ (NSString *)openRead:(NSString *)sessionId remotePath:(NSString *)remotePath;
++ (NSData *)read:(NSString *)fileHandleId offset:(long long)offset length:(int)length;
++ (void)close:(NSString *)fileHandleId;
++ (void)closeAll;
+
+@end
+
+NS_ASSUME_NONNULL_END
