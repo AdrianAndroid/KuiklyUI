@@ -16,6 +16,7 @@
 #import "KRRouterHandler.h"
 #import "KuiklyRenderViewController.h"
 #import "KRNavigationController.h"
+#import "KRDiagnosticLog.h"
 #import <objc/runtime.h>
 
 #define KR_MODAL_PRESENT @"kr_modal_present"
@@ -27,6 +28,7 @@ static char kWindowSelfRetentionKey;
 
 + (void)load {
     [KRRouterModule registerRouterHandler:[self new]];
+    KR_DIAG_INFO(@"diag.handshake", @"KRRouterHandler registered");
 }
 
 #pragma mark - KRRouterProtocol
@@ -36,14 +38,14 @@ static char kWindowSelfRetentionKey;
               controller:(NSViewController *)controller {
     
     if (!pageName || pageName.length == 0) {
-        NSLog(@"[KRRouterHandler] Error: pageName is empty");
+        KR_DIAG_ERROR(@"router", @"openPage: pageName is empty from=%@", controller.title ?: @"<nil>");
         return;
     }
     
     // 创建目标视图控制器
     NSViewController *targetVC = [self createViewControllerWithPageName:pageName pageData:pageData];
     if (!targetVC) {
-        NSLog(@"[KRRouterHandler] Error: Failed to create view controller for page: %@", pageName);
+        KR_DIAG_ERROR(@"router", @"openPage: cannot create VC for page=%@", pageName);
         return;
     }
     
@@ -51,14 +53,16 @@ static char kWindowSelfRetentionKey;
     targetVC.title = pageName;
     
     // 打开页面（使用多种策略）
-    [self presentViewController:targetVC fromController:controller pageData:pageData];
+    [self presentViewController:targetVC fromController:controller pageData:pageData pageName:pageName];
 }
 
 - (void)closePage:(NSViewController *)controller {
     if (!controller) {
-        NSLog(@"[KRRouterHandler] Error: controller is nil");
+        KR_DIAG_WARN(@"router", @"closePage: controller is nil");
         return;
     }
+    
+    KR_DIAG_INFO(@"router", @"closePage: %@", controller.title ?: @"<no-title>");
     
     // 策略1：如果在 KRNavigationController 中，使用堆栈管理
     KRNavigationController *navController = controller.kr_navigationController;
@@ -68,13 +72,17 @@ static char kWindowSelfRetentionKey;
             // 是根控制器，尝试关闭整个导航控制器（如果它是被 present 的）
             if (navController.presentingViewController) {
                 [navController.presentingViewController dismissViewController:navController];
+                KR_DIAG_DEBUG(@"router", @"closePage: dismiss nav=%@", navController);
                 return;
             }
             // 否则关闭窗口
             [controller.view.window close];
+            KR_DIAG_DEBUG(@"router", @"closePage: close window=%@", controller.view.window);
         } else {
             // 不是根控制器，pop 返回
             [navController popViewControllerAnimated:YES];
+            KR_DIAG_DEBUG(@"router", @"closePage: pop nav stack, count was=%lu",
+                         (unsigned long)navController.viewControllers.count);
         }
         return;
     }
@@ -82,6 +90,7 @@ static char kWindowSelfRetentionKey;
     // 策略2：如果是 Sheet/Modal，关闭它
     if (controller.presentingViewController) {
         [controller.presentingViewController dismissViewController:controller];
+        KR_DIAG_DEBUG(@"router", @"closePage: dismiss presented=%@", controller);
         return;
     }
     
@@ -90,7 +99,7 @@ static char kWindowSelfRetentionKey;
     if (window) {
         [window close];
     } else {
-        NSLog(@"[KRRouterHandler] Warning: Unable to close page, no window found");
+        KR_DIAG_WARN(@"router", @"closePage: cannot close, no window");
     }
 }
 
@@ -104,11 +113,8 @@ static char kWindowSelfRetentionKey;
     NSViewController *vc = nil;
     
     // 支持特定页面的自定义创建逻辑
-    // 示例：处理原生混合页面
     if ([pageName isEqualToString:@"NativeMixKuikly"]) {
-        // 可以在这里创建自定义的原生 ViewController
-        // vc = [[CustomNativeViewController alloc] init];
-        NSLog(@"[KRRouterHandler] NativeMixKuikly page is not implemented yet");
+        KR_DIAG_INFO(@"router", @"NativeMixKuikly stub reached, no native VC implemented");
     }
     
     // 默认：创建 Kuikly 渲染页面
@@ -124,13 +130,14 @@ static char kWindowSelfRetentionKey;
  */
 - (void)presentViewController:(NSViewController *)targetVC 
                fromController:(NSViewController *)fromController
-                     pageData:(NSDictionary *)pageData {
+                     pageData:(NSDictionary *)pageData
+                     pageName:(NSString *)pageName {
     
     // 策略1：如果当前在 KRNavigationController 中，使用堆栈导航
     KRNavigationController *navController = fromController.kr_navigationController;
     if (navController) {
         [navController pushViewController:targetVC animated:YES];
-        NSLog(@"[KRRouterHandler] Opened page via NavigationController push");
+        KR_DIAG_INFO(@"router", @"open: push to nav target=%@", targetVC.title ?: pageName);
         return;
     }
     
@@ -139,19 +146,19 @@ static char kWindowSelfRetentionKey;
                                 [pageData[@"presentAsSheet"] boolValue];
     if (shouldPresentAsSheet && fromController.presentedViewControllers.count == 0) {
         [fromController presentViewControllerAsSheet:targetVC];
-        NSLog(@"[KRRouterHandler] Opened page as Sheet (modal)");
+        KR_DIAG_INFO(@"router", @"open: as-sheet target=%@", targetVC.title ?: pageName);
         return;
     }
     
     // 策略3：使用新窗口打开（macOS 标准方式）
-    [self openInNewWindow:targetVC];
-    NSLog(@"[KRRouterHandler] Opened page in new window");
+    [self openInNewWindow:targetVC pageName:pageName];
+    KR_DIAG_INFO(@"router", @"open: new-window target=%@", targetVC.title ?: pageName);
 }
 
 /**
  * @brief 在新窗口中打开视图控制器
  */
-- (void)openInNewWindow:(NSViewController *)viewController {
+- (void)openInNewWindow:(NSViewController *)viewController pageName:(NSString *)pageName {
     // 获取视图的建议尺寸，如果过小则使用默认值
     CGSize viewSize = viewController.view.frame.size;
     CGFloat windowWidth = MAX(viewSize.width, 900.0);
@@ -188,7 +195,7 @@ static char kWindowSelfRetentionKey;
                                                         queue:[NSOperationQueue mainQueue]
                                                    usingBlock:^(NSNotification *note) {
         NSWindow *closingWindow = note.object; // 从通知获取窗口，不捕获外部引用
-        NSLog(@"[KRRouterHandler] Window closing: %@", closingWindow.title);
+        KR_DIAG_INFO(@"router", @"Window closing: %@", closingWindow.title ?: @"<no-title>");
         // 立即移除强引用，让窗口在关闭动画完成后可以被释放
         objc_setAssociatedObject(closingWindow, &kWindowSelfRetentionKey, nil, OBJC_ASSOCIATION_RETAIN);
     }];
@@ -197,7 +204,8 @@ static char kWindowSelfRetentionKey;
     [newWindow center];
     [newWindow makeKeyAndOrderFront:nil];
     
-    NSLog(@"[KRRouterHandler] Created window with size: %.0fx%.0f", windowWidth, windowHeight);
+    KR_DIAG_INFO(@"router", @"Created window with size: %.0fx%.0f title=%@",
+                 windowWidth, windowHeight, viewController.title ?: pageName);
 }
 
 @end

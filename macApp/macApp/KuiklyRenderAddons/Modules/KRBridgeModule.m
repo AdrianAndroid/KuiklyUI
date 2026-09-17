@@ -19,6 +19,7 @@
 #import "KuiklyRenderView.h"
 #import "NSObject+KR.h"
 #import "KRNavigationController.h"
+#import "KRDiagnosticLog.h"
 #import <SDWebImageManager.h>
 #import <SDWebImageDownloader.h>
 #import <SDImageCache.h>
@@ -73,6 +74,7 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
 // 页面退出
 - (void)closePage:(NSDictionary *)args {
     NSViewController *viewController = GetViewControllerFromView((NSView *)self.hr_rootView);
+    KR_DIAG_INFO(@"bridge", @"closePage fromVC=%@", viewController.title ?: @"<nil>");
     
     // 方案1：NavigationController 堆栈管理（自定义，与iOS一致）
     KRNavigationController *navController = viewController.kr_navigationController;
@@ -107,6 +109,12 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
     if (urlParams.count) {
         [pageData addEntriesFromDictionary:urlParams];
     }
+    
+    [KRDiagnosticLog log:KRLogLevelInfo tag:@"bridge" message:@"openPage" fields:(@{
+        @"page": pageName ?: @"<nil>",
+        @"pageData_keys": pageData.allKeys ?: @[],
+        @"useSheet": @([params[@"presentAsSheet"] boolValue]),
+    })];;
     
     KuiklyRenderViewController *renderViewController = [[KuiklyRenderViewController alloc] 
         initWithPageName:pageName pageData:pageData];
@@ -194,14 +202,13 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
 - (void)log:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     NSString *content = params[@"content"];
-    NSLog(@"KuiklyRender:%@", content);
+    KR_DIAG_INFO(@"kuikly.bridge", @"%@", content ?: @"<empty>");
 }
 
 - (void)toast:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     NSString *content = params[@"content"];
-    NSLog(@"KuiklyRender toast:%@", content);
-    // 实现toast弹窗
+    KR_DIAG_INFO(@"bridge.toast", @"content=%@", content ?: @"<empty>");
     if (content.length > 0) {
         dispatch_async(dispatch_get_main_queue(), ^{
             NSAlert *alert = [[NSAlert alloc] init];
@@ -238,6 +245,7 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     NSString *urlStr = params[@"imageUrl"];
     NSURL *url = [NSURL URLWithString:urlStr];
+    KR_DIAG_DEBUG(@"bridge.image", @"download: %@", urlStr ?: @"<nil>");
 
     [[SDWebImageDownloader sharedDownloader] downloadImageWithURL:url
                                                           options:0 
@@ -254,6 +262,9 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
                 KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
                 callback(@{@"localPath": path ?: @""});
             }];
+        } else if (error) {
+            KR_DIAG_ERROR(@"bridge.image", @"download failed: %@ code=%ld domain=%@",
+                          urlStr ?: @"<nil>", (long)error.code, error.domain ?: @"");
         }
     }];
 }

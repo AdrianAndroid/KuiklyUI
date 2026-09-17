@@ -14,12 +14,41 @@
  */
 
 import SwiftUI
+import AppKit
 
 @main
 struct macAppApp: App {
+    @NSApplicationDelegateAdaptor(macAppAppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onAppear {
+                    Log.emit(.info, tag: "app.life", "Window first appeared",
+                             fields: ["pid": ProcessInfo.processInfo.processIdentifier])
+                }
         }
+    }
+}
+
+/// AppKit-level hooks that SwiftUI does not yet expose directly.
+final class macAppAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Log.emit(.info, tag: "app.life", "applicationDidFinishLaunching",
+                 fields: ["args": CommandLine.arguments])
+        KRDiagnosticLog.bootstrap()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Log.emit(.debug, tag: "app.life", "applicationDidBecomeActive")
+    }
+
+    func applicationWillResignActive(_ notification: Notification) {
+        Log.emit(.debug, tag: "app.life", "applicationWillResignActive")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Log.emit(.info, tag: "app.life", "applicationWillTerminate")
+        KRDiagnosticLog.flushSync()
     }
 }

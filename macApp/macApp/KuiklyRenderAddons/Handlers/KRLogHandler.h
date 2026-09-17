@@ -13,21 +13,16 @@
  * limitations under the License.
  */
 
-import SwiftUI
+#import <Foundation/Foundation.h>
+#import "KRLogModule.h"
+#import "KuiklyRenderBridge.h"
 
-struct ContentView: View {
-    var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:])
-            .ignoresSafeArea()
-            .onAppear {
-                Log.emit(.info, tag: "ui.life", "ContentView onAppear")
-            }
-            .onDisappear {
-                Log.emit(.info, tag: "ui.life", "ContentView onDisappear")
-            }
-    }
-}
+NS_ASSUME_NONNULL_BEGIN
 
-#Preview {
-    ContentView()
-}
+/// Registered in `+load` so logs produced by the renderer (KRLogModule calls from Kotlin)
+/// and by the macApp addons land in the same JSONL sink.
+@interface KRLogHandler : NSObject <KuiklyLogProtocol>
++ (void)bootstrap;
+@end
+
+NS_ASSUME_NONNULL_END

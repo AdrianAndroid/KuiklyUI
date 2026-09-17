@@ -13,5 +13,10 @@
  * limitations under the License.
  */
 
+// Keep this header minimal: only the types Swift actually touches go here.
+// Pulling in handlers that depend on VLCKit / libpag / SDWebImage will drag
+// those header modules into the Swift front-end's transitive precompile pass
+// (SwiftExplicitDependencyGeneratePcm) and fail to compile under arm64/x86_64
+// if any of those umbrella headers are incomplete on this Xcode.
+#import "KRDiagnosticLog.h"
 #import "KuiklyRenderViewController.h"
-

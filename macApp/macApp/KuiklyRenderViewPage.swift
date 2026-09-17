@@ -18,15 +18,19 @@ import SwiftUI
 
 struct KuiklyRenderViewPage : NSViewControllerRepresentable {
     typealias NSViewControllerType = KuiklyRenderViewController
-    
+
     var pageName: String
     var data: Dictionary<String, Any>
-    
+
     func makeNSViewController(context: Context) -> KuiklyRenderViewController {
+        Log.emit(.info, tag: "ui.life", "makeNSViewController",
+                 fields: ["page": pageName, "data_keys": Array(data.keys)])
         return KuiklyRenderViewController(pageName: pageName, pageData: data)
     }
-    
+
     func updateNSViewController(_ nsViewController: KuiklyRenderViewController, context: Context) {
+        Log.emit(.debug, tag: "ui.life", "updateNSViewController",
+                 fields: ["page": pageName])
         nsViewController.update(withPageName: pageName, pageData: data)
     }
 }

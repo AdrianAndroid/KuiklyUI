@@ -20,6 +20,7 @@
 #import "KRPerformanceDataProtocol.h"
 #import "KRPerformanceManager.h"
 #import "KRConvertUtil.h"
+#import "KRDiagnosticLog.h"
 
 
 #pragma mark - Constants
@@ -47,62 +48,75 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
  * 负责监听和响应KuiklyRenderViewControllerBaseDelegator的生命周期事件
  */
 @interface KuiklyPageLifeCycleObserver : NSObject <KRControllerDelegatorLifeCycleProtocol>
-
+- (instancetype)initWithPageName:(NSString *)pageName;
+@property (nonatomic, copy, readonly) NSString *pageName;
+@property (nonatomic, assign) CFTimeInterval t0;
 @end
 
 @implementation KuiklyPageLifeCycleObserver
 
 @synthesize delegator = _delegator;
 
+- (instancetype)initWithPageName:(NSString *)pageName {
+    self = [super init];
+    if (self) {
+        _pageName = [pageName copy];
+        _t0 = CFAbsoluteTimeGetCurrent();
+    }
+    return self;
+}
 
 #pragma mark - KRControllerDelegatorLifeCycleProtocol
 
 - (void)viewDidLoad {
-    NSLog(@"[KuiklyPageLifeCycle] viewDidLoad");
+    KR_DIAG_INFO(@"page.life", @"%@ viewDidLoad", self.pageName);
 }
 
 - (void)willInitRenderView {
-    NSLog(@"[KuiklyPageLifeCycle] willInitRenderView");
+    KR_DIAG_INFO(@"page.life", @"%@ willInitRenderView", self.pageName);
 }
 
 - (void)didInitRenderView {
-    NSLog(@"[KuiklyPageLifeCycle] didInitRenderView");
+    KR_DIAG_INFO(@"page.life", @"%@ didInitRenderView (%.1fms)", self.pageName,
+                 (CFAbsoluteTimeGetCurrent() - self.t0) * 1000.0);
 }
 
 - (void)didSendEvent:(NSString *)event {
-    NSLog(@"[KuiklyPageLifeCycle] didSendEvent: %@", event);
+    KR_DIAG_INFO(@"page.event", @"%@ didSendEvent=%@", self.pageName, event ?: @"<nil>");
 }
 
 - (void)viewWillAppear {
-    NSLog(@"[KuiklyPageLifeCycle] viewWillAppear");
+    KR_DIAG_INFO(@"page.life", @"%@ viewWillAppear", self.pageName);
 }
 
 - (void)viewDidAppear {
-    NSLog(@"[KuiklyPageLifeCycle] viewDidAppear");
+    KR_DIAG_INFO(@"page.life", @"%@ viewDidAppear (%.1fms since init)", self.pageName,
+                 (CFAbsoluteTimeGetCurrent() - self.t0) * 1000.0);
 }
 
 - (void)viewWillDisappear {
-    NSLog(@"[KuiklyPageLifeCycle] viewWillDisappear");
+    KR_DIAG_INFO(@"page.life", @"%@ viewWillDisappear", self.pageName);
 }
 
 - (void)viewDidDisappear {
-    NSLog(@"[KuiklyPageLifeCycle] viewDidDisappear");
+    KR_DIAG_INFO(@"page.life", @"%@ viewDidDisappear", self.pageName);
 }
 
 - (void)willFetchContextCode {
-    NSLog(@"[KuiklyPageLifeCycle] willFetchContextCode");
+    KR_DIAG_INFO(@"page.life", @"%@ willFetchContextCode", self.pageName);
 }
 
 - (void)didFetchContextCode {
-    NSLog(@"[KuiklyPageLifeCycle] didFetchContextCode");
+    KR_DIAG_INFO(@"page.life", @"%@ didFetchContextCode", self.pageName);
 }
 
 - (void)contentViewDidLoad {
-    NSLog(@"[KuiklyPageLifeCycle] contentViewDidLoad");
+    KR_DIAG_INFO(@"page.life", @"%@ contentViewDidLoad (%.1fms since init)", self.pageName,
+                 (CFAbsoluteTimeGetCurrent() - self.t0) * 1000.0);
 }
 
 - (void)delegatorDealloc {
-    NSLog(@"[KuiklyPageLifeCycle] delegatorDealloc");
+    KR_DIAG_INFO(@"page.life", @"%@ delegatorDealloc", self.pageName);
 }
 
 @end
@@ -120,6 +134,12 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
 
 /// 当前页面名称
 @property (nonatomic, copy, readonly) NSString *pageName;
+
+/// Creation time — used to compute lifecycle latencies.
+@property (nonatomic, assign) CFTimeInterval creationTime;
+
+/// Current page data deep-hash (for change detection).
+@property (nonatomic, copy, readonly) NSString *pageDataFingerprint;
 
 /// 当前页面数据
 @property (nonatomic, copy, readonly) NSDictionary<NSString *, id> *pageData;
@@ -144,18 +164,35 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
     if (self) {
         _pageName = [pageName copy];
         _pageData = [self mergeExtendedParametersWithOriginalParameters:data];
-        _lifeCycleObserver = [[KuiklyPageLifeCycleObserver alloc] init];
+        _pageDataFingerprint = [KuiklyRenderViewController fingerprintForDict:_pageData];
+        _lifeCycleObserver = [[KuiklyPageLifeCycleObserver alloc] initWithPageName:pageName];
         _viewVisible = NO;
+        _creationTime = CFAbsoluteTimeGetCurrent();
         
         [self setupDelegatorWithPageName:pageName data:_pageData];
         [self registerNotifications];
+        [KRDiagnosticLog log:KRLogLevelInfo tag:@"page.life" message:@"vc.init" fields:(@{
+            @"page": pageName ?: @"<nil>",
+            @"data_fp": _pageDataFingerprint ?: @"<nil>",
+            @"data_keys": [_pageData allKeys] ?: @[],
+        })];;
     }
     return self;
 }
 
 - (void)dealloc {
     [self unregisterNotifications];
-    NSLog(@"[KuiklyPageViewController] dealloc - page: %@", self.pageName);
+    KR_DIAG_INFO(@"page.life", @"dealloc page=%@ vc=%p", self.pageName, (void *)self);
+}
+
++ (NSString *)fingerprintForDict:(NSDictionary *)d {
+    if (!d) return @"nil";
+    NSError *err = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:d
+                                                   options:NSJSONWritingSortedKeys
+                                                     error:&err];
+    if (!data) return @"<unserializable>";
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"<unserializable>";
 }
 
 #pragma mark - View Lifecycle
@@ -169,6 +206,9 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self setupView];
+    KR_DIAG_INFO(@"page.life", @"vc.viewDidLoad page=%@ vc=%p since_init=%.1fms",
+                 self.pageName, (void *)self,
+                 (CFAbsoluteTimeGetCurrent() - self.creationTime) * 1000.0);
     [self.delegator viewDidLoadWithView:(id)self.view];
 }
 
@@ -180,22 +220,29 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
 - (void)viewWillAppear {
     [super viewWillAppear];
     self.viewVisible = YES;
+    KR_DIAG_INFO(@"page.life", @"vc.viewWillAppear page=%@", self.pageName);
     [self.delegator viewWillAppear];
 }
 
 - (void)viewDidAppear {
     [super viewDidAppear];
+    [KRDiagnosticLog log:KRLogLevelInfo tag:@"page.life" message:@"vc.viewDidAppear" fields:(@{
+        @"page": self.pageName ?: @"<nil>",
+        @"since_init_ms": @((CFAbsoluteTimeGetCurrent() - self.creationTime) * 1000.0),
+    })];;
     [self.delegator viewDidAppear];
 }
 
 - (void)viewWillDisappear {
     [super viewWillDisappear];
     self.viewVisible = NO;
+    KR_DIAG_INFO(@"page.life", @"vc.viewWillDisappear page=%@", self.pageName);
     [self.delegator viewWillDisappear];
 }
 
 - (void)viewDidDisappear {
     [super viewDidDisappear];
+    KR_DIAG_INFO(@"page.life", @"vc.viewDidDisappear page=%@", self.pageName);
     [self.delegator viewDidDisappear];
     [self logPerformanceMetrics];
 }
@@ -207,11 +254,22 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
     NSParameterAssert(pageName.length > 0);
     
     if ([self shouldUpdateWithPageName:pageName data:data]) {
+        NSString *oldPage = [self.pageName copy];
+        NSString *oldFp = [self.pageDataFingerprint copy];
         _pageName = [pageName copy];
         _pageData = [self mergeExtendedParametersWithOriginalParameters:data];
+        _pageDataFingerprint = [KuiklyRenderViewController fingerprintForDict:_pageData];
         
-        NSLog(@"[KuiklyPageViewController] Update page: %@ with data: %@", pageName, data);
+        [KRDiagnosticLog log:KRLogLevelInfo tag:@"page.update" message:@"vc.updateWithPageName" fields:(@{
+            @"from": oldPage ?: @"<nil>",
+            @"to": pageName ?: @"<nil>",
+            @"from_data_fp": oldFp ?: @"<nil>",
+            @"to_data_fp": _pageDataFingerprint ?: @"<nil>",
+            @"to_data_keys": [_pageData allKeys] ?: @[],
+        })];;
         // TODO: 实现页面动态更新逻辑
+    } else {
+        KR_DIAG_DEBUG(@"page.update", @"vc.updateWithPageName no-op page=%@", pageName);
     }
 }
 
@@ -273,11 +331,14 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
     KRFPSMonitor *mainFPSMonitor = manager.mainFPS;
     KRFPSMonitor *kotlinFPSMonitor = manager.kotlinFPS;
     
-    NSLog(@"[Performance] Page: %@", self.pageName);
-    NSLog(@"[Performance] Memory: %ld MB, MainFPS: %.2lu, KotlinFPS: %.2lu",
-          (long)memoryUsageMB, (unsigned long)mainFPSMonitor.avgFPS, (unsigned long)kotlinFPSMonitor.avgFPS);
-    NSLog(@"[Performance] StartTimes: %@", startTimes);
-    NSLog(@"[Performance] Durations: %@", durations);
+    [KRDiagnosticLog log:KRLogLevelInfo tag:@"perf" message:@"page.metrics" fields:(@{
+        @"page": self.pageName ?: @"<nil>",
+        @"memory_mb": @(memoryUsageMB),
+        @"main_fps": @(mainFPSMonitor.avgFPS),
+        @"kotlin_fps": @(kotlinFPSMonitor.avgFPS),
+        @"stage_start_times": startTimes ?: @{},
+        @"stage_durations": durations ?: @{},
+    })];;
 }
 
 #pragma mark - Exception Handling
@@ -301,7 +362,11 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
         : @[];
     
     NSString *callStack = [callStackArray componentsJoinedByString:@"\n"];
-    NSLog(@"[KuiklyException] %@\nStack:\n%@", exceptionName, callStack);
+    [KRDiagnosticLog log:KRLogLevelFatal tag:@"kuikly.exception" message:exceptionName ?: @"exception" fields:(@{
+        @"page": self.pageName ?: @"<nil>",
+        @"raw": exceptionString ?: @"",
+        @"stack": callStack ?: @"",
+    })];;
     
     // TODO: 集成崩溃上报系统
 }
@@ -349,19 +414,26 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
 }
 
 - (void)contentViewDidLoad {
-    CFTimeInterval loadDuration = (CFAbsoluteTimeGetCurrent() - self.beginTime) * 1000.0;
-    NSLog(@"[KuiklyPageViewController] Page loaded in %.2f ms", loadDuration);
+    CFTimeInterval loadDuration = (CFAbsoluteTimeGetCurrent() - self.creationTime) * 1000.0;
+    [KRDiagnosticLog log:KRLogLevelInfo tag:@"page.life" message:@"vc.contentViewDidLoad" fields:(@{
+        @"page": self.pageName ?: @"<nil>",
+        @"load_ms": @(loadDuration),
+    })];;
 }
 
 - (void)renderViewDidCreated {
     self.beginTime = CFAbsoluteTimeGetCurrent();
+    KR_DIAG_INFO(@"page.life", @"renderViewDidCreated page=%@", self.pageName);
 }
 
 - (void)onUnhandledException:(NSString *)exReason 
                        stack:(NSString *)callstackStr 
                         mode:(KuiklyContextMode)mode {
-    NSLog(@"[UnhandledException] Reason: %@\nStack:\n%@\nMode: %ld",
-          exReason, callstackStr, (long)mode);
+    [KRDiagnosticLog log:KRLogLevelFatal tag:@"kuikly.unhandled" message:exReason ?: @"unhandled-exception" fields:(@{
+        @"page": self.pageName ?: @"<nil>",
+        @"stack": callstackStr ?: @"",
+        @"mode": @(mode),
+    })];;
     // TODO: 上报到监控系统
 }
 
@@ -369,9 +441,19 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
                      error:(nullable NSError *)error 
                       mode:(KuiklyContextMode)mode {
     if (error != nil) {
-        NSLog(@"[PageLoad] Failed - %@", error.localizedDescription);
+        [KRDiagnosticLog log:KRLogLevelError tag:@"page.load" message:@"page.load.fail" fields:(@{
+            @"page": self.pageName ?: @"<nil>",
+            @"desc": error.localizedDescription ?: @"",
+            @"code": @(error.code),
+            @"domain": error.domain ?: @"",
+            @"mode": @(mode),
+        })];;
     } else {
-        NSLog(@"[PageLoad] Success");
+        [KRDiagnosticLog log:KRLogLevelInfo tag:@"page.load" message:@"page.load.success" fields:(@{
+            @"page": self.pageName ?: @"<nil>",
+            @"load_ms": @((CFAbsoluteTimeGetCurrent() - self.creationTime) * 1000.0),
+            @"mode": @(mode),
+        })];;
     }
     
     // 获取性能数据用于分析
