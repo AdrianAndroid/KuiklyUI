@@ -20,3 +20,4 @@
 // if any of those umbrella headers are incomplete on this Xcode.
 #import "KRDiagnosticLog.h"
 #import "KuiklyRenderViewController.h"
+#import "KRNavigationController.h"

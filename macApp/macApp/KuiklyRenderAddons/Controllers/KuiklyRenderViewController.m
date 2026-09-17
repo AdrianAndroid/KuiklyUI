@@ -17,6 +17,7 @@
 #import "KuiklyRenderViewControllerBaseDelegator.h"
 #import "KuiklyRenderContextProtocol.h"
 #import "KuiklyRenderCore.h"
+#import "KuiklyRenderView.h"
 #import "KRPerformanceDataProtocol.h"
 #import "KRPerformanceManager.h"
 #import "KRConvertUtil.h"
@@ -226,11 +227,72 @@ static const NSInteger kBytesToMegabytes = 1024 * 1024;
 
 - (void)viewDidAppear {
     [super viewDidAppear];
-    [KRDiagnosticLog log:KRLogLevelInfo tag:@"page.life" message:@"vc.viewDidAppear" fields:(@{
-        @"page": self.pageName ?: @"<nil>",
-        @"since_init_ms": @((CFAbsoluteTimeGetCurrent() - self.creationTime) * 1000.0),
-    })];;
+    KR_DIAG_INFO(@"page.life", @"vc.viewDidAppear page=%@ since_init=%.1fms",
+                 self.pageName, (CFAbsoluteTimeGetCurrent() - self.creationTime) * 1000.0);
     [self.delegator viewDidAppear];
+    [self scheduleViewTreeDump];
+}
+
+#pragma mark - View tree diagnostics
+
+/// Dumps the native Kuikly view tree (class / frame / visibility / text-field state) shortly
+/// after first paint. This is the fastest way for an automated agent to tell "the view was
+/// never created" apart from "the view exists but is 0-sized / hidden / unfocusable".
+- (void)scheduleViewTreeDump {
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf dumpViewTree];
+    });
+}
+
+- (void)dumpViewTree {
+    NSView *root = self.delegator.renderView;
+    if (!root) {
+        KR_DIAG_WARN(@"uilayout", @"view tree dump skipped: renderView is nil (page=%@)", self.pageName);
+        return;
+    }
+    NSMutableArray<NSString *> *rows = [NSMutableArray array];
+    [KuiklyRenderViewController p_collectView:root depth:0 into:rows];
+    [KRDiagnosticLog log:KRLogLevelInfo tag:@"uilayout" message:@"viewTree" fields:(@{
+        @"page": self.pageName ?: @"<nil>",
+        @"render_view_frame": NSStringFromRect(root.frame),
+        @"view_frame": NSStringFromRect(self.view.frame),
+        @"rows": rows,
+    })];
+    // The render view is often *larger* than the window content area; log the mismatch loudly
+    // because that is what makes a page look "shifted" / clipped on macOS.
+    NSRect contentRect = self.view.bounds;
+    if (!NSEqualRects(root.frame, contentRect)) {
+        KR_DIAG_WARN(@"uilayout", @"renderView frame %@ != host bounds %@ (page=%@)",
+                     NSStringFromRect(root.frame), NSStringFromRect(contentRect), self.pageName);
+    }
+}
+
++ (void)p_collectView:(NSView *)view depth:(NSInteger)depth into:(NSMutableArray<NSString *> *)rows {
+    if (!view || depth > 8 || rows.count > 200) return;
+    NSMutableString *line = [NSMutableString stringWithFormat:
+        @"%@%@ %@ hidden=%d alpha=%.2f",
+        [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0],
+        NSStringFromClass([view class]),
+        NSStringFromRect(view.frame),
+        view.isHidden ? 1 : 0,
+        view.alphaValue];
+    if ([view isKindOfClass:[NSTextField class]]) {
+        NSTextField *tf = (NSTextField *)view;
+        [line appendFormat:@" | editable=%d selectable=%d enabled=%d focusable=%d",
+             tf.isEditable ? 1 : 0, tf.isSelectable ? 1 : 0, tf.isEnabled ? 1 : 0,
+             tf.acceptsFirstResponder ? 1 : 0];
+        [line appendFormat:@" value=\"%@\" placeholder=\"%@\" attrPlaceholder=\"%@\"",
+             tf.stringValue ?: @"", tf.placeholderString ?: @"<nil>",
+             tf.placeholderAttributedString.string ?: @"<nil>"];
+        [line appendFormat:@" textColor=%@ drawsBg=%d bordered=%d",
+             tf.textColor ?: @"<nil>", tf.drawsBackground ? 1 : 0, tf.isBordered ? 1 : 0];
+    }
+    [rows addObject:line];
+    for (NSView *sub in view.subviews) {
+        [KuiklyRenderViewController p_collectView:sub depth:depth + 1 into:rows];
+    }
 }
 
 - (void)viewWillDisappear {

@@ -28,15 +28,52 @@ struct macAppApp: App {
                              fields: ["pid": ProcessInfo.processInfo.processIdentifier])
                 }
         }
+        // NOTE: `.defaultSize(width:height:)` / `.windowResizability` require macOS 13,
+        // but this target deploys to macOS 11.5. The window is sized from the
+        // AppDelegate instead (see `applyDefaultWindowSizeIfNeeded`).
     }
 }
 
 /// AppKit-level hooks that SwiftUI does not yet expose directly.
 final class macAppAppDelegate: NSObject, NSApplicationDelegate {
+    /// Same window size the router uses when it opens a page in a new window, so the
+    /// SwiftUI root window and router windows are visually consistent.
+    private static let defaultWindowSize = NSSize(width: 900, height: 650)
+    private static let minimumWindowSize = NSSize(width: 720, height: 480)
+    private var windowSizeObserver: NSObjectProtocol?
+    private var didApplyWindowSize = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.emit(.info, tag: "app.life", "applicationDidFinishLaunching",
                  fields: ["args": CommandLine.arguments])
         KRDiagnosticLog.bootstrap()
+        observeFirstWindowForSizing()
+    }
+
+    /// SwiftUI creates its window after `applicationDidFinishLaunching`, so wait for the
+    /// first window to become key, then pin its size. Without this the WindowGroup default
+    /// (which is not the size the Kuikly pages are designed for) is used.
+    private func observeFirstWindowForSizing() {
+        windowSizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self, !self.didApplyWindowSize,
+                  let window = note.object as? NSWindow else { return }
+            self.didApplyWindowSize = true
+            window.minSize = Self.minimumWindowSize
+            window.setContentSize(Self.defaultWindowSize)
+            window.center()
+            Log.emit(.info, tag: "app.life", "applied default window size",
+                     fields: ["w": Self.defaultWindowSize.width,
+                              "h": Self.defaultWindowSize.height,
+                              "content": NSStringFromRect(window.contentLayoutRect)])
+            if let token = self.windowSizeObserver {
+                NotificationCenter.default.removeObserver(token)
+                self.windowSizeObserver = nil
+            }
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

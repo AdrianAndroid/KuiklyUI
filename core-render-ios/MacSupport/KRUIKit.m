@@ -238,11 +238,61 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 
 @end
 
+#pragma mark - KRUISecureTextFieldCell
+
+// Secure (password) variant of KRUITextFieldCell.
+// NSTextField has no `secureTextEntry` property — masking is a *cell* behaviour on macOS,
+// so a secure cell must be installed when the password keyboard type is requested.
+// Without this, password inputs render as plain text.
+@interface KRUISecureTextFieldCell : NSSecureTextFieldCell
+@end
+
+@implementation KRUISecureTextFieldCell
+
+- (NSRect)adjustedRectForBounds:(NSRect)rect {
+    NSSize textSize = [self cellSizeForBounds:rect];
+    CGFloat heightDelta = rect.size.height - textSize.height;
+    if (heightDelta > 0) {
+        rect.size.height = textSize.height;
+        rect.origin.y += floor(heightDelta / 2.0);
+    }
+    return rect;
+}
+
+- (NSRect)drawingRectForBounds:(NSRect)rect {
+    return [self adjustedRectForBounds:[super drawingRectForBounds:rect]];
+}
+
+- (NSRect)titleRectForBounds:(NSRect)rect {
+    return [self adjustedRectForBounds:[super titleRectForBounds:rect]];
+}
+
+- (void)editWithFrame:(NSRect)rect
+               inView:(NSView *)controlView
+               editor:(NSText *)textObj
+             delegate:(id)delegate
+                event:(NSEvent *)event {
+    [super editWithFrame:[self adjustedRectForBounds:rect] inView:controlView editor:textObj delegate:delegate event:event];
+}
+
+- (void)selectWithFrame:(NSRect)rect
+                 inView:(NSView *)controlView
+                 editor:(NSText *)textObj
+               delegate:(id)delegate
+                  start:(NSInteger)selStart
+                 length:(NSInteger)selLength {
+    [super selectWithFrame:[self adjustedRectForBounds:rect] inView:controlView editor:textObj delegate:delegate start:selStart length:selLength];
+}
+
+@end
+
 #pragma mark - KRUITextField
 
 @interface KRUITextField ()
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *kr_targets;
 @property (nonatomic, copy) NSString *kr_cachedPlaceholder; // Cache for placeholder text
+@property (nonatomic, strong, nullable) NSColor *kr_caretColor;
+@property (nonatomic, assign) BOOL kr_secureTextEntry;
 @end
 
 @implementation KRUITextField
@@ -308,6 +358,68 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 
 - (void)setAttributedPlaceholder:(NSAttributedString *)attributedPlaceholder {
     self.placeholderAttributedString = attributedPlaceholder;
+}
+
+#pragma mark - Caret colour / secure entry
+
+// UITextField.tintColor drives the caret colour on iOS. NSTextField has no such property —
+// the caret is owned by the shared field editor, so the colour must be pushed onto
+// `NSTextView.insertionPointColor` whenever the editor exists.
+- (void)setTintColor:(NSColor *)tintColor {
+    _kr_caretColor = tintColor;
+    [self kr_applyCaretColorIfPossible];
+}
+
+- (NSColor *)tintColor {
+    return _kr_caretColor;
+}
+
+- (void)kr_applyCaretColorIfPossible {
+    if (!_kr_caretColor) {
+        return;
+    }
+    NSTextView *editor = [self kr_fieldEditorIfAvailable];
+    if (editor) {
+        editor.insertionPointColor = _kr_caretColor;
+    }
+}
+
+- (BOOL)becomeFirstResponder {
+    BOOL result = [super becomeFirstResponder];
+    if (result) {
+        [self kr_applyCaretColorIfPossible];
+    }
+    return result;
+}
+
+// Masking is a cell behaviour on macOS; swap the cell so password inputs actually hide input.
+- (void)setSecureTextEntry:(BOOL)secureTextEntry {
+    if (_kr_secureTextEntry == secureTextEntry) {
+        return;
+    }
+    _kr_secureTextEntry = secureTextEntry;
+
+    NSTextFieldCell *newCell = secureTextEntry ? (NSTextFieldCell *)[KRUISecureTextFieldCell new]
+                                              : (NSTextFieldCell *)[KRUITextFieldCell new];
+    newCell.bezeled = NO;
+    newCell.bordered = NO;
+    newCell.drawsBackground = NO;
+    newCell.editable = YES;
+    newCell.selectable = YES;
+    newCell.usesSingleLineMode = YES;
+    newCell.wraps = NO;
+    newCell.scrollable = YES;
+    newCell.focusRingType = NSFocusRingTypeNone;
+    newCell.font = self.font;
+    newCell.alignment = self.alignment;
+    newCell.stringValue = self.stringValue ?: @"";
+    newCell.placeholderString = self.kr_cachedPlaceholder ?: self.placeholderString;
+    self.cell = newCell;
+    [self setNeedsDisplay:YES];
+}
+
+- (BOOL)secureTextEntry {
+    return _kr_secureTextEntry;
 }
 
 - (NSTextAlignment)textAlignment {
@@ -406,6 +518,9 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 #pragma mark - NSTextFieldDelegate
 
 - (void)controlTextDidBeginEditing:(NSNotification *)obj {
+    // The field editor is created right before this fires, so this is the earliest point
+    // where the caret colour can actually be applied.
+    [self kr_applyCaretColorIfPossible];
     id<UITextFieldDelegate> d = (id)self.delegate;
     if ([d respondsToSelector:@selector(textFieldDidBeginEditing:)]) {
         [d textFieldDidBeginEditing:(id)self];

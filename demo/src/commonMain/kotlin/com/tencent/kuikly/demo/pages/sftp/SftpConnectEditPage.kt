@@ -98,6 +98,7 @@ internal class SftpConnectEditPage : SftpBasePager() {
                             fontSize(15f)
                             color(SftpColorTokens.textPrimary)
                             flex(1f)
+                            height(24f)
                         }
                         event {
                             textDidChange { state ->
@@ -114,6 +115,7 @@ internal class SftpConnectEditPage : SftpBasePager() {
                             fontSize(15f)
                             color(SftpColorTokens.textPrimary)
                             flex(1f)
+                            height(24f)
                         }
                         event {
                             textDidChange { state -> ctx.host = state.text }
@@ -129,6 +131,7 @@ internal class SftpConnectEditPage : SftpBasePager() {
                             keyboardTypeNumber()
                             color(SftpColorTokens.textPrimary)
                             flex(1f)
+                            height(24f)
                         }
                         event {
                             textDidChange { state -> ctx.port = state.text }
@@ -143,6 +146,7 @@ internal class SftpConnectEditPage : SftpBasePager() {
                             fontSize(15f)
                             color(SftpColorTokens.textPrimary)
                             flex(1f)
+                            height(24f)
                         }
                         event {
                             textDidChange { state -> ctx.user = state.text }
@@ -158,6 +162,7 @@ internal class SftpConnectEditPage : SftpBasePager() {
                             keyboardTypePassword()
                             color(SftpColorTokens.textPrimary)
                             flex(1f)
+                            height(24f)
                         }
                         event {
                             textDidChange { state -> ctx.password = state.text }

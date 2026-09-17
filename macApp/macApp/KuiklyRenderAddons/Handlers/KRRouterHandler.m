@@ -182,6 +182,14 @@ static char kWindowSelfRetentionKey;
     newWindow.title = viewController.title ?: @"Kuikly Page";
     newWindow.minSize = NSMakeSize(400, 300);
     
+    // IMPORTANT: assigning `contentViewController` makes AppKit resize the window to
+    // the controller's view frame (KuiklyRenderViewController uses 800x600 in -loadView),
+    // which silently discards the size passed to -initWithContentRect:. Re-apply the
+    // intended content size *after* the assignment so the window matches the design.
+    [newWindow setContentSize:NSMakeSize(windowWidth, windowHeight)];
+    KR_DIAG_INFO(@"router", @"window content size applied: %.0fx%.0f (vc.view was %.0fx%.0f)",
+                 windowWidth, windowHeight, viewSize.width, viewSize.height);
+    
     // 设置 contentView 的自动布局
     viewController.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     

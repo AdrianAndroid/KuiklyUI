@@ -18,10 +18,14 @@ import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.velse
+import com.tencent.kuikly.core.directives.velseif
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.module.sftp.SftpConnection
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpAccessibility
@@ -39,18 +43,21 @@ import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
 @Page(SftpHomePage.PAGE_NAME)
 internal class SftpHomePage : SftpBasePager() {
 
-    private var connections: List<SftpConnection> = emptyList()
-    private var loading: Boolean = true
-    private var errorMsg: String? = null
-    private var currentTab: Int = 0  // 0 连接 / 1 收藏 / 2 历史
+    // NOTE: every field read by body() must be `observable`, otherwise mutations made
+    // from async module callbacks will not trigger a re-render (the page would stay on
+    // its initial state forever, e.g. stuck on the loading view).
+    private var connections: List<SftpConnection> by observable(emptyList())
+    private var loading: Boolean by observable(true)
+    private var errorMsg: String? by observable(null)
+    private var currentTab: Int by observable(0)  // 0 连接 / 1 收藏 / 2 历史
     // 收藏 Tab 状态
-    internal var favorites: List<com.tencent.kuikly.core.module.sftp.SftpFavorite> = emptyList()
-    internal var favoritesLoaded: Boolean = false
-    internal var favoritesError: String? = null
+    internal var favorites: List<com.tencent.kuikly.core.module.sftp.SftpFavorite> by observable(emptyList())
+    internal var favoritesLoaded: Boolean by observable(false)
+    internal var favoritesError: String? by observable(null)
     // 历史 Tab 状态
-    internal var history: List<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord> = emptyList()
-    internal var historyLoaded: Boolean = false
-    internal var historyError: String? = null
+    internal var history: List<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord> by observable(emptyList())
+    internal var historyLoaded: Boolean by observable(false)
+    internal var historyError: String? by observable(null)
 
     override fun body(): ViewBuilder {
         val ctx = this
@@ -98,36 +105,73 @@ internal class SftpHomePage : SftpBasePager() {
             }
 
             // Tab 栏
-            SftpTabBar(ctx.currentTab) { newTab -> ctx.onTabChange(newTab) }
+            // 传入 provider 而非取值：读取必须发生在 attr{} / vif 条件 lambda 内部，
+            // 这样 Kuikly 的依赖收集才能记录到 currentTab（§ reactive 约定）。
+            SftpTabBar({ ctx.currentTab }) { newTab -> ctx.onTabChange(newTab) }
 
-            // 内容区（三态：loading / empty / error / list）
+            // 内容区
+            // 必须用 vif/velseif/velse 条件指令而非 Kotlin `when`：
+            // 1) `when` 只在 body() 首次求值时决定结构，之后 observable 变化不会重建
+            //    结构，页面会永远停在首帧的 loading 态；
+            // 2) 每个数据态都必须体现为一个**条件**（而不只是 creator 里的入参），
+            //    否则上一层级条件不变时 creator 不会重跑，列表内容会冻结在空态。
             View {
                 attr { flex(1f) }
-                when {
-                    ctx.loading -> SftpLoadingView()
-                    ctx.errorMsg != null -> SftpErrorView(ctx.errorMsg!!) { ctx.refresh() }
-                    ctx.currentTab == 0 && ctx.connections.isEmpty() ->
-                        SftpEmptyView("暂无连接，点 + 新建")
-                    ctx.currentTab == 0 ->
-                        SftpConnectionListView(ctx.connections) { conn -> ctx.openBrowser(conn) }
-                    ctx.currentTab == 1 -> SftpFavoritesTab(ctx.favorites, ctx.favoritesError) {
-                        ctx.favoritesLoaded = false
-                        ctx.favoritesError = null
-                        ctx.sftpFavoritesModule().list { items, error ->
-                            ctx.favorites = items
-                            ctx.favoritesError = error?.msg
-                        }
-                    }
-                    ctx.currentTab == 2 -> SftpHistoryTab(ctx.history, ctx.historyError) {
-                        ctx.historyLoaded = false
-                        ctx.historyError = null
-                        ctx.sftpPlaybackHistoryModule().listByConnection("") { items, error ->
-                            ctx.history = items
-                            ctx.historyError = error?.msg
-                        }
-                    }
+                vif({ ctx.loading }) {
+                    SftpLoadingView()
+                }
+                velseif({ ctx.errorMsg != null }) {
+                    SftpErrorView(ctx.errorMsg ?: "") { ctx.refresh() }
+                }
+
+                // —— 连接 Tab ——
+                velseif({ ctx.currentTab == 0 && ctx.connections.isEmpty() }) {
+                    SftpEmptyView("暂无连接，点 + 新建")
+                }
+                velseif({ ctx.currentTab == 0 }) {
+                    SftpConnectionListView(ctx.connections) { conn -> ctx.openBrowser(conn) }
+                }
+
+                // —— 收藏 Tab ——
+                velseif({ ctx.currentTab == 1 && ctx.favoritesError != null }) {
+                    SftpErrorView(ctx.favoritesError ?: "") { ctx.reloadFavorites() }
+                }
+                velseif({ ctx.currentTab == 1 && ctx.favorites.isEmpty() }) {
+                    SftpEmptyView("暂无收藏")
+                }
+                velseif({ ctx.currentTab == 1 }) {
+                    SftpFavoritesList(ctx.favorites)
+                }
+
+                // —— 历史 Tab ——
+                velseif({ ctx.historyError != null }) {
+                    SftpErrorView(ctx.historyError ?: "") { ctx.reloadHistory() }
+                }
+                velseif({ ctx.history.isEmpty() }) {
+                    SftpEmptyView("暂无播放历史")
+                }
+                velse {
+                    SftpHistoryList(ctx.history)
                 }
             }
+        }
+    }
+
+    internal fun reloadFavorites() {
+        favoritesLoaded = true
+        favoritesError = null
+        sftpFavoritesModule().list { items, error ->
+            favorites = items
+            favoritesError = error?.msg
+        }
+    }
+
+    internal fun reloadHistory() {
+        historyLoaded = true
+        historyError = null
+        sftpPlaybackHistoryModule().listByConnection("") { items, error ->
+            history = items
+            historyError = error?.msg
         }
     }
 
@@ -145,20 +189,8 @@ internal class SftpHomePage : SftpBasePager() {
     private fun onTabChange(newTab: Int) {
         currentTab = newTab
         when (newTab) {
-            1 -> if (!favoritesLoaded) {
-                favoritesLoaded = true
-                sftpFavoritesModule().list { items, error ->
-                    favorites = items
-                    favoritesError = error?.msg
-                }
-            }
-            2 -> if (!historyLoaded) {
-                historyLoaded = true
-                sftpPlaybackHistoryModule().listByConnection("") { items, error ->
-                    history = items
-                    historyError = error?.msg
-                }
-            }
+            1 -> if (!favoritesLoaded) reloadFavorites()
+            2 -> if (!historyLoaded) reloadHistory()
         }
     }
 
@@ -186,7 +218,7 @@ internal class SftpHomePage : SftpBasePager() {
 }
 
 /** SFTP Tab 栏（连接 / 收藏 / 历史） */
-internal fun ViewContainer<*, *>.SftpTabBar(current: Int, onChange: (Int) -> Unit) {
+internal fun ViewContainer<*, *>.SftpTabBar(currentProvider: () -> Int, onChange: (Int) -> Unit) {
     val tabs = listOf("连接", "收藏", "历史")
     View {
         attr {
@@ -208,8 +240,14 @@ internal fun ViewContainer<*, *>.SftpTabBar(current: Int, onChange: (Int) -> Uni
                     attr {
                         text(label)
                         fontSize(15f)
-                        color(if (current == index) SftpColorTokens.primary else SftpColorTokens.textSecondary)
-                        if (current == index) fontWeightBold() else fontWeightNormal()
+                        // 在 attr 内读取，依赖才会被收集，切换 Tab 才会刷新高亮
+                        if (currentProvider() == index) {
+                            color(SftpColorTokens.primary)
+                            fontWeightBold()
+                        } else {
+                            color(SftpColorTokens.textSecondary)
+                            fontWeightNormal()
+                        }
                     }
                 }
             }
@@ -310,32 +348,6 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
                 }
             }
         }
-    }
-}
-
-/** 收藏 Tab：加载 [SftpFavoritesModule.list] 并展示（§17.3.4） */
-internal fun ViewContainer<*, *>.SftpFavoritesTab(
-    favorites: List<com.tencent.kuikly.core.module.sftp.SftpFavorite>,
-    error: String?,
-    onRetry: () -> Unit
-) {
-    when {
-        error != null -> SftpErrorView(error) { onRetry() }
-        favorites.isEmpty() -> SftpEmptyView("暂无收藏")
-        else -> SftpFavoritesList(favorites)
-    }
-}
-
-/** 历史 Tab：加载 [SftpPlaybackHistoryModule.listByConnection] 并展示（§20.9） */
-internal fun ViewContainer<*, *>.SftpHistoryTab(
-    history: List<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>,
-    error: String?,
-    onRetry: () -> Unit
-) {
-    when {
-        error != null -> SftpErrorView(error) { onRetry() }
-        history.isEmpty() -> SftpEmptyView("暂无播放历史")
-        else -> SftpHistoryList(history)
     }
 }
 

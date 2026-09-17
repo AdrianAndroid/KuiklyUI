@@ -17,8 +17,10 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:])
-            .ignoresSafeArea()
+        // NOTE: do NOT add `.ignoresSafeArea()` here. On macOS that makes the content
+        // view extend under the title bar, so the Kuikly page's own header (the 56pt
+        // nav row) gets its top ~28pt hidden behind the title bar.
+        KuiklyNavigationViewPage(pageName: "SftpHomePage", data: [:])
             .onAppear {
                 Log.emit(.info, tag: "ui.life", "ContentView onAppear")
             }
