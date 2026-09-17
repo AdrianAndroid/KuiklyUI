@@ -40,7 +40,17 @@ static NSLock *gHandleLock;
         // 校验 sessionId 有效（会抛异常若无效）
         NMSSHSession *session = [KRSftpSession sessionById:sessionId];
         if (!session) {
-            return @"";
+            @throw [NSException exceptionWithName:@"SftpNoSuchFileException"
+                                           reason:[NSString stringWithFormat:@"invalid sessionId: %@", sessionId]
+                                         userInfo:nil];
+        }
+        // 校验目标可读，避免返回一个永远读不出内容的假句柄
+        NMSFTP *sftp = [session sftp];
+        if (![sftp isConnected]) [sftp connect];
+        if (![sftp fileExistsAtPath:remotePath]) {
+            @throw [NSException exceptionWithName:@"SftpNoSuchFileException"
+                                           reason:[NSString stringWithFormat:@"no such file: %@", remotePath]
+                                         userInfo:nil];
         }
         // Phase 1.2: 用 NMSSH SFTPInputStream 打开随机读取
         [gHandleLock lock];
@@ -60,8 +70,9 @@ static NSLock *gHandleLock;
 
 + (NSData *)read:(NSString *)fileHandleId offset:(long long)offset length:(int)length {
     // TODO Phase 1.2: 用 NMSSH SFTPInputStream 流式读
-    // 当前简化：返回空数据
-    return [NSData data];
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
+                                   reason:@"read not implemented yet"
+                                 userInfo:nil];
 }
 
 + (void)close:(NSString *)fileHandleId {

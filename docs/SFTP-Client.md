@@ -1409,9 +1409,47 @@ flowchart LR
 | AI 导航索引 | ✅ 已完成（`AGENTS.md`） |
 | 架构调研笔记（§15） | ✅ |
 | 三方依赖调研（§16） | ✅ |
-| 编码实现 | ⏳ 未开始（按 §10 Phase 0~5 路线图推进） |
+| macOS 端集成自测 | ✅ 已跑通（见下） |
 
-下一步建议进入 **Phase 0 → Phase 1**：先在 `demo/src/commonMain/.../sftp/` 建空 Module 与页面骨架（所有方法返回 `not_implemented`），跑通四端编译确认 Module 注册可见；再在 Android 端用 JSch + NanoHTTPD 跑通 MVP（连接 / 浏览 / 流式播放 / 收藏 / 批量）。
+#### 17.4.1 macOS 端实测结果（`SftpIntegrationTestPage`，真实服务器）
+
+自测页位于 `demo/src/commonMain/.../sftp/SftpIntegrationTestPage.kt`，按 §7.1/§7.2 全量方法逐条断言，
+结果写入诊断日志（tag `SftpTest`）。最近一次：**56 项 / 37 PASS / 19 FAIL**。
+
+已实现且实测通过（真实服务器 `192.168.2.2:22`）：
+
+| 能力 | 说明 |
+|------|------|
+| `connect` / `disconnect` | 密码认证；失败时 `detail` 带 NMSSH `lastError` |
+| `list` | 目录列表；**已修正目录名尾部 `/`**（NMSFTP 会给目录名追加 `/`） |
+| `stat` | 文件与目录均可；不存在时返回 `2003 NO_SUCH_FILE`（不再返回空壳 entry） |
+| `mkdir` / `rm` | **客户端递归实现**；目录用 `rmdir`、文件用 `unlink`，`recursive` 先清子项 |
+| `setMtime` | 经 SSH channel 执行 `touch`（路径已 shell 转义） |
+| 收藏 CRUD + `search` / `isFavorited` / `removeByConnection` | 空 `id` 现会自动生成 UUID |
+| 播放历史 CRUD | 移除空 `id` 兜底后按 `buildId` 正确命中 |
+| 连接配置 CRUD | **已修正参数未做 `kr_stringToDictionary` 导致的崩溃** |
+
+尚未实现（调用会返回 `9999 NOT_IMPLEMENTED`，**不再伪报成功**——此前会静默返回成功，
+存在「以为上传成功但远端无文件」的数据风险）：
+
+| 能力 | 现状 |
+|------|------|
+| `upload` / `download` | 桩（`KRSftpSession` 原 `return 1.0f`） |
+| `read`（`openRead` + 流式读） | `KRSftpFileHandle.read` 桩 |
+| `copy`（文件/目录递归） | 桩 |
+| `batchTask`（DELETE/MOVE/COPY/DOWNLOAD） | 桩 |
+| `chmod` / `chown` | 经 channel 执行 shell；依赖目标文件存在；`chown` 还缺 uid/gid 来源（`NMSFTPFile` 不暴露） |
+
+其它已修问题：
+
+- **`KRLogModule` DEBUG 弹窗**：`logError` 在 DEBUG 会弹模态框，阻塞无人值守运行；
+  现支持 `KUIKLY_SUPPRESS_ERROR_ALERT=1` 关闭，并限制最多弹 3 次。
+  自动化运行：直接以子进程启动并注入该环境变量。
+- **线程安全**：SFTP 调用原先全部落在 `dispatch_get_global_queue` 上，而 libssh2 的
+  session/SFTP 句柄并非线程安全；现统一串行化（对同一份持久化 JSON 做读-改-写的
+  收藏/历史/连接三个 Module 同样处理，避免丢更新）。
+
+下一步：补 `upload` / `download` / `read` / `copy` / `batchTask` 的 NMSSH 实现（§10 Phase 1.1~1.2）。
 
 ---
 

@@ -137,7 +137,21 @@ static id<KuiklyLogProtocol> gLogUserSuppliedHandler;
     NSLog(@"%@", message);
     [[KRLogModule logHandler] logError:message]; // 日志落入接入层体系中
 #if DEBUG
-    [KRConvertUtil hr_alertWithTitle:@"kuikly error" message:message]; // 本地开发可视化提醒
+    // 本地开发可视化提醒。
+    // 自动化/无人值守运行（集成测试、CI、批量回归）里模态弹窗会阻塞流程，
+    // 可用环境变量 KUIKLY_SUPPRESS_ERROR_ALERT=1 关闭；同时限制最多弹 3 次，
+    // 避免错误风暴时把主线程埋在一堆弹窗里。
+    static NSInteger sAlertCount = 0;
+    static BOOL sAlertEnabled = YES;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *v = [[[NSProcessInfo processInfo] environment] objectForKey:@"KUIKLY_SUPPRESS_ERROR_ALERT"];
+        sAlertEnabled = !(v.length > 0 && ![v isEqualToString:@"0"] && ![v.lowercaseString isEqualToString:@"false"]);
+    });
+    if (sAlertEnabled && sAlertCount < 3) {
+        sAlertCount++;
+        [KRConvertUtil hr_alertWithTitle:@"kuikly error" message:message];
+    }
 #endif
 }
 

@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 #import "KRSftpSession.h"
+#import "KRLogModule.h"
 #if __has_include(<NMSSH/NMSSH.h>)
 #import <NMSSH/NMSSH.h>
 #endif
@@ -21,6 +22,10 @@ static NSMutableDictionary<NSString *, NMSSHSession *> *gSessions;
 static NSMutableDictionary<NSString *, NSNumber *> *gSessionTimestamps;
 static long long gSessionIdCounter = 0;
 static NSLock *gLock;
+
+@interface KRSftpSession ()
++ (BOOL)removeEntry:(NSString *)path sftp:(NMSFTP *)sftp recursive:(BOOL)recursive depth:(NSInteger)depth;
+@end
 
 @implementation KRSftpSession
 
@@ -50,9 +55,16 @@ static NSLock *gLock;
     // 当前：始终接受指纹
 
     if (![session connect]) {
+        // Surface the underlying libssh2/NMSSH reason — without it a failed handshake
+        // (e.g. the server offering only algorithms this libssh2 cannot negotiate) is
+        // indistinguishable from a network error.
+        NSString *detail = [NSString stringWithFormat:@"host=%@ port=%ld lastError=%@",
+                            host ?: @"<nil>", (long)port,
+                            session.lastError.localizedDescription ?: @"<none>"];
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] connect failed: %@", detail]];
         @throw [NSException exceptionWithName:@"SftpConnectException"
                                        reason:@"connect failed"
-                                     userInfo:nil];
+                                     userInfo:@{@"detail": detail}];
     }
     // 认证
     BOOL authOk = NO;
@@ -69,11 +81,16 @@ static NSLock *gLock;
         authOk = NO;
     }
     if (!authOk) {
+        NSString *detail = [NSString stringWithFormat:@"user=%@ lastError=%@",
+                            user ?: @"<nil>",
+                            session.lastError.localizedDescription ?: @"<none>"];
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] auth failed: %@", detail]];
         [session disconnect];
         @throw [NSException exceptionWithName:@"SftpAuthException"
                                        reason:@"auth failed"
-                                     userInfo:nil];
+                                     userInfo:@{@"detail": detail}];
     }
+    [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] connected %@@%@:%ld", user, host, (long)port]];
 
     [gLock lock];
     NSString *sessionId = [NSString stringWithFormat:@"sftp-%lld", ++gSessionIdCounter];
@@ -108,15 +125,19 @@ static NSLock *gLock;
     NSArray<NMSFTPFile *> *entries = [sftp contentsOfDirectoryAtPath:remotePath];
     NSMutableArray *result = [NSMutableArray array];
     for (NMSFTPFile *file in entries) {
-        NSString *name = file.filename;
-        if ([name isEqualToString:@"."] || [name isEqualToString:@".."]) continue;
+        // NMSFTP 会给目录名追加 "/"（NMSFTP.m: "Append a \"/\" at the end of all directories"）。
+        // 这里必须归一化，否则 UI 会显示 "Documents/"，且按名匹配（收藏/历史/路径拼接）全部失效。
+        NSString *rawName = file.filename;
+        BOOL isDir = file.isDirectory || [rawName hasSuffix:@"/"];
+        NSString *name = [rawName hasSuffix:@"/"] ? [rawName substringToIndex:rawName.length - 1] : rawName;
+        if ([name isEqualToString:@"."] || [name isEqualToString:@".."] || name.length == 0) continue;
         NSString *fullPath = [remotePath hasSuffix:@"/"] ?
             [remotePath stringByAppendingString:name] :
             [NSString stringWithFormat:@"%@/%@", remotePath, name];
         NSDictionary *entry = @{
             @"name": name,
             @"path": fullPath,
-            @"isDir": @(file.isDirectory),
+            @"isDir": @(isDir),
             @"size": file.fileSize ?: @0,
             @"mtime": @([file.modificationDate timeIntervalSince1970]),
             @"permission": file.permissions ?: @"",
@@ -138,6 +159,28 @@ static NSLock *gLock;
         [sftp connect];
     }
     NMSFTPFile *file = [sftp infoForFileAtPath:remotePath];
+    if (!file) {
+        // `infoForFileAtPath:` opens the path with LIBSSH2_FXF_READ, which always fails for
+        // directories. Resolve those (and re-check existence) through the parent listing.
+        NSString *parent = [remotePath stringByDeletingLastPathComponent];
+        NSString *leaf = [remotePath lastPathComponent];
+        if (parent.length == 0) parent = @"/";
+        for (NMSFTPFile *candidate in [sftp contentsOfDirectoryAtPath:parent]) {
+            NSString *candidateName = candidate.filename;
+            if ([candidateName hasSuffix:@"/"]) {
+                candidateName = [candidateName substringToIndex:candidateName.length - 1];
+            }
+            if ([candidateName isEqualToString:leaf]) {
+                file = candidate;
+                break;
+            }
+        }
+    }
+    if (!file) {
+        @throw [NSException exceptionWithName:@"SftpNoSuchFileException"
+                                       reason:[NSString stringWithFormat:@"no such file: %@", remotePath]
+                                     userInfo:nil];
+    }
     NSString *name = [remotePath lastPathComponent];
     return @{
         @"name": name,
@@ -155,42 +198,109 @@ static NSLock *gLock;
 
 + (float)download:(NSDictionary *)params {
     // TODO Phase 1.1: 接入本地缓存路径 + 进度回调
-    return 1.0f;
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
+                                   reason:@"download not implemented yet"
+                                 userInfo:nil];
 }
 
 + (float)upload:(NSDictionary *)params {
     // TODO Phase 1.1
-    return 1.0f;
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
+                                   reason:@"upload not implemented yet"
+                                 userInfo:nil];
 }
 
-+ (void)mkdir:(NSDictionary *)params {
++ (BOOL)mkdir:(NSDictionary *)params {
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
     NMSFTP *sftp = [session sftp];
     if (![sftp isConnected]) [sftp connect];
-    [sftp createDirectoryAtPath:params[@"remotePath"]];
+    NSString *remotePath = params[@"remotePath"];
+    BOOL recursive = [params[@"recursive"] boolValue];
+    if (!recursive) {
+        return [sftp createDirectoryAtPath:remotePath];
+    }
+    // NMSFTP has no recursive create; walk the path and create each missing segment.
+    BOOL ok = YES;
+    NSMutableArray<NSString *> *segments = [NSMutableArray array];
+    for (NSString *seg in [remotePath componentsSeparatedByString:@"/"]) {
+        if (seg.length > 0) [segments addObject:seg];
+    }
+    NSMutableString *cur = [NSMutableString string];
+    if ([remotePath hasPrefix:@"/"]) [cur appendString:@"/"];
+    for (NSString *seg in segments) {
+        if (cur.length > 0 && ![cur hasSuffix:@"/"]) [cur appendString:@"/"];
+        [cur appendString:seg];
+        if ([sftp directoryExistsAtPath:cur]) continue;
+        if (![sftp createDirectoryAtPath:cur]) {
+            // Tolerate "already exists" races; verify instead of trusting the return value.
+            if (![sftp directoryExistsAtPath:cur]) { ok = NO; break; }
+        }
+    }
+    if (!ok) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] mkdir failed: %@", remotePath]];
+    }
+    return ok;
+#else
+    return NO;
 #endif
 }
 
-+ (void)rm:(NSDictionary *)params {
++ (BOOL)rm:(NSDictionary *)params {
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
     NMSFTP *sftp = [session sftp];
     if (![sftp isConnected]) [sftp connect];
-    [sftp removeFileAtPath:params[@"remotePath"]];
+    NSString *remotePath = params[@"remotePath"];
+    BOOL recursive = [params[@"recursive"] boolValue];
+    BOOL ok = [self removeEntry:remotePath sftp:sftp recursive:recursive depth:0];
+    if (!ok) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] rm failed: %@ recursive=%d", remotePath, recursive]];
+    }
+    return ok;
+#else
+    return NO;
 #endif
 }
 
-+ (void)rename:(NSDictionary *)params {
+/// unlink for files, rmdir for directories; `recursive` drains children first.
++ (BOOL)removeEntry:(NSString *)path sftp:(NMSFTP *)sftp recursive:(BOOL)recursive depth:(NSInteger)depth {
+    if (depth > 64) return NO; // guard against symlink loops / pathological trees
+    if ([sftp directoryExistsAtPath:path]) {
+        if (recursive) {
+            for (NMSFTPFile *child in [sftp contentsOfDirectoryAtPath:path]) {
+                NSString *childName = child.filename;
+                if ([childName hasSuffix:@"/"]) {
+                    childName = [childName substringToIndex:childName.length - 1];
+                }
+                if ([childName isEqualToString:@"."] || [childName isEqualToString:@".."] || childName.length == 0) continue;
+                NSString *childPath = [path hasSuffix:@"/"]
+                    ? [path stringByAppendingString:childName]
+                    : [NSString stringWithFormat:@"%@/%@", path, childName];
+                if (![self removeEntry:childPath sftp:sftp recursive:YES depth:depth + 1]) return NO;
+            }
+        }
+        return [sftp removeDirectoryAtPath:path];
+    }
+    return [sftp removeFileAtPath:path];
+}
+
++ (BOOL)rename:(NSDictionary *)params {
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
     NMSFTP *sftp = [session sftp];
     if (![sftp isConnected]) [sftp connect];
-    [sftp moveItemAtPath:params[@"oldPath"] toPath:params[@"newPath"]];
+    BOOL ok = [sftp moveItemAtPath:params[@"oldPath"] toPath:params[@"newPath"]];
+    if (!ok) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] rename failed: %@", params]];
+    }
+    return ok;
+#else
+    return NO;
 #endif
 }
 
-+ (void)move:(NSDictionary *)params {
++ (BOOL)move:(NSDictionary *)params {
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
     NMSFTP *sftp = [session sftp];
@@ -201,37 +311,57 @@ static NSLock *gLock;
     NSString *destPath = [destDir hasSuffix:@"/"] ?
         [destDir stringByAppendingString:name] :
         [NSString stringWithFormat:@"%@/%@", destDir, name];
-    [sftp moveItemAtPath:srcPath toPath:destPath];
+    BOOL ok = [sftp moveItemAtPath:srcPath toPath:destPath];
+    if (!ok) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] move failed: %@ -> %@", srcPath, destPath]];
+    }
+    return ok;
+#else
+    return NO;
 #endif
 }
 
 + (NSDictionary *)copy:(NSDictionary *)params {
     // TODO Phase 1.2: 用 SFTPInputStream + SFTPOutputStream 流式 copy
-    return @{@"success": @YES, @"copiedCount": @1, @"failedCount": @0};
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
+                                   reason:@"copy not implemented yet"
+                                 userInfo:nil];
 }
 
-+ (void)chmod:(NSDictionary *)params {
++ (BOOL)chmod:(NSDictionary *)params {
     // NMSSH 不直接支持 chmod；通过 channel execute 执行 shell 命令
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
-    NSString *cmd = [NSString stringWithFormat:@"chmod %@ %@", params[@"mode"], params[@"remotePath"]];
+    NSString *cmd = [NSString stringWithFormat:@"chmod %@ '%@'", params[@"mode"], params[@"remotePath"]];
     NSError *err = nil;
     [[session channel] execute:cmd error:&err];
+    if (err) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] chmod failed: %@ (%@)", cmd, err.localizedDescription]];
+    }
+    return err == nil;
+#else
+    return NO;
 #endif
 }
 
-+ (void)chown:(NSDictionary *)params {
++ (BOOL)chown:(NSDictionary *)params {
     // TODO Phase 1.1: channel execute:@"chown ..."
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
-    NSString *cmd = [NSString stringWithFormat:@"chown %@:%@ %@",
+    NSString *cmd = [NSString stringWithFormat:@"chown %@:%@ '%@'",
                      params[@"uid"], params[@"gid"] ?: params[@"uid"], params[@"remotePath"]];
     NSError *err = nil;
     [[session channel] execute:cmd error:&err];
+    if (err) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] chown failed: %@ (%@)", cmd, err.localizedDescription]];
+    }
+    return err == nil;
+#else
+    return NO;
 #endif
 }
 
-+ (void)setMtime:(NSDictionary *)params {
++ (BOOL)setMtime:(NSDictionary *)params {
     // TODO Phase 1.1: channel execute:@"touch -m -d ..."
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
@@ -240,15 +370,23 @@ static NSLock *gLock;
     NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
     [fmt setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
     NSString *dateStr = [fmt stringFromDate:date];
-    NSString *cmd = [NSString stringWithFormat:@"touch -m -d \"%@\" %@", dateStr, params[@"remotePath"]];
+    NSString *cmd = [NSString stringWithFormat:@"touch -m -d \"%@\" '%@'", dateStr, params[@"remotePath"]];
     NSError *err = nil;
     [[session channel] execute:cmd error:&err];
+    if (err) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] setMtime failed: %@ (%@)", cmd, err.localizedDescription]];
+    }
+    return err == nil;
+#else
+    return NO;
 #endif
 }
 
 + (float)batchTask:(NSDictionary *)params {
     // TODO Phase 1.2
-    return 1.0f;
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
+                                   reason:@"batchTask not implemented yet"
+                                 userInfo:nil];
 }
 
 + (void)cancelBatchTask:(NSString *)taskId {

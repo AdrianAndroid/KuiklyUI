@@ -19,10 +19,21 @@
 #import "SftpErrorFormatter.h"
 @implementation KRSftpModule
 
+/// libssh2 的 session / SFTP 句柄不是线程安全的：并发调用会让请求在同一条 session 上交错，
+/// 导致 list 读到过期结果、甚至握手偶发失败。因此所有 SFTP 操作统一串行在一条队列上执行。
+static dispatch_queue_t KRSftpModuleSerialQueue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("com.tencent.kuikly.sftp.module", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
 - (void)connect:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             NSString *sessionId = [KRSftpSession connect:params];
             if (callback) callback(@{@"sessionId": sessionId});
@@ -36,7 +47,7 @@
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *sessionId = params[@"sessionId"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         [KRSftpSession disconnect:sessionId];
         if (callback) callback(@{@"ok": @YES});
     });
@@ -47,7 +58,7 @@
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *sessionId = params[@"sessionId"];
     NSString *remotePath = params[@"remotePath"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             NSArray *entries = [KRSftpSession list:sessionId remotePath:remotePath];
             if (callback) callback(@{@"entries": entries, @"hasMore": @NO});
@@ -63,7 +74,7 @@
     NSString *sessionId = params[@"sessionId"];
     NSString *remotePath = params[@"remotePath"];
     BOOL followSymlink = [params[@"followSymlink"] boolValue];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             NSDictionary *entry = [KRSftpSession stat:sessionId remotePath:remotePath followSymlink:followSymlink];
             if (callback) callback(@{@"entry": entry});
@@ -78,7 +89,7 @@
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *sessionId = params[@"sessionId"];
     NSString *remotePath = params[@"remotePath"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             NSString *fileHandleId = [KRSftpFileHandle openRead:sessionId remotePath:remotePath];
             if (callback) callback(@{@"fileHandleId": fileHandleId});
@@ -94,7 +105,7 @@
     NSString *fileHandleId = array[0];
     long long offset = [array[1] longLongValue];
     int length = [array[2] intValue];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             NSData *bytes = [KRSftpFileHandle read:fileHandleId offset:offset length:length];
             NSDictionary *meta = @{@"ok": @YES};
@@ -110,7 +121,7 @@
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *fileHandleId = params[@"fileHandleId"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         [KRSftpFileHandle close:fileHandleId];
         if (callback) callback(@{@"ok": @YES});
     });
@@ -119,7 +130,7 @@
 - (void)download:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             float progress = [KRSftpSession download:params];
             if (callback) callback(@{@"progress": @(progress), @"path": params[@"localName"] ?: @""});
@@ -132,7 +143,7 @@
 - (void)upload:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             float progress = [KRSftpSession upload:params];
             if (callback) callback(@{@"progress": @(progress), @"success": @YES});
@@ -145,10 +156,10 @@
 - (void)mkdir:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession mkdir:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession mkdir:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"mkdir failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -158,10 +169,10 @@
 - (void)rm:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession rm:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession rm:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"rm failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -171,10 +182,10 @@
 - (void)rename:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession rename:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession rename:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"rename failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -184,10 +195,10 @@
 - (void)move:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession move:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession move:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"move failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -197,7 +208,7 @@
 - (void)copy:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             NSDictionary *result = [KRSftpSession copy:params];
             if (callback) callback(@{@"result": result, @"ok": @YES});
@@ -210,10 +221,10 @@
 - (void)chmod:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession chmod:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession chmod:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"chmod failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -223,10 +234,10 @@
 - (void)chown:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession chown:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession chown:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"chown failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -236,10 +247,10 @@
 - (void)setMtime:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            [KRSftpSession setMtime:params];
-            if (callback) callback(@{@"ok": @YES});
+            BOOL ok = [KRSftpSession setMtime:params];
+            if (callback) callback(ok ? @{@"ok": @YES} : @{@"error": [SftpErrorFormatter formatNSError:[NSError errorWithDomain:@"KuiklySftp" code:2001 userInfo:@{NSLocalizedDescriptionKey: @"setMtime failed"}]]});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }
@@ -249,7 +260,7 @@
 - (void)batchTask:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
             float progress = [KRSftpSession batchTask:params];
             if (callback) callback(@{@"progress": @(progress), @"success": @YES});
@@ -263,7 +274,7 @@
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *taskId = params[@"taskId"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpModuleSerialQueue(), ^{
         [KRSftpSession cancelBatchTask:taskId];
         if (callback) callback(@{@"ok": @YES});
     });

@@ -19,12 +19,25 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
 
 @implementation KRSftpFavoritesModule
 
+/// 该 Module 对同一份持久化 JSON 做「读-改-写」，且原先跑在并发全局队列上，
+/// 并发调用会互相覆盖（丢更新）。统一串行到一条队列。
+static dispatch_queue_t KRSftpFavoritesModuleSerialQueue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("com.tencent.kuikly.sftp.favorites", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
+
 - (void)add:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         @try {
-            NSString *id = params[@"id"] ?: [[NSUUID UUID] UUIDString];
+            NSString *id = params[@"id"];
+            if (id.length == 0) id = [[NSUUID UUID] UUIDString];
             NSMutableDictionary *item = [params mutableCopy];
             item[@"id"] = id;
             if (!item[@"starredAt"]) item[@"starredAt"] = @([[NSDate date] timeIntervalSince1970] * 1000);
@@ -42,7 +55,7 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *id = params[@"id"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         NSMutableArray *all = [[self loadAll] mutableCopy];
         NSMutableArray *filtered = [NSMutableArray array];
         for (NSDictionary *item in all) {
@@ -57,7 +70,7 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         NSMutableArray *all = [[self loadAll] mutableCopy];
         NSMutableArray *filtered = [NSMutableArray array];
         NSInteger removed = 0;
@@ -79,7 +92,7 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
     NSString *connectionId = params[@"connectionId"];
     NSString *sortBy = params[@"sortBy"] ?: @"STARRED_AT";
     NSString *sortOrder = params[@"sortOrder"] ?: @"DESC";
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         NSArray *all = [self loadAll];
         NSMutableArray *filtered = [NSMutableArray array];
         for (NSDictionary *item in all) {
@@ -97,7 +110,7 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
     NSString *remotePath = params[@"remotePath"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         NSArray *all = [self loadAll];
         NSString *id = @"";
         for (NSDictionary *item in all) {
@@ -115,7 +128,7 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *id = params[@"id"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         NSMutableArray *all = [[self loadAll] mutableCopy];
         for (NSInteger i = 0; i < all.count; i++) {
             NSMutableDictionary *item = [all[i] mutableCopy];
@@ -134,7 +147,7 @@ static NSString *const kFavoritesKey = @"sftp_favorites_items";
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *keyword = params[@"keyword"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpFavoritesModuleSerialQueue(), ^{
         NSArray *all = [self loadAll];
         NSMutableArray *result = [NSMutableArray array];
         NSString *lower = [keyword lowercaseString];

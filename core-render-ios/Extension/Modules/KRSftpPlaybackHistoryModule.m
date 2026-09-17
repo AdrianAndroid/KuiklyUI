@@ -20,12 +20,25 @@ static const int kMaxCapacity = 2000;
 
 @implementation KRSftpPlaybackHistoryModule
 
+/// 该 Module 对同一份持久化 JSON 做「读-改-写」，且原先跑在并发全局队列上，
+/// 并发调用会互相覆盖（丢更新）。统一串行到一条队列。
+static dispatch_queue_t KRSftpPlaybackHistoryModuleSerialQueue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("com.tencent.kuikly.sftp.history", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
+
 - (void)upsert:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         @try {
-            NSString *id = params[@"id"] ?: [self buildId:params[@"connectionId"] remotePath:params[@"remotePath"]];
+            NSString *id = params[@"id"];
+            if (id.length == 0) id = [self buildId:params[@"connectionId"] remotePath:params[@"remotePath"]];
             NSMutableDictionary *record = [params mutableCopy];
             record[@"id"] = id;
             NSMutableArray *all = [[self loadAll] mutableCopy];
@@ -58,7 +71,7 @@ static const int kMaxCapacity = 2000;
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
     NSString *remotePath = params[@"remotePath"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSString *id = [self buildId:connectionId remotePath:remotePath];
         NSArray *all = [self loadAll];
         NSDictionary *record = nil;
@@ -77,7 +90,7 @@ static const int kMaxCapacity = 2000;
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
     NSString *directoryPath = params[@"directoryPath"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSArray *all = [self loadAll];
         NSMutableArray *result = [NSMutableArray array];
         for (NSDictionary *item in all) {
@@ -99,7 +112,7 @@ static const int kMaxCapacity = 2000;
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSArray *all = [self loadAll];
         NSMutableArray *result = [NSMutableArray array];
         for (NSDictionary *item in all) {
@@ -116,7 +129,7 @@ static const int kMaxCapacity = 2000;
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *id = params[@"id"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSMutableArray *all = [[self loadAll] mutableCopy];
         NSMutableArray *filtered = [NSMutableArray array];
         for (NSDictionary *item in all) {
@@ -131,7 +144,7 @@ static const int kMaxCapacity = 2000;
     NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSMutableArray *all = [[self loadAll] mutableCopy];
         NSMutableArray *filtered = [NSMutableArray array];
         for (NSDictionary *item in all) {
@@ -147,7 +160,7 @@ static const int kMaxCapacity = 2000;
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     NSString *connectionId = params[@"connectionId"];
     NSString *remotePath = params[@"remotePath"];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSString *id = [self buildId:connectionId remotePath:remotePath];
         NSMutableArray *all = [[self loadAll] mutableCopy];
         for (NSInteger i = 0; i < all.count; i++) {

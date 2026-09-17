@@ -22,10 +22,22 @@ static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 
 @implementation KRSftpConnectionModule
 
+/// 该 Module 对同一份持久化 JSON 做「读-改-写」，且原先跑在并发全局队列上，
+/// 并发调用会互相覆盖（丢更新）。统一串行到一条队列。
+static dispatch_queue_t KRSftpConnectionModuleSerialQueue(void) {
+    static dispatch_queue_t q;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        q = dispatch_queue_create("com.tencent.kuikly.sftp.connections", DISPATCH_QUEUE_SERIAL);
+    });
+    return q;
+}
+
+
 - (void)add:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY];
+    NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpConnectionModuleSerialQueue(), ^{
         @try {
             NSString *id = params[@"id"];
             if (!id || [id length] == 0) {
@@ -51,9 +63,9 @@ static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 }
 
 - (void)update:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY];
+    NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpConnectionModuleSerialQueue(), ^{
         @try {
             NSString *id = params[@"id"];
             if (!id || [id length] == 0) {
@@ -76,9 +88,9 @@ static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 }
 
 - (void)remove:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY];
+    NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpConnectionModuleSerialQueue(), ^{
         @try {
             NSString *id = params[@"id"];
             NSMutableArray *items = [self loadAllMutable];
@@ -100,7 +112,7 @@ static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 
 - (void)list:(NSDictionary *)args {
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpConnectionModuleSerialQueue(), ^{
         @try {
             NSArray *items = [self loadAllMutable];
             // 按 lastUsedAt DESC 排序
@@ -117,9 +129,9 @@ static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 }
 
 - (void)get:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY];
+    NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpConnectionModuleSerialQueue(), ^{
         @try {
             NSString *id = params[@"id"];
             NSArray *items = [self loadAllMutable];
@@ -142,9 +154,9 @@ static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 }
 
 - (void)touchLastUsed:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY];
+    NSDictionary *params = [args[KR_PARAM_KEY] kr_stringToDictionary];
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_async(KRSftpConnectionModuleSerialQueue(), ^{
         @try {
             NSString *id = params[@"id"];
             NSMutableArray *items = [self loadAllMutable];

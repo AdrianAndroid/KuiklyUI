@@ -24,8 +24,9 @@
     else if ([name containsString:@"Auth"] || [name containsString:@"SftpAuthException"]) code = 1003;
     else if ([name containsString:@"HostKey"]) code = 1004;
     else if ([name containsString:@"Timeout"]) code = 1002;
-    else if ([name containsString:@"NoSuch"]) code = 2001;
-    else if ([name containsString:@"Permission"]) code = 2002;
+    else if ([name containsString:@"NoSuch"]) code = 2003;      // NO_SUCH_FILE
+    else if ([name containsString:@"Permission"]) code = 2001;  // PERMISSION_DENIED
+    else if ([name containsString:@"NotImplemented"]) code = 9999;
     else code = 0;
 
     NSDictionary *json = @{
