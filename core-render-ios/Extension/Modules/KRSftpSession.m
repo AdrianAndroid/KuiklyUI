@@ -25,6 +25,10 @@ static NSLock *gLock;
 
 @interface KRSftpSession ()
 + (BOOL)removeEntry:(NSString *)path sftp:(NMSFTP *)sftp recursive:(BOOL)recursive depth:(NSInteger)depth;
++ (NSString *)localDownloadPathForName:(NSString *)name;
++ (BOOL)ensureDirectory:(NSString *)path sftp:(NMSFTP *)sftp;
++ (void)copyEntry:(NSString *)src to:(NSString *)dest sftp:(NMSFTP *)sftp
+           copied:(NSInteger *)copied failed:(NSInteger *)failed depth:(NSInteger)depth;
 @end
 
 @implementation KRSftpSession
@@ -196,18 +200,74 @@ static NSLock *gLock;
 #endif
 }
 
-+ (float)download:(NSDictionary *)params {
-    // TODO Phase 1.1: 接入本地缓存路径 + 进度回调
-    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
-                                   reason:@"download not implemented yet"
-                                 userInfo:nil];
++ (NSDictionary *)download:(NSDictionary *)params {
+#if __has_include(<NMSSH/NMSSH.h>)
+    NMSSHSession *session = [self sessionById:params[@"sessionId"]];
+    NMSFTP *sftp = [session sftp];
+    if (![sftp isConnected]) [sftp connect];
+    NSString *remotePath = params[@"remotePath"];
+    NSString *localName = params[@"localName"] ?: remotePath.lastPathComponent;
+    NSString *destPath = [self localDownloadPathForName:localName];
+    if (remotePath.length == 0 || destPath.length == 0) {
+        @throw [NSException exceptionWithName:@"SftpInvalidParamException"
+                                       reason:@"remotePath required" userInfo:nil];
+    }
+    NSOutputStream *out = [NSOutputStream outputStreamToFileAtPath:destPath append:NO];
+    [out open];
+    BOOL ok = [sftp contentsAtPath:remotePath toStream:out progress:nil];
+    [out close];
+    if (!ok) {
+        [[NSFileManager defaultManager] removeItemAtPath:destPath error:nil];
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] download failed: %@", remotePath]];
+        @throw [NSException exceptionWithName:@"SftpNoSuchFileException"
+                                       reason:[NSString stringWithFormat:@"download failed: %@", remotePath]
+                                     userInfo:nil];
+    }
+    // 回包带本地落地绝对路径（params 可能是不可变字典，不能就地写回）
+    return @{@"progress": @1.0f, @"path": destPath};
+#else
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException" reason:@"NMSSH not available" userInfo:nil];
+#endif
+}
+
+/** 下载落地目录：Caches/KRSftpDownloads（沙箱内可写） */
++ (NSString *)localDownloadPathForName:(NSString *)name {
+    NSArray<NSString *> *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+    NSString *dir = [caches.firstObject stringByAppendingPathComponent:@"KRSftpDownloads"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *safe = name.lastPathComponent;
+    if (safe.length == 0) safe = @"download";
+    return [dir stringByAppendingPathComponent:safe];
 }
 
 + (float)upload:(NSDictionary *)params {
-    // TODO Phase 1.1
-    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
-                                   reason:@"upload not implemented yet"
-                                 userInfo:nil];
+#if __has_include(<NMSSH/NMSSH.h>)
+    NMSSHSession *session = [self sessionById:params[@"sessionId"]];
+    NMSFTP *sftp = [session sftp];
+    if (![sftp isConnected]) [sftp connect];
+    NSString *localPath = params[@"localPath"];
+    NSString *remotePath = params[@"remotePath"];
+    if (localPath.length == 0 || remotePath.length == 0) {
+        @throw [NSException exceptionWithName:@"SftpInvalidParamException"
+                                       reason:@"localPath/remotePath required" userInfo:nil];
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        @throw [NSException exceptionWithName:@"SftpNoSuchFileException"
+                                       reason:[NSString stringWithFormat:@"local file missing: %@", localPath]
+                                     userInfo:nil];
+    }
+    BOOL ok = [sftp writeFileAtPath:localPath toFileAtPath:remotePath progress:nil];
+    if (!ok) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] upload failed: %@ -> %@",
+                              localPath, remotePath]];
+        @throw [NSException exceptionWithName:@"SftpPermissionException"
+                                       reason:[NSString stringWithFormat:@"upload failed: %@", remotePath]
+                                     userInfo:nil];
+    }
+    return 1.0f;
+#else
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException" reason:@"NMSSH not available" userInfo:nil];
+#endif
 }
 
 + (BOOL)mkdir:(NSDictionary *)params {
@@ -308,6 +368,7 @@ static NSLock *gLock;
     NSString *srcPath = params[@"srcPath"];
     NSString *destDir = params[@"destDir"];
     NSString *name = [srcPath lastPathComponent];
+    [self ensureDirectory:destDir sftp:sftp];
     NSString *destPath = [destDir hasSuffix:@"/"] ?
         [destDir stringByAppendingString:name] :
         [NSString stringWithFormat:@"%@/%@", destDir, name];
@@ -322,10 +383,82 @@ static NSLock *gLock;
 }
 
 + (NSDictionary *)copy:(NSDictionary *)params {
-    // TODO Phase 1.2: 用 SFTPInputStream + SFTPOutputStream 流式 copy
-    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
-                                   reason:@"copy not implemented yet"
-                                 userInfo:nil];
+#if __has_include(<NMSSH/NMSSH.h>)
+    NMSSHSession *session = [self sessionById:params[@"sessionId"]];
+    NMSFTP *sftp = [session sftp];
+    if (![sftp isConnected]) [sftp connect];
+    NSString *srcPath = params[@"srcPath"];
+    NSString *destPath = params[@"destPath"];
+    if (srcPath.length == 0 || destPath.length == 0) {
+        @throw [NSException exceptionWithName:@"SftpInvalidParamException"
+                                       reason:@"srcPath/destPath required" userInfo:nil];
+    }
+    NSInteger copied = 0, failed = 0;
+    [self copyEntry:srcPath to:destPath sftp:sftp copied:&copied failed:&failed depth:0];
+    return @{@"success": @(failed == 0), @"copiedCount": @(copied), @"failedCount": @(failed)};
+#else
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException" reason:@"NMSSH not available" userInfo:nil];
+#endif
+}
+
+
+/** 递归确保远端目录存在（SFTP 无 mkdir -p） */
++ (BOOL)ensureDirectory:(NSString *)path sftp:(NMSFTP *)sftp {
+    if (path.length == 0 || [path isEqualToString:@"/"] || [path isEqualToString:@"."]) return YES;
+    if ([sftp directoryExistsAtPath:path]) return YES;
+    NSMutableArray<NSString *> *segments = [NSMutableArray array];
+    for (NSString *seg in [path componentsSeparatedByString:@"/"]) {
+        if (seg.length > 0) [segments addObject:seg];
+    }
+    NSMutableString *cur = [NSMutableString string];
+    if ([path hasPrefix:@"/"]) [cur appendString:@"/"];
+    for (NSString *seg in segments) {
+        if (cur.length > 0 && ![cur hasSuffix:@"/"]) [cur appendString:@"/"];
+        [cur appendString:seg];
+        if ([sftp directoryExistsAtPath:cur]) continue;
+        if (![sftp createDirectoryAtPath:cur] && ![sftp directoryExistsAtPath:cur]) return NO;
+    }
+    return YES;
+}
+
+/** 远端→远端复制：文件走「下载到临时文件 → 上传」流式搬运，目录递归。
+ *  之所以借道本地临时文件，是因为 SFTP 协议没有服务端拷贝原语，而一次性把
+ *  整个文件读进内存会在大文件上爆内存。 */
++ (void)copyEntry:(NSString *)src to:(NSString *)dest sftp:(NMSFTP *)sftp
+           copied:(NSInteger *)copied failed:(NSInteger *)failed depth:(NSInteger)depth {
+    if (depth > 64) { (*failed)++; return; }
+    BOOL isDir = [sftp directoryExistsAtPath:src];
+    if (isDir) {
+        if (![sftp directoryExistsAtPath:dest]) {
+            if (![sftp createDirectoryAtPath:dest]) { (*failed)++; return; }
+        }
+        for (NMSFTPFile *child in [sftp contentsOfDirectoryAtPath:src]) {
+            NSString *childName = child.filename;
+            if ([childName hasSuffix:@"/"]) childName = [childName substringToIndex:childName.length - 1];
+            if ([childName isEqualToString:@"."] || [childName isEqualToString:@".."] || childName.length == 0) continue;
+            NSString *childSrc = [NSString stringWithFormat:@"%@/%@", src, childName];
+            NSString *childDest = [NSString stringWithFormat:@"%@/%@", dest, childName];
+            [self copyEntry:childSrc to:childDest sftp:sftp copied:copied failed:failed depth:depth + 1];
+        }
+        return;
+    }
+
+    // 复制文件前先确保目标父目录存在，否则写入会失败
+    [self ensureDirectory:[dest stringByDeletingLastPathComponent] sftp:sftp];
+
+    NSString *tmp = [self localDownloadPathForName:[NSString stringWithFormat:@"copy-%@", NSUUID.UUID.UUIDString]];
+    NSOutputStream *out = [NSOutputStream outputStreamToFileAtPath:tmp append:NO];
+    [out open];
+    BOOL readOk = [sftp contentsAtPath:src toStream:out progress:nil];
+    [out close];
+    if (!readOk) {
+        [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+        (*failed)++;
+        return;
+    }
+    BOOL writeOk = [sftp writeFileAtPath:tmp toFileAtPath:dest progress:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+    if (writeOk) (*copied)++; else (*failed)++;
 }
 
 + (BOOL)chmod:(NSDictionary *)params {
@@ -345,15 +478,29 @@ static NSLock *gLock;
 }
 
 + (BOOL)chown:(NSDictionary *)params {
-    // TODO Phase 1.1: channel execute:@"chown ..."
 #if __has_include(<NMSSH/NMSSH.h>)
     NMSSHSession *session = [self sessionById:params[@"sessionId"]];
-    NSString *cmd = [NSString stringWithFormat:@"chown %@:%@ '%@'",
-                     params[@"uid"], params[@"gid"] ?: params[@"uid"], params[@"remotePath"]];
+    NSString *remotePath = params[@"remotePath"];
+    int uid = [params[@"uid"] intValue];
+    int gid = [params[@"gid"] intValue];
+    NSString *owner = nil;
+    if (uid >= 0) {
+        owner = (gid >= 0) ? [NSString stringWithFormat:@"%d:%d", uid, gid]
+                           : [NSString stringWithFormat:@"%d", uid];
+    } else {
+        // NMSFTPFile 不暴露 uid/gid；未显式给出时回落到当前会话用户（等价于 chown 给自己）
+        owner = session.username;
+    }
+    if (owner.length == 0) {
+        @throw [NSException exceptionWithName:@"SftpInvalidParamException"
+                                       reason:@"uid/gid or session username required" userInfo:nil];
+    }
+    NSString *cmd = [NSString stringWithFormat:@"chown %@ '%@'", owner, remotePath];
     NSError *err = nil;
     [[session channel] execute:cmd error:&err];
     if (err) {
-        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] chown failed: %@ (%@)", cmd, err.localizedDescription]];
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] chown failed: %@ (%@)",
+                              cmd, err.localizedDescription]];
     }
     return err == nil;
 #else
@@ -383,11 +530,74 @@ static NSLock *gLock;
 }
 
 + (float)batchTask:(NSDictionary *)params {
-    // TODO Phase 1.2
-    @throw [NSException exceptionWithName:@"SftpNotImplementedException"
-                                   reason:@"batchTask not implemented yet"
-                                 userInfo:nil];
+#if __has_include(<NMSSH/NMSSH.h>)
+    NMSSHSession *session = [self sessionById:params[@"sessionId"]];
+    NMSFTP *sftp = [session sftp];
+    if (![sftp isConnected]) [sftp connect];
+    NSString *action = params[@"action"] ?: @"DELETE";
+    NSArray *items = params[@"items"] ?: @[];
+    NSString *targetDir = params[@"targetDir"];
+    if (items.count == 0) {
+        @throw [NSException exceptionWithName:@"SftpInvalidParamException"
+                                       reason:@"items required" userInfo:nil];
+    }
+    // 批量写入类操作先确保目标目录存在（SFTP 不会自动建父目录）
+    if (([action isEqualToString:@"COPY"] || [action isEqualToString:@"MOVE"]) && targetDir.length > 0) {
+        if (![self ensureDirectory:targetDir sftp:sftp]) {
+            @throw [NSException exceptionWithName:@"SftpPermissionException"
+                                           reason:[NSString stringWithFormat:@"cannot create targetDir: %@", targetDir]
+                                         userInfo:nil];
+        }
+    }
+    NSInteger done = 0, failed = 0;
+    for (NSString *item in items) {
+        @try {
+            if ([action isEqualToString:@"DELETE"]) {
+                if ([self removeEntry:item sftp:sftp recursive:YES depth:0]) done++; else failed++;
+            } else if ([action isEqualToString:@"MOVE"]) {
+                NSString *dest = [self destPathFor:item targetDir:targetDir];
+                if ([sftp moveItemAtPath:item toPath:dest]) done++; else failed++;
+            } else if ([action isEqualToString:@"COPY"]) {
+                NSInteger c = 0, f = 0;
+                [self copyEntry:item to:[self destPathFor:item targetDir:targetDir]
+                           sftp:sftp copied:&c failed:&f depth:0];
+                done += c; failed += f;
+            } else if ([action isEqualToString:@"DOWNLOAD"]) {
+                NSString *dest = [self localDownloadPathForName:item.lastPathComponent];
+                NSOutputStream *out = [NSOutputStream outputStreamToFileAtPath:dest append:NO];
+                [out open];
+                BOOL ok = [sftp contentsAtPath:item toStream:out progress:nil];
+                [out close];
+                if (ok) done++; else failed++;
+            } else {
+                failed++;
+            }
+        } @catch (NSException *e) {
+            failed++;
+        }
+    }
+    if (failed > 0) {
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] batch %@ done=%ld failed=%ld",
+                              action, (long)done, (long)failed]];
+        @throw [NSException exceptionWithName:@"SftpPermissionException"
+                                       reason:[NSString stringWithFormat:@"batch %@ partially failed (%ld/%ld)",
+                                               action, (long)failed, (long)(done + failed)]
+                                     userInfo:nil];
+    }
+    return 1.0f;
+#else
+    @throw [NSException exceptionWithName:@"SftpNotImplementedException" reason:@"NMSSH not available" userInfo:nil];
+#endif
 }
+
+/** 批量操作的目标路径：targetDir + 原文件名 */
++ (NSString *)destPathFor:(NSString *)srcPath targetDir:(NSString *)targetDir {
+    NSString *name = srcPath.lastPathComponent;
+    if (targetDir.length == 0) return srcPath;
+    return [targetDir hasSuffix:@"/"] ? [targetDir stringByAppendingString:name]
+                                     : [NSString stringWithFormat:@"%@/%@", targetDir, name];
+}
+
 
 + (void)cancelBatchTask:(NSString *)taskId {
     // TODO Phase 1.2

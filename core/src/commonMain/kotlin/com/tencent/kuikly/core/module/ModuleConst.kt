@@ -41,4 +41,7 @@ object ModuleConst {
     const val SFTP_PLAYBACK_HISTORY = "KRSftpPlaybackHistoryModule"
     /** 连接列表 Module，全局单例（§17.3.1 / §21.7.4）—— 持久化用户保存的 SFTP 连接配置 */
     const val SFTP_CONNECTION = "KRSftpConnectionModule"
+
+    /** 本地媒体代理 Module（§5 / §7.3）——为 VideoView 提供 HTTP Range 流式播放地址 */
+    const val SFTP_MEDIA_PROXY = "KRLocalMediaProxyModule"
 }

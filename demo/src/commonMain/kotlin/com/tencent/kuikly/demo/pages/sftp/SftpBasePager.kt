@@ -19,6 +19,7 @@ import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.module.sftp.SftpConnectionModule
 import com.tencent.kuikly.core.module.sftp.SftpFavoritesModule
+import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
 import com.tencent.kuikly.core.module.sftp.SftpModule
 import com.tencent.kuikly.core.module.sftp.SftpPlaybackHistoryModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
@@ -41,6 +42,7 @@ internal abstract class SftpBasePager : BasePager() {
         map[SftpFavoritesModule.MODULE_NAME] = SftpFavoritesModule()
         map[SftpPlaybackHistoryModule.MODULE_NAME] = SftpPlaybackHistoryModule()
         map[SftpConnectionModule.MODULE_NAME] = SftpConnectionModule()
+        map[SftpMediaProxyModule.MODULE_NAME] = SftpMediaProxyModule()
         return map
     }
 
@@ -55,6 +57,9 @@ internal abstract class SftpBasePager : BasePager() {
 
     /** 连接列表 Module（全局单例） */
     protected fun sftpConnectionModule(): SftpConnectionModule = acquireModule(SftpConnectionModule.MODULE_NAME)
+
+    /** 本地媒体代理 Module（§5 / §7.3） */
+    protected fun sftpMediaProxyModule(): SftpMediaProxyModule = acquireModule(SftpMediaProxyModule.MODULE_NAME)
 
     override fun themeDidChanged(data: JSONObject) {
         super.themeDidChanged(data)

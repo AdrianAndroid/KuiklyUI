@@ -12,22 +12,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#import <Foundation/Foundation.h>
+#import "KRBaseModule.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
-/**
- * 流式读文件句柄（iOS，§7.1.3）
- */
-@interface KRSftpFileHandle : NSObject
-
-+ (NSString *)openRead:(NSString *)sessionId remotePath:(NSString *)remotePath;
-+ (NSData *)read:(NSString *)fileHandleId offset:(long long)offset length:(int)length;
-
-/** 已打开文件的总大小（未知返回 -1），供 HTTP Content-Length / Range 计算 */
-+ (long long)sizeOf:(NSString *)fileHandleId;
-+ (void)close:(NSString *)fileHandleId;
-+ (void)closeAll;
+/** 本地媒体代理 Module（§5 / §7.3）：为 VideoView 提供 HTTP Range 流式播放地址 */
+@interface KRLocalMediaProxyModule : KRBaseModule
 
 @end
 

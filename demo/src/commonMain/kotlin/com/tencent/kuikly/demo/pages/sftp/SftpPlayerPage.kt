@@ -19,7 +19,8 @@ import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.I18n
-import com.tencent.kuikly.core.module.sftp.LocalMediaProxyApi
+import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord
 import com.tencent.kuikly.core.datetime.DateTime
@@ -57,7 +58,8 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var currentPosition: Int = 0
 
     private var token: String? = null
-    private var playUrl: String? = null
+    private var playUrl: String? by observable(null)
+    private var playError: String? by observable(null)
     private var hasResumePromptShown: Boolean = false
     private var resumePosition: Long = 0L
     private var nextEpisodeCountdown: Int = 0
@@ -79,13 +81,21 @@ internal class SftpPlayerPage : SftpBasePager() {
     }
 
     private fun startPlayback() {
-        // 1. 注册代理 token
-        val proxy = LocalMediaProxyApi.getInstance()
-        val port = proxy.startOrGetPort()
+        // 1. 启动本地代理 → 注册 token → 拼出 http://127.0.0.1:<port>/<token>/<name>
+        //    代理会把播放器的 HTTP Range 请求转成 SFTP lseek+read（§5.2），实现边下边播。
+        val proxy = sftpMediaProxyModule()
         val sftpSessionId = sessionId.ifEmpty { connectionId }  // 降级：BrowserPage 旧链路可能未传 sessionId
-        val token = proxy.registerToken(sftpSessionId, remotePath, size)
-        this.token = token
-        this.playUrl = SftpMediaUrlBuilder.buildPlayUrl(port, token, name)
+        proxy.startOrGetPort { port ->
+            proxy.registerToken(sftpSessionId, remotePath, size) { tk ->
+                if (port <= 0 || tk.isEmpty()) {
+                    playError = if (port <= 0) I18n.t("sftp.error.proxy_start_failed")
+                                else I18n.t("sftp.error.proxy_read_failed")
+                    return@registerToken
+                }
+                token = tk
+                playUrl = SftpMediaUrlBuilder.buildPlayUrl(port, tk, name)
+            }
+        }
 
         // 2. 取播放历史
         sftpPlaybackHistoryModule().get(connectionId, remotePath) { record, _ ->
@@ -112,6 +122,19 @@ internal class SftpPlayerPage : SftpBasePager() {
                             firstFrameDidDisplay { ctx.firstFrameShown = true }
                             playStateDidChanged { state, _ -> ctx.onPlayStateChanged(state) }
                             playTimeDidChanged { cur, total -> ctx.onPlayTimeChanged(cur, total) }
+                        }
+                    }
+                }
+                // 代理/打开失败时明确提示，而不是停在“加载中”
+                if (ctx.playError != null) {
+                    View {
+                        attr { allCenter(); size(pagerData.pageViewWidth, 80f) }
+                        Text {
+                            attr {
+                                text(ctx.playError ?: "")
+                                fontSize(14f)
+                                color(Color(0xFFFF6B6B))
+                            }
                         }
                     }
                 }
@@ -264,8 +287,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         if (duration > 0 && currentPosition > 0) {
             savePlaybackHistory(currentPosition.toLong(), duration.toLong(), false)
         }
-        // 取消 token
-        token?.let { LocalMediaProxyApi.getInstance().unregisterToken(it) }
+        // 取消 token（释放远端 fileHandle）
+        token?.let { sftpMediaProxyModule().unregisterToken(it) }
     }
 
     companion object {

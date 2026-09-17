@@ -30,7 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)disconnect:(NSString *)sessionId;
 + (NSArray *)list:(NSString *)sessionId remotePath:(NSString *)remotePath;
 + (NSDictionary *)stat:(NSString *)sessionId remotePath:(NSString *)remotePath followSymlink:(BOOL)followSymlink;
-+ (float)download:(NSDictionary *)params;
++ (NSDictionary *)download:(NSDictionary *)params;
 + (float)upload:(NSDictionary *)params;
 + (BOOL)mkdir:(NSDictionary *)params;
 + (BOOL)rm:(NSDictionary *)params;
@@ -43,6 +43,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (float)batchTask:(NSDictionary *)params;
 + (void)cancelBatchTask:(NSString *)taskId;
 + (void)shutdownAll;
+
+#pragma mark - 内部辅助（子模块/批量复用）
++ (NSString *)localDownloadPathForName:(NSString *)name;
++ (NSString *)destPathFor:(NSString *)srcPath targetDir:(NSString *)targetDir;
 
 /** 根据 sessionId 取 NMSSHSession（不存在则抛异常）。返回类型实际为 NMSSHSession *，用 id 透传避免 header 引入 NMSSH */
 + (id)sessionById:(NSString *)sessionId;

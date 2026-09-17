@@ -132,8 +132,10 @@ static dispatch_queue_t KRSftpModuleSerialQueue(void) {
     KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
     dispatch_async(KRSftpModuleSerialQueue(), ^{
         @try {
-            float progress = [KRSftpSession download:params];
-            if (callback) callback(@{@"progress": @(progress), @"path": params[@"localName"] ?: @""});
+            NSDictionary *result = [KRSftpSession download:params];
+            if (callback) callback(@{@"progress": result[@"progress"] ?: @1.0f,
+                                     @"path": result[@"path"] ?: @"",
+                                     @"success": @YES});
         } @catch (NSException *e) {
             if (callback) callback(@{@"error": [SftpErrorFormatter formatException:e]});
         }

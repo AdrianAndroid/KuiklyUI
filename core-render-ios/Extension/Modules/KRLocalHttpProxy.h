@@ -24,15 +24,23 @@ NS_ASSUME_NONNULL_BEGIN
  * - Token TTL 2 小时，每次 read 续期（§21.3.3）
  * - 支持 HTTP Range 请求（§21.3.4）
  *
- * **Phase 1 简化**：当前为占位实现；Phase 1.2 接入 GCDWebServer（Podfile 需加 `pod 'GCDWebServer'`）。
+ * 代理把播放器的 HTTP Range 请求转换为 SFTP `lseek + read`（§5.2），因此不需要把整个文件下载到本地。
  */
 @interface KRLocalHttpProxy : NSObject
 
 + (KRLocalHttpProxy *)startOrGet;
++ (instancetype)sharedInstance;
 - (int)port;
 - (NSString *)registerToken:(NSString *)sessionId remotePath:(NSString *)remotePath totalSize:(long long)totalSize;
 - (void)unregisterToken:(NSString *)token;
 - (void)stop;
+
+#pragma mark - Kotlin/Native bridge
+// core 通过 NSClassFromString + performSelector 调用；选择子保持「0~1 个对象入参 / 对象出参」。
+- (NSNumber *)startOrGetPortNumber;
+- (NSString *)registerTokenWithJson:(NSString *)json;
+- (void)unregisterTokenWithJson:(NSString *)json;
+- (void)stopProxy;
 
 @end
 

@@ -29,6 +29,8 @@ import com.tencent.kuikly.core.module.sftp.SftpError
 import com.tencent.kuikly.core.module.sftp.SftpFavorite
 import com.tencent.kuikly.core.module.sftp.SftpFavoriteIcon
 import com.tencent.kuikly.core.module.sftp.SftpFavoriteSortBy
+import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
+import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.Text
@@ -57,6 +59,8 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
         private const val TAG = "SftpTest"
         /** 故意失败用例会弹模态错误框，默认关闭 */
         private const val BAD_AUTH_TEST = false
+        /** 置 true 则跑完不 disconnect，供外部 curl 验证本地代理 */
+        private const val HOLD_SESSION_FOR_EXTERNAL_VERIFY = false
         const val PAGE_NAME = "SftpIntegrationTestPage"
 
         // —— 测试目标 ——
@@ -68,6 +72,14 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
         //       "remoteHome": "/home/<user>",
         //   ])
         private const val DEFAULT_PORT = 22
+
+        /** 远端媒体样本（用 scp 预置，见 §17.4）；用于验证随机读=流式播放的数据通路 */
+        private const val MEDIA_FILE = "sftp_kuikly_media.mp4"
+        private const val MEDIA_SIZE = 95627L
+        private const val MEDIA_SUM = 11393384L          // (sum of bytes) % 1000000007
+        private const val MEDIA_HEAD16 = "000000206674797069736f6d00000200"
+        private const val MEDIA_MID16 = "bf83b361bd4b46fbbca64bc57df7c2ef"
+        private const val MEDIA_TAIL16 = "a934fb2481a7d1640914be011881b470"
 
         private const val LOCAL_UPLOAD_NAME = "sftp_it_upload.txt"
         private const val LOCAL_DOWNLOAD_NAME = "sftp_it_downloaded.txt"
@@ -346,10 +358,14 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
                 next(ok, "ok=$ok err=${err.desc()}")
             }
         }
-        step("stat verify chmod == 600") { next ->
+        step("stat verify chmod == 600 (symbolic -rw-------)") { next ->
             sftpModule().stat(sessionId, "$baseDir/copied.txt") { entry, err ->
-                next(entry?.permission?.contains("600") == true,
-                    "perm=${entry?.permission} err=${err.desc()}")
+                // stat 返回的是符号权限串（如 -rw-------），不是八进制
+                val p = entry?.permission ?: ""
+                val ownerRW = p.length >= 4 && p[1] == 'r' && p[2] == 'w'
+                val groupOtherNone = p.length >= 10 &&
+                    p.substring(4, 10).all { it == '-' }
+                next(ownerRW && groupOtherNone, "perm=$p err=${err.desc()}")
             }
         }
         step("setMtime(copied.txt, now-86400)") { next ->
@@ -540,6 +556,143 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
             }
         }
 
+        // ---------- 随机读（= 本地 HTTP 代理流式播放的数据通路）----------
+        step("openRead(media) + size") { next ->
+            sftpModule().openRead(sessionId, "$remoteHome/$MEDIA_FILE") { fh, err ->
+                mediaHandleId = fh ?: ""
+                sftpModule().stat(sessionId, "$remoteHome/$MEDIA_FILE") { entry, e2 ->
+                    next(fh != null && entry?.size == MEDIA_SIZE,
+                        "fh=$fh size=${entry?.size} expect=$MEDIA_SIZE err=${err.desc()} ${e2.desc()}")
+                }
+            }
+        }
+        step("read(media, 0, 16) == ftyp header") { next ->
+            sftpModule().read(mediaHandleId, 0L, 16) { bytes, err ->
+                val hex = bytes?.toHexString() ?: ""
+                next(hex == MEDIA_HEAD16, "hex=$hex expect=$MEDIA_HEAD16 err=${err.desc()}")
+            }
+        }
+        step("read(media, 50000, 16) == mid bytes") { next ->
+            sftpModule().read(mediaHandleId, 50000L, 16) { bytes, err ->
+                val hex = bytes?.toHexString() ?: ""
+                next(hex == MEDIA_MID16, "hex=$hex expect=$MEDIA_MID16 err=${err.desc()}")
+            }
+        }
+        step("read(media, 95000, 4096) clamps at EOF") { next ->
+            sftpModule().read(mediaHandleId, 95000L, 4096) { bytes, err ->
+                val n = bytes?.size ?: -1
+                val tail = if (n == (MEDIA_SIZE - 95000).toInt() && n >= 16)
+                    bytes!!.copyOfRange(n - 16, n).toHexString() else ""
+                next(n == (MEDIA_SIZE - 95000).toInt() && tail == MEDIA_TAIL16,
+                    "read=$n expect=${MEDIA_SIZE - 95000} tail=$tail err=${err.desc()}")
+            }
+        }
+        step("read(media, past EOF) == 0 bytes") { next ->
+            sftpModule().read(mediaHandleId, MEDIA_SIZE, 16) { bytes, err ->
+                next(bytes?.isEmpty() == true, "read=${bytes?.size} err=${err.desc()}")
+            }
+        }
+        step("read(media) whole file in 64KB chunks -> byte count + checksum") { next ->
+            mediaOffset = 0L
+            mediaSum = 0L
+            mediaTotal = 0L
+            readChunks(next)
+        }
+        step("close(media handle)") { next ->
+            sftpModule().close(mediaHandleId) { err ->
+                next(err == null, "err=${err.desc()}")
+            }
+        }
+
+        // ---------- 传输：下载 → 上传 → 字节校验（真实 MP4，非文本） ----------
+        step("download(media.mp4) -> local path") { next ->
+            sftpModule().download(sessionId, "$remoteHome/$MEDIA_FILE", "kr_media_dl.mp4") { _, path, err ->
+                mediaLocalPath = path ?: ""
+                next(path != null && path.isNotEmpty(), "local=$path err=${err.desc()}")
+            }
+        }
+        step("upload(downloaded) -> $baseDir/media_copy.mp4") { next ->
+            sftpModule().upload(sessionId, mediaLocalPath, "$baseDir/media_copy.mp4") { _, ok, err ->
+                next(ok, "ok=$ok err=${err.desc()}")
+            }
+        }
+        step("stat(media_copy.mp4) size == 95627") { next ->
+            sftpModule().stat(sessionId, "$baseDir/media_copy.mp4") { entry, err ->
+                next(entry?.size == MEDIA_SIZE, "size=${entry?.size} expect=$MEDIA_SIZE err=${err.desc()}")
+            }
+        }
+        step("re-read uploaded media, checksum matches original") { next ->
+            sftpModule().openRead(sessionId, "$baseDir/media_copy.mp4") { fh, err ->
+                if (fh == null) { next(false, "openRead failed err=${err.desc()}"); return@openRead }
+                mediaHandleId = fh
+                verifyMediaChecksum(fh, next)
+            }
+        }
+        step("copy(media_copy.mp4 -> media_copied.mp4)") { next ->
+            sftpModule().copy(sessionId, "$baseDir/media_copy.mp4", "$baseDir/media_copied.mp4") { result, err ->
+                next(result != null && result.copiedCount >= 1,
+                    "copied=${result?.copiedCount} failed=${result?.failedCount} err=${err.desc()}")
+            }
+        }
+        step("verify copy is byte-identical") { next ->
+            sftpModule().stat(sessionId, "$baseDir/media_copied.mp4") { entry, err ->
+                if (entry?.size != MEDIA_SIZE) {
+                    next(false, "size=${entry?.size} expect=$MEDIA_SIZE err=${err.desc()}")
+                    return@stat
+                }
+                sftpModule().openRead(sessionId, "$baseDir/media_copied.mp4") { fh, e2 ->
+                    if (fh == null) { next(false, "openRead failed ${e2.desc()}"); return@openRead }
+                    verifyMediaChecksum(fh, next)
+                }
+            }
+        }
+        step("batchTask(COPY media -> batch_out) + size") { next ->
+            val task = SftpBatchTask(sessionId, SftpBatchAction.COPY,
+                listOf("$baseDir/media_copy.mp4"), targetDir = "$baseDir/batch_out")
+            sftpModule().batchTask(task) { _, ok, err ->
+                if (!ok) { next(false, "ok=$ok err=${err.desc()}"); return@batchTask }
+                sftpModule().stat(sessionId, "$baseDir/batch_out/media_copy.mp4") { entry, e2 ->
+                    next(entry?.size == MEDIA_SIZE, "size=${entry?.size} err=${e2.desc()}")
+                }
+            }
+        }
+        step("batchTask(DELETE batch_out/media_copy.mp4) + verify gone") { next ->
+            val task = SftpBatchTask(sessionId, SftpBatchAction.DELETE,
+                listOf("$baseDir/batch_out/media_copy.mp4"))
+            sftpModule().batchTask(task) { _, ok, err ->
+                if (!ok) { next(false, "ok=$ok err=${err.desc()}"); return@batchTask }
+                sftpModule().stat(sessionId, "$baseDir/batch_out/media_copy.mp4") { entry, e2 ->
+                    next(entry == null, "still exists=${entry != null} err=${e2.desc()}")
+                }
+            }
+        }
+        step("rm(media_copy.mp4) + rm(media_copied.mp4)") { next ->
+            sftpModule().rm(sessionId, "$baseDir/media_copy.mp4", false) { ok1, e1 ->
+                sftpModule().rm(sessionId, "$baseDir/media_copied.mp4", false) { ok2, e2 ->
+                    next(ok1 && ok2, "copy=$ok1 copied=$ok2 err=${e1.desc()} ${e2.desc()}")
+                }
+            }
+        }
+
+        // ---------- 本地 HTTP 代理（视频流式播放链路，§5.2）----------
+        step("mediaProxy.startOrGetPort") { next ->
+            sftpMediaProxyModule().startOrGetPort { p ->
+                proxyPort = p
+                next(p in 18080..18089, "port=$p (期望 18080-18089)")
+            }
+        }
+        step("mediaProxy.registerToken(media)") { next ->
+            sftpMediaProxyModule().registerToken(sessionId, "$remoteHome/$MEDIA_FILE", MEDIA_SIZE) { tk ->
+                proxyToken = tk
+                // 测试页专用：输出可被本机 curl 的地址，用于从 HTTP 层独立验证 Range 行为
+                if (tk.isNotEmpty()) {
+                    val url = SftpMediaUrlBuilder.buildPlayUrl(proxyPort, tk, MEDIA_FILE)
+                    KLog.i(TAG, "PROXY_URL $url")
+                }
+                next(tk.isNotEmpty(), "token.len=${tk.length}")
+            }
+        }
+
         // ---------- 清理 ----------
         step("rm(file copied.txt)") { next ->
             sftpModule().rm(sessionId, "$baseDir/copied.txt", false) { ok, err ->
@@ -566,10 +719,15 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
                 next(entry == null, "entry=$entry err=${err.desc()}")
             }
         }
-        step("disconnect") { next ->
-            sftpModule().disconnect(sessionId) {
-                next(true, "disconnect called")
+        // 需要从 HTTP 层用 curl 独立验证代理时置 true：保留会话不 disconnect，便于外部请求
+        if (!HOLD_SESSION_FOR_EXTERNAL_VERIFY) {
+            step("disconnect") { next ->
+                sftpModule().disconnect(sessionId) {
+                    next(true, "disconnect called")
+                }
             }
+        } else {
+            KLog.i(TAG, "SESSION HELD (external verification window); sessionId=$sessionId port=$proxyPort")
         }
     }
 
@@ -600,6 +758,65 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
     }
 
     private var readHandleId: String = ""
+    private var mediaHandleId: String = ""
+    private var mediaLocalPath: String = ""
+    private var proxyPort: Int = 0
+    private var proxyToken: String = ""
+    private var mediaOffset = 0L
+    private var mediaSum = 0L
+    private var mediaTotal = 0L
+
+    /** 分块读完整文件，累计字节数与校验和（验证与大文件整体一致的完整性） */
+    private fun readChunks(next: (Boolean, String) -> Unit) {
+        val chunk = 64 * 1024
+        sftpModule().read(mediaHandleId, mediaOffset, chunk) { bytes, err ->
+            if (err != null) {
+                next(false, "read failed at $mediaOffset err=${err.desc()}")
+                return@read
+            }
+            if (bytes == null || bytes.isEmpty()) {
+                val ok = mediaTotal == MEDIA_SIZE && mediaSum == MEDIA_SUM
+                next(ok, "bytes=$mediaTotal expect=$MEDIA_SIZE sum=$mediaSum expect=$MEDIA_SUM")
+                return@read
+            }
+            for (b in bytes) {
+                mediaSum = (mediaSum + (b.toInt() and 0xFF)) % 1000000007L
+            }
+            mediaTotal += bytes.size
+            mediaOffset += bytes.size
+            readChunks(next)
+        }
+    }
+
+    /** 分块读完整文件并按校验和比对原文件（证明传输字节级一致） */
+    private fun verifyMediaChecksum(fh: String, next: (Boolean, String) -> Unit, offset: Long = 0L, sum: Long = 0L, total: Long = 0L) {
+        sftpModule().read(fh, offset, 64 * 1024) { bytes, err ->
+            if (err != null) {
+                sftpModule().close(fh) { }
+                next(false, "read failed at $offset err=${err.desc()}")
+                return@read
+            }
+            if (bytes == null || bytes.isEmpty()) {
+                sftpModule().close(fh) { }
+                next(total == MEDIA_SIZE && sum == MEDIA_SUM,
+                    "bytes=$total expect=$MEDIA_SIZE sum=$sum expect=$MEDIA_SUM")
+                return@read
+            }
+            var s2 = sum
+            for (b in bytes) s2 = (s2 + (b.toInt() and 0xFF)) % 1000000007L
+            verifyMediaChecksum(fh, next, offset + bytes.size, s2, total + bytes.size)
+        }
+    }
+
+    private fun ByteArray.toHexString(): String {
+        val sb = StringBuilder(size * 2)
+        for (b in this) {
+            val v = b.toInt() and 0xFF
+            sb.append("0123456789abcdef"[v ushr 4])
+            sb.append("0123456789abcdef"[v and 0x0F])
+        }
+        return sb.toString()
+    }
 
     // endregion
 
