@@ -24,6 +24,13 @@ kotlin {
 
     // target
     androidTarget() {
+        // 与 compose / core-render-android 对齐为 17：compose-runtime 的 Android 产物是 17，
+        // 消费者若用默认 1.8 会报 "Cannot inline bytecode built with JVM target 17"
+        compilations.all {
+            kotlinOptions {
+                jvmTarget = "17"
+            }
+        }
         publishLibraryVariantsGroupedByFlavor = true
         publishLibraryVariants("release")
     }

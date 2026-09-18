@@ -16,6 +16,8 @@
 package com.tencent.kuikly.android.demo.adapter
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
@@ -45,9 +47,26 @@ class VideoViewAdapter : IKRVideoViewAdapter {
 
 class KuiklyVideoView(context: Context, private val src: String, private val listener: IKRVideoViewListener) : PlayerView(context), IKRVideoView {
 
+    private companion object {
+        const val PROGRESS_INTERVAL_MS = 500L
+    }
+
     private val exoPlayer = ExoPlayer.Builder(context)
         .setTrackSelector(DefaultTrackSelector())
         .build()
+
+    /** 进度轮询：ExoPlayer 没有周期回调，页面需要 playTimeDidChanged 才能显示时间/进度 */
+    private val progressHandler = Handler(Looper.getMainLooper())
+    private val progressTick = object : Runnable {
+        override fun run() {
+            val duration = exoPlayer.duration
+            listener.playTimeDidChangedWithCurrentTime(
+                exoPlayer.currentPosition.coerceAtLeast(0L),
+                if (duration > 0) duration else 0L
+            )
+            progressHandler.postDelayed(this, PROGRESS_INTERVAL_MS)
+        }
+    }
 
     init {
         useController = false
@@ -57,6 +76,7 @@ class KuiklyVideoView(context: Context, private val src: String, private val lis
         exoPlayer.prepare()
         player = exoPlayer
 
+        progressHandler.post(progressTick)
         exoPlayer.addListener(object : Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 super.onPlaybackStateChanged(playbackState)
@@ -101,6 +121,7 @@ class KuiklyVideoView(context: Context, private val src: String, private val lis
     }
 
     override fun stop() {
+        progressHandler.removeCallbacks(progressTick)
         exoPlayer.stop()
     }
 

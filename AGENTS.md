@@ -213,9 +213,38 @@
 | 端 | SSH/SFTP 协议栈 | 本地 HTTP 代理 | 状态 |
 |----|----------------|----------------|------|
 | **iOS / macOS** | NMSSH(libssh2 1.10.0，ridenui fork 2.7.2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：两端各 74/74 集成自测（含字节级校验）；macOS 另做界面操控验证（流式播放/拖动 seek/暂停恢复） |
-| Android | 未接（待 JSch） | 无 | **未实现** |
+| Android | JSch 0.1.55 `core-render-android/.../expand/module/KRSftp*.kt` | NanoHTTPD `LocalHttpProxyServer.kt` | **可用**：74/74 集成自测（模拟器 Pixel_8a_API_35 / Android 15）+ 经代理用 ExoPlayer 播放 SFTP 视频出画 |
 | HarmonyOS | 桩 `core-render-ohos/src/main/cpp/.../sftp/`（已有骨架，待接 libssh2） | 桩 | **未实现**（所有方法抛 `not implemented`） |
-| Web / 小程序 | 浏览器无 TCP/SSH | 不启本地代理 | **需后端网关**（§5.6） |
+| Web / 小程序 | 浏览器无 TCP/SSH | 不启本地代理 | **需后端网关**（§5.6）；JS 产物本身可构建（`npm install` + `./gradlew :demo:packLocalJsBundleDebug -Pkuikly.useLocalKsp=false`），但 SFTP 能力在浏览器沙箱内无法实现（无原始 socket），属架构限制而非实现缺陷 |
+
+Android 构建 / 验证（模拟器 Pixel_8a_API_35 / Android 15，JDK 17）：
+
+```bash
+export JAVA_HOME=<corretto-17>; export ANDROID_HOME=$HOME/Library/Android/sdk
+printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties   # 被 .gitignore 忽略
+# 注意：仓库有多份按 Kotlin 版本命名的构建脚本，SFTP 依赖需存在于**当前生效**的那份
+./gradlew :androidApp:assembleDebug
+adb install -r androidApp/build/outputs/apk/debug/androidApp-debug.apk
+# 直达内页（宿主支持 pageName/pageData 两个 Intent extra）
+adb shell am start -n com.tencent.kuikly.android.demo/.KuiklyRenderActivity \
+  --es pageName SftpIntegrationTestPage --es pageData '{"host":"...","port":22,"user":"...","password":"..."}'
+adb logcat -d | grep -oE '\[KLog\]\[SftpTest\]:[^"]*'   # 取 74 项断言结果
+```
+
+Android 侧的坑（都已修）：
+- **按 Kotlin 版本命名的构建脚本容易漏改**：JSch / NanoHTTPD 当初只加在 `build.2.0.21.gradle.kts`，
+  而生效的是 `settings.gradle.kts` 选中的 `build.2.1.21.gradle.kts` → 直接 Unresolved。
+  改依赖时**必须补齐所有 `core-render-android/build.*.gradle.kts`**。
+- `compose` 模块写死 `jvmTarget = "1.8"`，而 `:core` 用 JDK 17 默认目标 → 内联报
+  "Cannot inline bytecode built with JVM target 17"（只在 compose 需重编译时暴露）。已对齐为 17。
+- **Kuikly 模块回调不能直接塞裸 `JSONArray` / `JSONObject`**：Kotlin 侧会读不到
+  （症状：列表恒为空、`get` 字段全空）。必须 `JSONObject(...).toMap()`（`toMap()` 会把嵌套数组转 List）。
+- `KuiklyRenderLog` 只有 `i/d/e`（没有 `w`）。
+- **随机读必须用 JSch 的 `get(src, monitor, skip)`**：`get(src)` 返回的是顺序流，
+  对它 `skip(offset)` 会把绝对偏移当相对位移，多次读后位置错乱（播放器解析 MP4 直接失败）。
+- 沉浸式（edge-to-edge）下状态栏会**吞掉点击**：页面自绘导航栏若不加顶部安全区，
+  「+ 新建」点不动。SFTP 页面已统一加 `paddingTop(pagerData.statusBarHeight)` 的根容器。
+- Android 视频适配器原本没实现 `playTimeDidChangedWithCurrentTime` → 播放页时间恒 `00:00/00:00`，已补轮询。
 
 各层位置：
 - 业务/UI（100% 共享）：`demo/src/commonMain/.../pages/sftp/`（首页/浏览/编辑/播放/属性/预览器）

@@ -50,6 +50,15 @@ internal class SftpConnectEditPage : SftpBasePager() {
     override fun body(): ViewBuilder {
         val ctx = this
         return {
+            // 顶部安全区：Android 沉浸式 / 刘海屏下，页面自绘导航栏会被状态栏遮挡，
+            // 且状态栏区域会吞掉点击（表现为「+ 新建」点不动）。这里整体下移状态栏高度。
+            View {
+                attr {
+                    width(pagerData.pageViewWidth)
+                    height(pagerData.pageViewHeight)
+                    paddingTop(pagerData.statusBarHeight)
+                }
+
             attr { backgroundColor(SftpColorTokens.bg) }
             View {
                 attr {
@@ -210,7 +219,8 @@ internal class SftpConnectEditPage : SftpBasePager() {
                     }
                 }
             }
-        }
+                    }
+}
     }
 
     private fun onSave() {
