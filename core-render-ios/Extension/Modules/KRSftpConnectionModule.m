@@ -20,6 +20,34 @@
 
 static NSString *const SFTP_CONNECTIONS_KEY = @"sftp_connections_items";
 
+
+#pragma mark - 序列化辅助
+
+// NSKeyedArchiver/NSKeyedUnarchiver 的 +archivedDataWithRootObject: / +unarchiveObjectWithData:
+// 在 iOS 12 起被标记废弃，iOS 端 Podfile 对 OpenKuiklyIOSRender 开了
+// GCC_TREAT_WARNINGS_AS_ERRORS=YES，会直接编译失败。
+// 这里改用「实例式」的非废弃 API，并保持 requiresSecureCoding=NO，
+// 产出的仍是经典归档格式 —— 与旧接口读写完全兼容，不会让已存的连接数据失效。
+static NSData *KRArchiveArray(NSArray *items) {
+    NSKeyedArchiver *archiver = [[NSKeyedArchiver alloc] initRequiringSecureCoding:NO];
+    [archiver encodeObject:items forKey:NSKeyedArchiveRootObjectKey];
+    [archiver finishEncoding];
+    return archiver.encodedData;
+}
+
+static NSArray *KRUnarchiveArray(NSData *data) {
+    if (data.length == 0) return nil;
+    NSError *error = nil;
+    NSKeyedUnarchiver *unarchiver = [[NSKeyedUnarchiver alloc] initForReadingFromData:data error:&error];
+    if (!unarchiver) return nil;
+    unarchiver.requiresSecureCoding = NO;
+    NSSet *classes = [NSSet setWithObjects:[NSArray class], [NSDictionary class],
+                                             [NSString class], [NSNumber class], nil];
+    id obj = [unarchiver decodeObjectOfClasses:classes forKey:NSKeyedArchiveRootObjectKey];
+    [unarchiver finishDecoding];
+    return [obj isKindOfClass:[NSArray class]] ? obj : nil;
+}
+
 @implementation KRSftpConnectionModule
 
 /// 该 Module 对同一份持久化 JSON 做「读-改-写」，且原先跑在并发全局队列上，
@@ -181,12 +209,12 @@ static dispatch_queue_t KRSftpConnectionModuleSerialQueue(void) {
 - (NSMutableArray *)loadAllMutable {
     NSData *data = [[NSUserDefaults standardUserDefaults] objectForKey:SFTP_CONNECTIONS_KEY];
     if (!data) return [NSMutableArray array];
-    NSArray *arr = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+    NSArray *arr = KRUnarchiveArray(data);
     return arr ? [NSMutableArray arrayWithArray:arr] : [NSMutableArray array];
 }
 
 - (void)saveAll:(NSArray *)items {
-    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:items];
+    NSData *data = KRArchiveArray(items);
     [[NSUserDefaults standardUserDefaults] setObject:data forKey:SFTP_CONNECTIONS_KEY];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
@@ -205,14 +233,14 @@ static dispatch_queue_t KRSftpConnectionModuleSerialQueue(void) {
     NSString *key = @"sftp_favorites_items";
     NSData *data = [[NSUserDefaults standardUserDefaults] objectForKey:key];
     if (!data) return;
-    NSArray *items = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+    NSArray *items = KRUnarchiveArray(data);
     NSMutableArray *filtered = [NSMutableArray array];
     for (NSDictionary *item in items) {
         if (![item[@"connectionId"] isEqualToString:connectionId]) {
             [filtered addObject:item];
         }
     }
-    NSData *newData = [NSKeyedArchiver archivedDataWithRootObject:filtered];
+    NSData *newData = KRArchiveArray(filtered);
     [[NSUserDefaults standardUserDefaults] setObject:newData forKey:key];
 }
 
@@ -220,14 +248,14 @@ static dispatch_queue_t KRSftpConnectionModuleSerialQueue(void) {
     NSString *key = @"sftp_playback_history_items";
     NSData *data = [[NSUserDefaults standardUserDefaults] objectForKey:key];
     if (!data) return;
-    NSArray *items = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+    NSArray *items = KRUnarchiveArray(data);
     NSMutableArray *filtered = [NSMutableArray array];
     for (NSDictionary *item in items) {
         if (![item[@"connectionId"] isEqualToString:connectionId]) {
             [filtered addObject:item];
         }
     }
-    NSData *newData = [NSKeyedArchiver archivedDataWithRootObject:filtered];
+    NSData *newData = KRArchiveArray(filtered);
     [[NSUserDefaults standardUserDefaults] setObject:newData forKey:key];
 }
 

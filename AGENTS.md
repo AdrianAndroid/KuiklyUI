@@ -212,7 +212,7 @@
 
 | 端 | SSH/SFTP 协议栈 | 本地 HTTP 代理 | 状态 |
 |----|----------------|----------------|------|
-| **iOS / macOS** | NMSSH(libssh2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：74/74 集成自测（含字节级校验）+ 界面操控验证（含流式播放/拖动 seek/暂停恢复） |
+| **iOS / macOS** | NMSSH(libssh2 1.10.0，ridenui fork 2.7.2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：两端各 74/74 集成自测（含字节级校验）；macOS 另做界面操控验证（流式播放/拖动 seek/暂停恢复） |
 | Android | 未接（待 JSch） | 无 | **未实现** |
 | HarmonyOS | 桩 `core-render-ohos/src/main/cpp/.../sftp/`（已有骨架，待接 libssh2） | 桩 | **未实现**（所有方法抛 `not implemented`） |
 | Web / 小程序 | 浏览器无 TCP/SSH | 不启本地代理 | **需后端网关**（§5.6） |
@@ -278,8 +278,16 @@
     若没有在进入可播状态后补发就会被永久丢弃（症状：进度条拖了位置变了但播放器没跳、暂停后恢复停在旧位置/直接 Ended）。
 14. **本地代理的 Range 响应要带 `Content-Length` 的流式 206**：缺 `Content-Length` 时播放器会把该输入判为不可 seek
     （拖进度条后不请求新位置的数据）。同时不要为了「低内存」把单次 Range 硬截成很小分片，否则播放器反复重发同一 Range。
+15. **页面的"是否在播放"应当表示"用户意图"，不要被播放器状态回调覆盖**。否则：
+    - 暂停时拖进度条/快进/快退，seek 前为了让 VLC 的 demuxer 拉数据会临时起播，VLC 报
+      `state=Playing` → 回调里把 `isPlaying = true` → 播放按钮立刻变 ⏸，与"用户想暂停"矛盾。
+    修正：
+    - 状态变化回调里**只把 `isPlaying` 置 false 的场景收窄到 PLAY_END / ERROR**，其它都别动它。
+    - 原生侧用 `krv_userWantsPlay`（由 `krv_play` / `krv_pause` 维护）记录意图；`krv_seekToTime`
+      在"需要恢复暂停"时临时起播让 demuxer 拉数据，seek 后 `dispatch_after` 几百毫秒再
+      `pause`（若期间用户改了意图就尊重新意图）。
 
-### 13.5 macOS 端实操：构建 / 运行 / 调试 / 自动化
+### 13.5 macOS / iOS 端实操：构建 / 运行 / 调试 / 自动化
 
 ```bash
 # 首次或改了原生源文件后（需要代理才能拉 GitHub；端口按本机 Clash 配置）
@@ -293,6 +301,36 @@ xcodebuild -workspace macApp.xcworkspace -scheme macApp -configuration Debug \
 export KUIKLY_SUPPRESS_ERROR_ALERT=1
 macApp/build/DerivedData/Build/Products/Debug/macApp.app/Contents/MacOS/macApp
 ```
+
+**iOS 端构建 / 运行**（同一台机、Xcode 26 验证过）：
+
+```bash
+cd iosApp && pod install          # 需要代理拉 GitHub（本机 Clash 端口 7897）
+xcodebuild -workspace iosApp.xcworkspace -scheme iosApp \
+  -configuration Debug -sdk iphonesimulator \
+  -destination 'id=<模拟器 UDID>' -derivedDataPath build/DerivedData build
+
+xcrun simctl boot <UDID>
+xcrun simctl install <UDID> build/DerivedData/Build/Products/Debug-iphonesimulator/iosApp.app
+xcrun simctl launch <UDID> com.tencent.kuiklycore.demo.luoyibu
+xcrun simctl io <UDID> screenshot /tmp/ios.png
+```
+
+iOS 侧的坑（都已修）：
+- `OpenKuiklyIOSRender` 在 iOS 的 Podfile 里开了 **`GCC_TREAT_WARNINGS_AS_ERRORS=YES`**（macApp 没开），
+  任何 ObjC 告警都会变成编译失败。已知需保持为零告警：
+  - `libssh2_sftp_open` 是**宏**，会把 `strlen()` 的 `size_t` 隐式窄化给 `libssh2_sftp_open_ex` 的
+    `unsigned int`（`-Wshorten-64-to-32`）→ 直接调用 `libssh2_sftp_open_ex` 并显式 `(unsigned int)` 转换。
+  - `+[NSKeyedArchiver archivedDataWithRootObject:]` / `+[NSKeyedUnarchiver unarchiveObjectWithData:]`
+    在 iOS 12 起废弃（`-Wdeprecated-declarations`）→ 改用实例式
+    `initRequiringSecureCoding:NO` + `decodeObjectOfClasses:forKey:`（保持经典归档格式，兼容旧数据）。
+  - 不再使用的常量/变量会触发 `-Wunused-const-variable`。
+- **NMSSH 版本**：iOS 的 Podfile 必须与 macOS 用同一个 ridenui fork（2.7.2，内 libssh2 1.10.0）。
+  官方 `NMSSH ~> 2.3.1` 内 libssh2 1.8.0 与服务器 OpenSSH 8.9 握手失败（日志：TCP 通 →
+  `Failure establishing SSH session` → `connect` 返回 1001，后续全部 `invalid sessionId`）。
+- iOS 首页 `ContentView.swift` 原本 `.ignoresSafeArea()` 会让页面自绘导航栏压到状态栏/灵动岛下
+  （与 macOS 同类问题）；指向 SFTP 页时去掉该修饰符。
+- iOS 端播放器是 **WMPlayer**（macOS 是 VLCKit），§13.4 里关于 VLC 的 seek/暂停条目在 iOS 上需另行验证。
 
 **诊断日志**（JSONL，AI 排查首选）：
 ```
@@ -346,6 +384,48 @@ ffmpeg -y -f lavfi -i "testsrc=size=640x360:rate=25:duration=60" \
   -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='%{eif\\:t\\:d}s':fontsize=96:fontcolor=white:x=20:y=20:box=1:boxcolor=black@0.6" \
   -c:v libx264 -pix_fmt yuv420p -movflags +faststart -c:a aac -shortest /tmp/kr_long.mp4
 ```
+
+**iOS 端同样跑通全量自测**（模拟器，2026-09 验证）：把 `iosApp/iosApp/ContentView.swift` 临时指向
+`SftpIntegrationTestPage` 并注入 13.6 的参数 → `xcrun simctl launch` → 结果从统一日志取：
+
+```bash
+xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'process == "iosApp"' \
+  | grep -oE '\[KLog\]\[SftpTest\]:[^"]*' | sed 's/\[KLog\]\[SftpTest\]://'
+```
+修复 NMSSH 版本后为 **74/74 全通过**。跑完记得把 `ContentView` 改回 `SftpHomePage`。
+
+
+
+### 13.7 端到端里程碑（SFTP 媒体链路，macOS 侧用 `~/.kr-uitest/` 模拟界面点击验证）
+
+按时间顺序，每条对应一次真实失败→修复→复测：
+
+1. **浏览页不重渲染**（状态是普通 `var` + Kotlin `when` 结构分支）→ 改 `observable` +
+   `vif/velseif/velse`；列表用 `observableList` + `vfor`（否则非空→非空的更新不重建）。
+2. **密码回传为 `""`**：原生把 `NSTextField` 的 cell 换成 `NSSecureTextFieldCell` 后
+   `controlTextDidChange` 不再回调（实测连 `didBeginEditing` 都没有）→ 改"不换 cell、只换显示值"：
+   编辑时显示真文本、失焦显示 `••••`（用 `controlTextDidEndEditing` 触发）。
+3. **代理 Range 响应缺 `Content-Length`** → 播放器判为不可 seek（拖完不请求新位置）→
+   改**带 `Content-Length` 的流式 206**（首字节不必等整段读完，同时声明完整区间长度）。
+4. **`KRSftpFileHandle` 预读缓存 + 锁**：VLC 并发多连接复用同一句柄，libssh2 的 seek/read 交错会读错；
+   加锁后又有**漏解锁**（缓存命中路径持锁 return）→ 后续读取永久死锁（播放卡住、进度不再前进）→
+   用 `@try/@finally` 单一路径解锁。
+5. **`_p_pendingSeekMs` 只写不读**：播放器未就绪时暂存的 seek 从未补发 → 拖动不跳、暂停后恢复停在
+   旧位置/直接 Ended → 状态变化与进度回调时 `p_flushPendingSeekIfNeeded` 补发。
+6. **`seekTo` 与播放进度共用 attr → seek 风暴**（每秒一次真实 seek，VLC 每次 flush+重缓冲 → 卡顿）→
+   独立 `seekTarget`（-1 = 未请求），只在显式跳转时下发。
+7. **暂停态 `mediaPlayer.time = X` 不取数据**，恢复即 Ended（demuxer 非活跃）→ seek 前先 `play`，
+   用户意图为暂停时再延时 `pause`（见 §13.4 第 15 条）。
+8. **图/音预览**：`Image` 不写 `size()` → 0×0 不可见；组件里同步取代理 token 恒为空 → 侧效应放页面层。
+
+### 13.8 关键文件索引（macOS/iOS SFTP 媒体链路，按调用方向）
+
+- 业务/UI（KMP，两端共享）：`demo/src/commonMain/.../pages/sftp/`
+- 能力声明：`core/src/commonMain/.../module/sftp/{SftpModule,SftpConnectionModule,SftpFavoritesModule,SftpPlaybackHistoryModule,SftpMediaProxyModule}.kt` + `SftpErrorCode.kt` / `MimeExtMap.kt` / `I18n.kt` / `SftpMediaUrlBuilder.kt`
+- 原生实现（iOS 与 macOS 共用同一份 ObjC）：`core-render-ios/Extension/Modules/KRSftp{Session,ConnectionModule,FavoritesModule,PlaybackHistoryModule,LocalMediaProxyModule,FileHandle}.m` + `KRLocalHttpProxy.{h,m}`
+- 视频组件：`core/src/commonMain/.../views/VideoView.kt` + `core-render-ios/Extension/AdvancedComps/KRVideoView.{h,m}`
+  - macOS 播放器实现：`macApp/.../Handlers/KRVideoViewHandler.{h,m}`（VLCKit）
+  - iOS 播放器实现：`iosApp/iosApp/KuiklyRenderExpand/`（WMPlayer）
 
 ---
 

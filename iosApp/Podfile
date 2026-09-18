@@ -10,7 +10,10 @@ target 'iosApp' do
   pod 'WMPlayer', "~> 5.0" # 第三方播放器库
   pod 'libpag', "~> 4.3.21"
   # SFTP client deps (§2 / §3 / §21.1.1)
-  pod 'NMSSH', '~> 2.3.1'           # SSH/SFTP
+  # SSH/SFTP：与 macOS 使用同一个 ridenui fork（2.7.2，内置 libssh2 1.10.0）。
+  # 官方 NMSSH 2.3.1 内置 libssh2 1.8.0，与服务器 OpenSSH 8.9 握手失败
+  # （实测：TCP 通 → "Failure establishing SSH session" → connect 返回 1001）。
+  pod 'NMSSH', :podspec => '../macApp/NMSSH.podspec'
   pod 'GCDWebServer', '~> 3.5.4'    # 本地 HTTP 代理
 end
 

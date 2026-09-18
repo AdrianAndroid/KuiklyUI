@@ -22,7 +22,7 @@ struct ContentView: View {
   //  let greet = Greeting().greet()
 
     var body: some View {
-        KuiklyRenderViewPage(pageName: "router", data: [:]).ignoresSafeArea()
+        KuiklyRenderViewPage(pageName: "SftpHomePage", data: [:])
     }
 }
 

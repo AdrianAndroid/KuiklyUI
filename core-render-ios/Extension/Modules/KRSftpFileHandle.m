@@ -82,7 +82,15 @@ static NSLock *gHandleLock;
                                      userInfo:nil];
     }
 
-    LIBSSH2_SFTP_HANDLE *handle = libssh2_sftp_open(sftp, remotePath.UTF8String, LIBSSH2_FXF_READ, 0);
+    // 直接用 open_ex：宏 libssh2_sftp_open 会把 strlen() 的 size_t 隐式窄化成
+    // unsigned int，iOS 侧 Podfile 对该 Pod 开了 -Werror（-Wshorten-64-to-32）会直接编译失败。
+    const char *remotePathCStr = remotePath.UTF8String ?: "";
+    LIBSSH2_SFTP_HANDLE *handle = libssh2_sftp_open_ex(sftp,
+                                                       remotePathCStr,
+                                                       (unsigned int)strlen(remotePathCStr),
+                                                       LIBSSH2_FXF_READ,
+                                                       0,
+                                                       LIBSSH2_SFTP_OPENFILE);
     if (!handle) {
         unsigned long sftpErr = libssh2_sftp_last_error(sftp);
         libssh2_sftp_shutdown(sftp);
