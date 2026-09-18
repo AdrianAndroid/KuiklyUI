@@ -60,6 +60,29 @@
 - (void)krv_stop {
     self.krv_isPlaying = NO;
     [self krv_stopProgressTimer];
+    [self krv_teardownSafely];
+}
+
+/**
+ * 安全拆除播放器。
+ *
+ * WMPlayer 的 `resetWMPlayer` 只把 currentItem/player 置 nil，**不会摘除**它用
+ * `addPeriodicTimeObserverForInterval:` 注册的周期观察者；观察者随后再触发一次
+ * `syncScrubber` 时 currentItem 已为 nil，内部 `currentTime.timescale` 为 0 →
+ * **整数除零崩溃（SIGFPE）**。
+ * 这些属性在 WMPlayer.m 的类扩展里（对外不可见），只能用 KVC 访问。
+ */
+- (void)krv_teardownSafely {
+    @try {
+        id observer = [self valueForKey:@"playbackTimeObserver"];
+        id player = [self valueForKey:@"player"];
+        if (observer && player) {
+            [player removeTimeObserver:observer];
+            [self setValue:nil forKey:@"playbackTimeObserver"];
+        }
+    } @catch (__unused NSException *e) {
+        // KVC 取不到时忽略：WMPlayer 的 dealloc 仍会兜底移除观察者
+    }
     [self resetWMPlayer];
 }
 
@@ -104,11 +127,15 @@
     if (self.krv_progressTimer) {
         return;
     }
+    // 必须用 block 版并捕获 weak self：target:self 的写法会让 timer 强引用 handler，
+    // 而 handler 又强引用 timer（krv_progressTimer），形成保留环 → handler/播放器永不释放，
+    // 表现为「退出播放页后仍在播放、多次进入会叠播多个」。
+    __weak typeof(self) weakSelf = self;
     self.krv_progressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
-                                                             target:self
-                                                           selector:@selector(krv_onProgressTick)
-                                                           userInfo:nil
-                                                            repeats:YES];
+                                                            repeats:YES
+                                                              block:^(NSTimer *timer) {
+        [weakSelf krv_onProgressTick];
+    }];
     [[NSRunLoop mainRunLoop] addTimer:self.krv_progressTimer forMode:NSRunLoopCommonModes];
 }
 
@@ -137,6 +164,34 @@
 
 - (void)dealloc {
     [self krv_stopProgressTimer];
+    [self pause];
+}
+
+/**
+ * 视图被移出窗口层级（关闭播放页 / 页面销毁）时必须停止播放并释放。
+ * 否则退出后音频继续、再进入会叠加多个播放器同时出声。
+ */
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (self.window == nil) {
+        // 只暂停、不要在这里 resetWMPlayer。
+        // WMPlayer 的 resetWMPlayer 会先把 currentItem/player 置 nil，却**不摘除**其
+        // addPeriodicTimeObserver 注册的观察者；观察者随后再触发一次 syncScrubber 时
+        // currentItem 已为 nil → 内部 timescale = 0 → 整数除零崩溃（SIGFPE，实测栈在
+        // -[WMPlayer syncScrubber] WMPlayer.m:1072）。
+        // 视图释放后 WMPlayer 的 dealloc 会按正确顺序（先 removeTimeObserver 再拆 item）收尾。
+        self.krv_isPlaying = NO;
+        [self krv_stopProgressTimer];
+        [self pause];
+    }
+}
+
+/// 被从父视图移除时同样兜底（部分场景不走 didMoveToWindow）
+- (void)removeFromSuperview {
+    self.krv_isPlaying = NO;
+    [self krv_stopProgressTimer];
+    [self pause];
+    [super removeFromSuperview];
 }
 
 #pragma mark - WMPlayerDelegate

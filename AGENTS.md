@@ -342,6 +342,20 @@ iOS 侧的坑（都已修）：
   修法：在 `iOSApp.swift` 用 `@UIApplicationDelegateAdaptor` 提供**带 `window` 属性**的 delegate
   （不改第三方库，可持久）。注意在子类里覆盖 `+IsiPhoneX` **无效** —— WMPlayer 内部是
   `[WMPlayer IsiPhoneX]` 类级调用，不走子类覆盖。
+- **退出播放页仍在播放 / 多次进入叠播：NSTimer 保留环**。
+  为补进度加了 `[NSTimer scheduledTimerWithTimeInterval:target:self ...]` 并把它存进
+  强引用属性 → handler(播放器) 强引用 timer、timer 强引用 handler，**永不释放** →
+  关闭页面后音频继续、再次进入又建一个播放器同时出声。
+  修法：改用 block 版 `scheduledTimerWithTimeInterval:repeats:block:` 并捕获 `weakSelf`；
+  同时在 `didMoveToWindow:`（window 为 nil）与 `removeFromSuperview` 里 `pause` + 停表。
+  验证靠 WMPlayer 自带的 `NSLog(@"WMPlayer dealloc")` 与 CoreAudio 的
+  `AudioQueue has stopped`：退出后应立即出现，且之后音频渲染日志为 0。
+- **不要在 teardown 里调 WMPlayer 的 `resetWMPlayer`**。它只把 `currentItem`/`player` 置 nil，
+  **不摘除** `addPeriodicTimeObserverForInterval:` 注册的观察者；观察者随后再触发一次
+  `syncScrubber` 时 `currentItem` 已为 nil → 内部 `currentTime.timescale` 为 0 →
+  **整数除零崩溃（SIGFPE / EXC_ARITHMETIC，栈在 -[WMPlayer syncScrubber]）**。
+  需要 stop 时用 KVC 先 `removeTimeObserver:`（`player`/`playbackTimeObserver` 在
+  WMPlayer.m 的类扩展里，对子类不可见），再 reset。
 - **iOS 播放器（WMPlayer）的事件回传需要自己补**：它只回调 Ready/Failed/Finished，
   没有周期性进度。用 `NSTimer` 轮询 `currentTime`/`duration`（**单位是秒，协议要毫秒**）
   补发 `playTimeDidChangedWithCurrentTime:totalTime:`，并在 `currentTime > 0` 首次上报
