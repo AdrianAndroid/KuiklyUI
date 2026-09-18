@@ -56,8 +56,11 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var remotePath: String = ""
     private var name: String = ""
     private var size: Long = 0L
-    private var duration: Int = 0
-    private var currentPosition: Int = 0
+    // 播放进度与状态都要可观察：控制条依赖它们实时刷新
+    private var duration: Int by observable(0)
+    private var currentPosition: Int by observable(0)
+    /** 是否正在播放（驱动 playControl 与按钮图标） */
+    private var isPlaying: Boolean by observable(true)
 
     private var token: String? = null
     private var playUrl: String? by observable(null)
@@ -114,22 +117,25 @@ internal class SftpPlayerPage : SftpBasePager() {
         return {
             attr { backgroundColor(Color.BLACK) }
 
-            // 视频容器
+            // 视频容器：占据窗口剩余高度，画面按 contain 等比缩放（随窗口自适应）
             View {
-                attr { size(pagerData.pageViewWidth, pagerData.pageViewWidth * 9f / 16f); backgroundColor(Color.BLACK) }
+                attr { flex(1f); width(pagerData.pageViewWidth); backgroundColor(Color.BLACK) }
                 // 必须用 vif：playUrl 是异步拿到的，写成 body 结构层的 `let`/`if`
                 // 时首次求值为 null，Video 视图不会被创建，之后也不会重建（=黑屏）。
                 vif({ ctx.playUrl != null }) {
                     Video {
                         attr {
-                            // 必须给 Video 显式尺寸：只给外层容器尺寸时，Video 自身高度为 0，
-                            // VLC 的渲染视图高度也是 0（hasVideo=0），解码在跑但看不到画面。
-                            size(pagerData.pageViewWidth, pagerData.pageViewWidth * 9f / 16f)
+                            // 必须给 Video 尺寸：只给外层容器尺寸时 Video 高度为 0，
+                            // VLC 渲染视图高度也是 0（黑屏）。这里跟随容器填满。
+                            flex(1f)
+                            width(pagerData.pageViewWidth)
                             src(ctx.playUrl ?: "")
                             resizeModeToContain()
                             // 关键：不设 playControl 时 VLC 只创建播放器不会起播，
                             // 也就不会向本地代理发起 Range 请求（表现为黑屏且代理无请求）
-                            playControl(VideoPlayControl.PLAY)
+                            playControl(if (ctx.isPlaying) VideoPlayControl.PLAY else VideoPlayControl.PAUSE)
+                            // seekTo 以属性下发；原生侧对相同值去重，不会每帧重复 seek
+                            seekTo(ctx.currentPosition)
                         }
                         event {
                             firstFrameDidDisplay { ctx.firstFrameShown = true }
@@ -166,39 +172,97 @@ internal class SftpPlayerPage : SftpBasePager() {
                 }
             }
 
-            // 控制条（Phase 0.3 简化）
+            // 控制条：进度 + 时间 + 播放/暂停 + 快退快进 + 选集
             View {
                 attr {
                     width(pagerData.pageViewWidth)
-                    padding(16f, 12f, 16f, 12f)
-                    flexDirectionRow()
-                    alignItemsCenter()
+                    padding(16f, 10f, 16f, 14f)
+                    flexDirectionColumn()
+                    backgroundColor(Color(0xFF101010))
                 }
-                // 上一集
+                // 进度条
                 View {
-                    attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_PREV_EPISODE) }
-                    event { click { ctx.playPrevEpisode() } }
-                    Text { attr { text("◀"); fontSize(16f); color(Color.WHITE) } }
+                    attr {
+                        width(pagerData.pageViewWidth - 32f)
+                        height(4f)
+                        borderRadius(2f)
+                        backgroundColor(Color(0xFF3A3A3A))
+                    }
+                    View {
+                        attr {
+                            width((pagerData.pageViewWidth - 32f) * ctx.progressRatio())
+                            height(4f)
+                            borderRadius(2f)
+                            backgroundColor(Color(0xFF3D7EFF))
+                        }
+                    }
                 }
-                // 选集列表
-                View {
-                    attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_EPISODE_LIST) }
-                    event { click { ctx.showEpisodeDrawer = !ctx.showEpisodeDrawer } }
-                    Text { attr { text("☰"); fontSize(16f); color(Color.WHITE) } }
-                }
-                // 下一集
-                View {
-                    attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_NEXT_EPISODE) }
-                    event { click { ctx.playNextEpisode() } }
-                    Text { attr { text("▶"); fontSize(16f); color(Color.WHITE) } }
-                }
+                // 时间
                 Text {
                     attr {
-                        text(ctx.name)
-                        fontSize(13f)
-                        color(Color.WHITE)
-                        flex(1f)
-                        marginLeft(8f)
+                        text(formatTime(ctx.currentPosition.toLong()) + " / " + formatTime(ctx.duration.toLong()))
+                        fontSize(12f)
+                        color(Color(0xFFBBBBBB))
+                        marginTop(6f)
+                    }
+                }
+                // 按钮行
+                View {
+                    attr { flexDirectionRow(); alignItemsCenter(); marginTop(8f) }
+                    // 快退 10s
+                    View {
+                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_SEEK_BACKWARD) }
+                        event { click { ctx.seekBy(-10_000) } }
+                        Text { attr { text("⏪"); fontSize(16f); color(Color.WHITE) } }
+                    }
+                    // 播放 / 暂停
+                    View {
+                        attr {
+                            size(44f, 44f); allCenter(); borderRadius(22f)
+                            backgroundColor(Color(0xFF2A2A2A))
+                            marginLeft(8f)
+                            accessibility(if (ctx.isPlaying) SftpAccessibility.BTN_PAUSE else SftpAccessibility.BTN_PLAY)
+                        }
+                        event { click { ctx.togglePlay() } }
+                        Text {
+                            attr {
+                                text(if (ctx.isPlaying) "⏸" else "▶")
+                                fontSize(18f)
+                                color(Color.WHITE)
+                            }
+                        }
+                    }
+                    // 快进 10s
+                    View {
+                        attr { size(40f, 40f); allCenter(); marginLeft(8f); accessibility(SftpAccessibility.BTN_SEEK_FORWARD) }
+                        event { click { ctx.seekBy(10_000) } }
+                        Text { attr { text("⏩"); fontSize(16f); color(Color.WHITE) } }
+                    }
+                    // 上一集 / 选集 / 下一集
+                    View {
+                        attr { size(40f, 40f); allCenter(); marginLeft(16f); accessibility(SftpAccessibility.BTN_PREV_EPISODE) }
+                        event { click { ctx.playPrevEpisode() } }
+                        Text { attr { text("◀"); fontSize(15f); color(Color.WHITE) } }
+                    }
+                    View {
+                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_EPISODE_LIST) }
+                        event { click { ctx.showEpisodeDrawer = !ctx.showEpisodeDrawer } }
+                        Text { attr { text("☰"); fontSize(15f); color(Color.WHITE) } }
+                    }
+                    View {
+                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_NEXT_EPISODE) }
+                        event { click { ctx.playNextEpisode() } }
+                        Text { attr { text("▶"); fontSize(15f); color(Color.WHITE) } }
+                    }
+                    // 文件名
+                    Text {
+                        attr {
+                            text(ctx.name)
+                            fontSize(12f)
+                            color(Color(0xFF999999))
+                            flex(1f)
+                            marginLeft(8f)
+                        }
                     }
                 }
             }
@@ -239,12 +303,32 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var showEpisodeDrawer: Boolean = false
 
     private fun onPlayStateChanged(state: PlayState) {
+        when (state) {
+            PlayState.PLAYING -> isPlaying = true
+            PlayState.PAUSED -> isPlaying = false
+            else -> {}
+        }
         if (state == PlayState.PLAY_END) {
             // §19.3.5 自动下一集：3s 倒计时
             sftpPlaybackHistoryModule().markCompleted(connectionId, remotePath) { _, _ -> }
             nextEpisodeCountdown = 3
             showCountdown = true
         }
+    }
+
+    /** 进度比例 0..1，供进度条使用（在 attr 内读取才会被依赖收集） */
+    private fun progressRatio(): Float {
+        if (duration <= 0) return 0f
+        return (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+    }
+
+    private fun togglePlay() {
+        isPlaying = !isPlaying   // 驱动 playControl(PLAY/PAUSE)
+    }
+
+    private fun seekBy(deltaMs: Int) {
+        if (duration <= 0) return
+        currentPosition = (currentPosition + deltaMs).coerceIn(0, duration)
     }
 
     private fun onPlayTimeChanged(cur: Int, total: Int) {

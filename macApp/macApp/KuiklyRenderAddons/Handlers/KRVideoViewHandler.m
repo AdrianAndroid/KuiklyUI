@@ -159,7 +159,12 @@
 }
 
 - (void)krv_callWithMethod:(NSString *)method params:(NSString *)params {
-    // 预留给业务扩展使用，目前 mac 端默认不处理
+    if ([method isEqualToString:@"seekToTime"]) {
+        // 参数为毫秒字符串
+        NSInteger ms = [params integerValue];
+        [self krv_seekToTime:(NSUInteger)ms];
+        return;
+    }
 }
 
 #pragma mark - VLCMediaPlayerDelegate

@@ -73,6 +73,15 @@ class VideoAttr : Attr() {
         SRC with src
     }
     /**
+     * 跳转到指定播放位置（毫秒）。
+     *
+     * 作为属性下发：值变化时才会真正 seek（原生侧对相同值去重），
+     * 因此可以安全地放在 `attr {}` 中跟随状态。
+     */
+    fun seekTo(positionMs: Int) {
+        SEEK_TO with positionMs
+    }
+    /**
      * 设置播放控制属性（播放、暂停、停止）。
      * @param playControl 播放控制枚举。
      */
@@ -125,6 +134,7 @@ class VideoAttr : Attr() {
         const val MUTED = "muted"
         const val RATE = "rate"
         const val RESIZE_MODE = "resizeMode"
+        const val SEEK_TO = "seekTo"
     }
 
 }

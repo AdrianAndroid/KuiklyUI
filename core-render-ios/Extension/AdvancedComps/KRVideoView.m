@@ -33,6 +33,8 @@ static VideoViewCreator gVideoViewCreator;
 @property (nonatomic, strong) id<KRVideoViewProtocol> videoView;
 /// 播放源属性
 @property (nonatomic, strong) NSString *css_src;
+/** 上次 seek 到的位置，用于对重复下发的属性去重 */
+@property (nonatomic, assign) NSInteger lastSeekMs;
 /// 播控操作属性
 @property (nonatomic, strong) NSNumber *css_playControl;
 /// 画面拉伸模式
@@ -90,6 +92,17 @@ static VideoViewCreator gVideoViewCreator;
     if (!_css_src && css_src.length) { // 因为播放器不复用，所以就一次绑定src即可
         _css_src = css_src;
         [self p_createVideoViewIfNeed];
+    }
+}
+
+- (void)setCss_seekTo:(NSNumber *)css_seekTo {
+    // 属性可能因其他状态变化而被重复下发，这里去重，避免每帧都 seek
+    if (_lastSeekMs == css_seekTo.intValue) {
+        return;
+    }
+    _lastSeekMs = css_seekTo.intValue;
+    if ([_videoView respondsToSelector:@selector(krv_seekToTime:)]) {
+        [_videoView krv_seekToTime:(NSUInteger)css_seekTo.intValue];
     }
 }
 
