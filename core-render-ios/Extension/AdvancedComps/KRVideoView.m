@@ -101,6 +101,27 @@ static VideoViewCreator gVideoViewCreator;
     }
 }
 
+/**
+ * 补发此前被暂存的 seek。
+ *
+ * 之前 `_p_pendingSeekMs` 只写不读：播放器处于 Buffering/ESAdded 时收到的 seek 会被
+ * 永久丢弃 —— UI 上进度条位置变了、播放器却没跳（表现为「进度条拖不动」），
+ * 之后也容易停在旧位置不再前进。播放器一旦可播/可 seek 就必须把它补发出去。
+ */
+- (void)p_flushPendingSeekIfNeeded {
+    if (_p_pendingSeekMs <= 0) {
+        return;
+    }
+    if (![self p_isPlayerPlayable]) {
+        return;
+    }
+    NSInteger target = _p_pendingSeekMs;
+    _p_pendingSeekMs = 0;
+    if ([_videoView respondsToSelector:@selector(krv_seekToTime:)]) {
+        [_videoView krv_seekToTime:(NSUInteger)target];
+    }
+}
+
 - (void)setCss_seekTo:(NSNumber *)css_seekTo {
     NSInteger targetMs = css_seekTo.integerValue;
     // 约定：负值表示「未请求 seek」，直接忽略（避免首帧前下发 seekTo(0) 打断起播）
@@ -224,6 +245,8 @@ static VideoViewCreator gVideoViewCreator;
 #pragma mark - KRVideoViewDelegate
 
 - (void)videoPlayStateDidChangedWithState:(KRVideoPlayState)playState extInfo:(NSDictionary<NSString *, NSString *> *)extInfo {
+    // 播放器进入可 seek 状态后，把暂存的 seek 补发（否则会被永久丢弃）
+    [self p_flushPendingSeekIfNeeded];
     if (_css_stateChange) {
         _css_stateChange(@{@"state" : @(playState), @"extInfo": extInfo ?: @{}});
     }
@@ -231,6 +254,7 @@ static VideoViewCreator gVideoViewCreator;
 }
 
 - (void)playTimeDidChangedWithCurrentTime:(NSUInteger)currentTime totalTime:(NSUInteger)totalTime {
+    [self p_flushPendingSeekIfNeeded];
     if (_css_playTimeChange) {
         _css_playTimeChange(@{@"currentTime" : @(currentTime), @"totalTime": @(totalTime)});
     }

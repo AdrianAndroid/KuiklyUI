@@ -249,6 +249,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                         height(24f)          // 触摸区比视觉高度大，便于拖拽
                         justifyContentCenter()
                         backgroundColor(Color(0x00000000))
+                        touchEnable(true)    // 显式开启触摸，保证 touchDown/Move/Up 能收到
                     }
                     // 轨道
                     View {
@@ -282,10 +283,18 @@ internal class SftpPlayerPage : SftpBasePager() {
                         }
                     }
                     event {
-                        touchDown { p -> ctx.beginDragProgress(p.x) }
-                        touchMove { p -> ctx.updateDragProgress(p.x) }
-                        touchUp { _ -> ctx.endDragProgress() }
-                        touchCancel { _ -> ctx.endDragProgress() }
+                        // Kuikly 的拖拽手势是 `pan`（不是 touchDown/Move/Up：
+                        // 实测 macOS 上 touch* 不回调，pan 才带 start/move/end）
+                        pan { p ->
+                            when (p.state) {
+                                "start" -> ctx.beginDragProgress(p.x)
+                                "move" -> ctx.updateDragProgress(p.x)
+                                "end" -> {
+                                    ctx.updateDragProgress(p.x)
+                                    ctx.endDragProgress()
+                                }
+                            }
+                        }
                     }
                 }
                 // 时间

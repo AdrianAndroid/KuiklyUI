@@ -212,7 +212,7 @@
 
 | 端 | SSH/SFTP 协议栈 | 本地 HTTP 代理 | 状态 |
 |----|----------------|----------------|------|
-| **iOS / macOS** | NMSSH(libssh2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：74/74 集成自测（含字节级校验）+ 界面操控验证 |
+| **iOS / macOS** | NMSSH(libssh2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：74/74 集成自测（含字节级校验）+ 界面操控验证（含流式播放/拖动 seek/暂停恢复） |
 | Android | 未接（待 JSch） | 无 | **未实现** |
 | HarmonyOS | 桩 `core-render-ohos/src/main/cpp/.../sftp/`（已有骨架，待接 libssh2） | 桩 | **未实现**（所有方法抛 `not implemented`） |
 | Web / 小程序 | 浏览器无 TCP/SSH | 不启本地代理 | **需后端网关**（§5.6） |
@@ -266,6 +266,18 @@
 8. **macOS 窗口内容区从标题栏下方开始**（约 28pt）。用屏幕坐标做 UI 自动化时，Kuikly 的 y=0 对应窗口 y≈28。
 9. **macOS 文本输入**：`UITextField.tintColor`（光标色）与 `secureTextEntry`（密码掩码）在 `KRUIKit.m` 里都需要显式实现，
    系统 `NSTextField` 无这两个属性；掩码不能用 `NSSecureTextFieldCell` 替换（会导致 `controlTextDidChange` 不再回调）。
+10. **拖拽手势是 `event { pan { } }`，不是 `touchDown/touchMove/touchUp`**。
+    实测 macOS 上 `touch*` 对普通 View 不回调；`pan` 的 `PanGestureParams` 带 `state`(start/move/end) 与 `x/y`。
+    进度条拖动用 `pan` 实现（`displayRatio` 拖动中显示预览、松手才真正 seek，避免拖一次发几十次 seek）。
+11. **`VideoView` 的属性必须显式给尺寸**，且 `playControl` 必须跟随真实状态：
+    - 只给外层容器尺寸时 `Video` 高度为 0，VLC 的渲染视图也是 0（`hasVideo=0`）→ 解码在跑、黑屏。
+    - 不设 `playControl(PLAY)` 时 VLC 只创建播放器不会起播 → 本地代理收不到任何请求。
+12. **`seekTo` 不要绑播放进度**：把 `currentPosition` 同时绑到 `attr { seekTo(...) }` 会导致每秒一次真实 seek
+    （VLC 每次 seek 都 flush+重缓冲）→ 播放卡顿。用独立 `seekTarget`（-1 表示未请求），只在显式跳转时下发。
+13. **`KRVideoView` 的 `_p_pendingSeekMs` 必须真正补发**：播放器处于 Buffering/ESAdded 时收到的 seek 会被暂存，
+    若没有在进入可播状态后补发就会被永久丢弃（症状：进度条拖了位置变了但播放器没跳、暂停后恢复停在旧位置/直接 Ended）。
+14. **本地代理的 Range 响应要带 `Content-Length` 的流式 206**：缺 `Content-Length` 时播放器会把该输入判为不可 seek
+    （拖进度条后不请求新位置的数据）。同时不要为了「低内存」把单次 Range 硬截成很小分片，否则播放器反复重发同一 Range。
 
 ### 13.5 macOS 端实操：构建 / 运行 / 调试 / 自动化
 

@@ -160,8 +160,16 @@
     if (!self.mediaPlayer) {
         return;
     }
+    // 暂停态直接设置 time，VLC 不会去取新位置的数据，恢复播放时容易直接报 Ended
+    // （表现为「拖了进度条/暂停后再播就停住」）。先让播放器回到播放态，
+    // 使其 demuxer 处于活跃状态再跳转。
+    BOOL wasPaused = (self.mediaPlayer.state == VLCMediaPlayerStatePaused);
+    if (wasPaused) {
+        [self.mediaPlayer play];
+    }
     VLCTime *time = [VLCTime timeWithInt:(int)seekTotime];
     self.mediaPlayer.time = time;
+    KR_DIAG_INFO(@"video", @"seek %lu ms (wasPaused=%d)", (unsigned long)seekTotime, wasPaused ? 1 : 0);
 }
 
 - (void)krv_setPropWithKey:(NSString *)propKey propValue:(id)propValue {

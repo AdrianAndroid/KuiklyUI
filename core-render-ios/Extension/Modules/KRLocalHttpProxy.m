@@ -238,15 +238,37 @@ forAdditionalHeader:@"Content-Range"];
     if (range.location != NSNotFound) {
         long long start = (long long)range.location;
         long long end = start + (long long)range.length - 1;
-        if (end - start + 1 > kMaxRangeBytes) {
-            end = start + kMaxRangeBytes - 1;   // 分片返回；Content-Range 反映真实区间
-        }
-        NSData *data = [KRSftpFileHandle read:fh offset:start length:(int)(end - start + 1)];
-        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp.proxy] served %lu bytes for %lld-%lld/%lld",
-                              (unsigned long)data.length, start, end, total]];
-        GCDWebServerDataResponse *resp = [[GCDWebServerDataResponse alloc] initWithData:data
-                                                                          contentType:contentType];
+        long long span = end - start + 1;
+
+        // 带 Content-Length 的流式 206：首字节不必等整个区间读完，同时又向播放器
+        // 声明完整区间长度。缺 Content-Length 时播放器会把该输入判为不可 seek
+        // （症状：拖动进度条后不请求新位置的数据、暂停后恢复直接 Ended）。
+        __block long long offset = start;
+        __block long long remaining = span;
+        __block NSInteger chunkCount = 0;
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp.proxy] stream %lld-%lld/%lld",
+                              start, end, total]];
+        GCDWebServerStreamedResponse *resp =
+            [GCDWebServerStreamedResponse responseWithContentType:contentType
+                                                asyncStreamBlock:^(GCDWebServerBodyReaderCompletionBlock completionBlock) {
+                if (remaining <= 0) {
+                    completionBlock([NSData data], nil);
+                    return;
+                }
+                NSInteger want = (NSInteger)MIN(remaining, (long long)kStreamChunkBytes);
+                NSData *chunk = [KRSftpFileHandle read:fh offset:offset length:(int)want];
+                if (chunk.length == 0) {
+                    completionBlock([NSData data], nil);
+                    return;
+                }
+                offset += chunk.length;
+                remaining -= chunk.length;
+                chunkCount++;
+                (void)chunkCount;
+                completionBlock(chunk, nil);
+            }];
         resp.statusCode = 206;
+        resp.contentLength = (NSUInteger)span;
         [resp setValue:@"bytes" forAdditionalHeader:@"Accept-Ranges"];
         [resp setValue:[NSString stringWithFormat:@"bytes %lld-%lld/%lld", start, end, total]
 forAdditionalHeader:@"Content-Range"];
@@ -308,6 +330,7 @@ forAdditionalHeader:@"Content-Range"];
         end = endStr.length > 0 ? endStr.longLongValue : (total > 0 ? total - 1 : 0);
     }
     if (total > 0 && end >= total) end = total - 1;
+    if (total > 0 && start >= total) start = total - 1;   // 宽松：起点越界时退到最后一个字节
     if (start < 0 || end < start) return NSMakeRange(NSNotFound, 0);
     return NSMakeRange((NSUInteger)start, (NSUInteger)(end - start + 1));
 }
@@ -321,7 +344,11 @@ forAdditionalHeader:@"Content-Range"];
     NSRange dash = [spec rangeOfString:@"-"];
     if (dash.location == NSNotFound) return NO;
     long long start = [[spec substringToIndex:dash.location] longLongValue];
-    return start >= total;
+    // 注意：只把「起点 > 末尾」当不可满足。
+    // 起点 == 文件长度（如 VLC 的 bytes=<size>- 探测）按「最后一个字节」处理：
+    // 非 faststart 的 MP4 需要读文件尾部的 moov，严格回 416 会让播放器拿不到尾部数据、
+    // 无法建立 seek 索引，表现就是拖动/跳转后直接到 Ended、暂停后无法恢复。
+    return start > total;
 }
 
 + (NSString *)mimeForPath:(NSString *)path {
