@@ -54,6 +54,57 @@
     [[self.hr_rootView.rij_viewController navigationController] pushViewController:renderViewController animated:YES];
 }
 
+// 轻量非模态提示（与 macOS 端行为对齐）：
+// SFTP 页面保存成功后会调用 toast，iOS 侧此前没有该实现，
+// 会命中 KRBaseModule 里「module方法不存在」的 NSAssert → DEBUG 直接崩溃。
+- (void)toast:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] rij_stringToDictionary];
+    NSString *content = params[@"content"];
+    if (content.length == 0) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *window = [self p_keyWindow];
+        if (!window) {
+            return;
+        }
+        UILabel *label = [[UILabel alloc] init];
+        label.text = content;
+        label.font = [UIFont systemFontOfSize:14];
+        label.textColor = UIColor.whiteColor;
+        label.textAlignment = NSTextAlignmentCenter;
+        label.numberOfLines = 0;
+        [label sizeToFit];
+
+        CGFloat padX = 20, padY = 12;
+        label.frame = CGRectMake(padX, padY, label.frame.size.width, label.frame.size.height);
+        UIView *hud = [[UIView alloc] initWithFrame:CGRectMake(0, 0,
+                                                              label.frame.size.width + padX * 2,
+                                                              label.frame.size.height + padY * 2)];
+        hud.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.82];
+        hud.layer.cornerRadius = 8.0;
+        [hud addSubview:label];
+        hud.center = CGPointMake(window.bounds.size.width / 2.0, window.bounds.size.height / 2.0);
+        hud.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
+                               UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+        [window addSubview:hud];
+
+        hud.alpha = 0.0;
+        [UIView animateWithDuration:0.15 animations:^{ hud.alpha = 1.0; }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [UIView animateWithDuration:0.25 animations:^{ hud.alpha = 0.0; }
+                            completion:^(BOOL finished) { [hud removeFromSuperview]; }];
+        });
+    });
+}
+
+- (nullable UIWindow *)p_keyWindow {
+    for (UIWindow *w in UIApplication.sharedApplication.windows) {
+        if (w.isKeyWindow) return w;
+    }
+    return UIApplication.sharedApplication.windows.firstObject;
+}
+
 - (void)copyToPasteboard:(NSDictionary *)args {
     NSDictionary *params = [args[KR_PARAM_KEY] rij_stringToDictionary];
     NSString *content = params[@"content"];

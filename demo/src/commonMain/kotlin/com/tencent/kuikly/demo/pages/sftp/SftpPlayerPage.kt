@@ -173,6 +173,8 @@ internal class SftpPlayerPage : SftpBasePager() {
                         color(Color.WHITE)
                         flex(1f)
                         marginLeft(8f)
+                        lines(1)                 // 单行，避免逐字换行
+                        textOverFlowTail()       // 超出用省略号
                     }
                 }
             }
@@ -374,6 +376,8 @@ internal class SftpPlayerPage : SftpBasePager() {
                             color(Color(0xFF999999))
                             flex(1f)
                             marginLeft(8f)
+                            lines(1)
+                            textOverFlowTail()
                         }
                     }
                 }

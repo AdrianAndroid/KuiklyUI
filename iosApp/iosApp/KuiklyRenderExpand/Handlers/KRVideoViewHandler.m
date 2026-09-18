@@ -16,7 +16,12 @@
 #import "KRVideoViewHandler.h"
 
 @interface KRVideoViewHandler()<WMPlayerDelegate>
-
+/** 进度轮询定时器：WMPlayer 没有周期回调，只能轮询 currentTime/duration */
+@property (nonatomic, strong) NSTimer *krv_progressTimer;
+/** 首帧是否已上报（用于隐藏加载态） */
+@property (nonatomic, assign) BOOL krv_firstFrameReported;
+/** 是否处于播放态（WMPlayer 未暴露可靠的 isPlaying，自己记录） */
+@property (nonatomic, assign) BOOL krv_isPlaying;
 @end
 
 @implementation KRVideoViewHandler
@@ -36,7 +41,10 @@
 @synthesize krv_delegate;
 
 - (void)krv_play {
+    self.krv_isPlaying = YES;
     [self play];
+    [self.krv_delegate videoPlayStateDidChangedWithState:KRVideoPlayStatePlaying extInfo:@{}];
+    [self krv_startProgressTimer];
 }
 
 - (void)krv_preplay {
@@ -44,10 +52,14 @@
 }
 
 - (void)krv_pause {
+    self.krv_isPlaying = NO;
     [self pause];
+    [self.krv_delegate videoPlayStateDidChangedWithState:KRVideoPlayStatePaused extInfo:@{}];
 }
 
 - (void)krv_stop {
+    self.krv_isPlaying = NO;
+    [self krv_stopProgressTimer];
     [self resetWMPlayer];
 }
 
@@ -86,6 +98,47 @@
 }
 
 
+#pragma mark - 进度轮询（WMPlayer 无周期回调）
+
+- (void)krv_startProgressTimer {
+    if (self.krv_progressTimer) {
+        return;
+    }
+    self.krv_progressTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+                                                             target:self
+                                                           selector:@selector(krv_onProgressTick)
+                                                           userInfo:nil
+                                                            repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.krv_progressTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)krv_stopProgressTimer {
+    [self.krv_progressTimer invalidate];
+    self.krv_progressTimer = nil;
+}
+
+- (void)krv_onProgressTick {
+    if (!self.krv_isPlaying) {
+        return;
+    }
+    // WMPlayer 的 currentTime/duration 单位为秒，协议要求毫秒
+    NSTimeInterval cur = [self currentTime];
+    NSTimeInterval total = [self duration];
+    NSUInteger curMs = (NSUInteger)(MAX(0.0, cur) * 1000.0);
+    NSUInteger totalMs = (NSUInteger)(MAX(0.0, total) * 1000.0);
+
+    // 有进度即说明画面已在解码，上报首帧，供 kotlin 侧隐藏「加载中」
+    if (!self.krv_firstFrameReported && curMs > 0) {
+        self.krv_firstFrameReported = YES;
+        [self.krv_delegate videoFirstFrameDidDisplay];
+    }
+    [self.krv_delegate playTimeDidChangedWithCurrentTime:curMs totalTime:totalMs];
+}
+
+- (void)dealloc {
+    [self krv_stopProgressTimer];
+}
+
 #pragma mark - WMPlayerDelegate
 
 //准备播放的代理方法
@@ -104,12 +157,13 @@
 
 //播放完毕的代理方法
 -(void)wmplayerFinishedPlay:(WMPlayer *)wmplayer {
+    [self krv_stopProgressTimer];
     [self.krv_delegate videoPlayStateDidChangedWithState:(KRVideoPlayStatePlayEnd) extInfo:@{}];
 }
 
-+(BOOL)IsiPhoneX {
-    return CGRectGetHeight([UIApplication sharedApplication].statusBarFrame) > 30;
-}
-
+// 说明：这里曾用 +IsiPhoneX 覆盖来规避 WMPlayer 崩溃，但 WMPlayer 内部是
+// `[WMPlayer IsiPhoneX]` 的类级调用，不会走子类覆盖，因此无效。
+// 真正的修复是在 iOSApp.swift 里通过 UIApplicationDelegateAdaptor 提供带 window 属性的
+// AppDelegate，使 `UIApplication.sharedApplication.delegate.window` 可安全访问。
 
 @end

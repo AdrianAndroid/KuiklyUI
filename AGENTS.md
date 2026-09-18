@@ -330,6 +330,23 @@ iOS 侧的坑（都已修）：
   `Failure establishing SSH session` → `connect` 返回 1001，后续全部 `invalid sessionId`）。
 - iOS 首页 `ContentView.swift` 原本 `.ignoresSafeArea()` 会让页面自绘导航栏压到状态栏/灵动岛下
   （与 macOS 同类问题）；指向 SFTP 页时去掉该修饰符。
+- **iOS 侧 `KRBridgeModule` 缺 `toast:`**：SFTP 保存成功后页面会调 `toast`，iOS 没有该实现 →
+  命中 `KRBaseModule` 里「module方法不存在」的 `NSAssert`，DEBUG 下**直接崩溃**（保存即崩）。
+  已在 `iosApp/.../KuiklyRenderExpand/Modules/KRBridgeModule.m` 补 `toast:`（轻量非模态 HUD）。
+  排查手法：崩溃栈里出现 `-[KRBaseModule hrv_callWithMethod:]` + `_userInfoForFileAndLine`
+  就是这条路径；日志里同帧会打印 `[module] xxx.yyy (NO HANDLER)`。
+- **打开视频崩溃（WMPlayer 5.0 与新系统不兼容）**：`+[WMPlayer IsiPhoneX]` 里访问
+  `UIApplication.sharedApplication.delegate.window`，而 `UIApplicationDelegate.window` 是 optional 属性；
+  **SwiftUI 生命周期**下系统 delegate 不实现 `window` → `doesNotRecognizeSelector:` → 崩溃
+  （栈：`-[WMPlayer addUIControlConstraints]` ← `initPlayerModel:` ← `KRVideoViewHandler.load`）。
+  修法：在 `iOSApp.swift` 用 `@UIApplicationDelegateAdaptor` 提供**带 `window` 属性**的 delegate
+  （不改第三方库，可持久）。注意在子类里覆盖 `+IsiPhoneX` **无效** —— WMPlayer 内部是
+  `[WMPlayer IsiPhoneX]` 类级调用，不走子类覆盖。
+- **iOS 播放器（WMPlayer）的事件回传需要自己补**：它只回调 Ready/Failed/Finished，
+  没有周期性进度。用 `NSTimer` 轮询 `currentTime`/`duration`（**单位是秒，协议要毫秒**）
+  补发 `playTimeDidChangedWithCurrentTime:totalTime:`，并在 `currentTime > 0` 首次上报
+  `videoFirstFrameDidDisplay`（否则页面「加载中」永不消失、时间恒 `00:00/00:00`）；
+  播放态自己用标志位记录（WMPlayer 未暴露可靠的 `isPlaying`）。
 - iOS 端播放器是 **WMPlayer**（macOS 是 VLCKit），§13.4 里关于 VLC 的 seek/暂停条目在 iOS 上需另行验证。
 
 **诊断日志**（JSONL，AI 排查首选）：
