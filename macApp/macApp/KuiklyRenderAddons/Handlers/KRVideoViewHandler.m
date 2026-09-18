@@ -24,6 +24,10 @@
 @property (nonatomic, strong) VLCMediaPlayer *mediaPlayer;
 @property (nonatomic, copy) NSString *krv_source;
 @property (nonatomic, strong) VLCVideoView *vlcVideoView;
+/** 用户意图：YES=想要播放（由 krv_play/krv_pause 维护）。
+ *  seek 时为了让 VLC 的 demuxer 处于活跃态会临时起播，随后必须按这个意图恢复，
+ *  否则暂停中拖动/快进快退会变成「在播放」，按钮状态也会错。 */
+@property (nonatomic, assign) BOOL krv_userWantsPlay;
 @property (nonatomic, assign) BOOL krv_hasFirstFrameDisplayed;
 
 @end
@@ -106,10 +110,12 @@
 
 - (void)krv_play {
     [self p_setupMediaPlayerIfNeeded];
+    self.krv_userWantsPlay = YES;
     [self.mediaPlayer play];
 }
 
 - (void)krv_pause {
+    self.krv_userWantsPlay = NO;
     [self.mediaPlayer pause];
 }
 
@@ -163,13 +169,25 @@
     // 暂停态直接设置 time，VLC 不会去取新位置的数据，恢复播放时容易直接报 Ended
     // （表现为「拖了进度条/暂停后再播就停住」）。先让播放器回到播放态，
     // 使其 demuxer 处于活跃状态再跳转。
-    BOOL wasPaused = (self.mediaPlayer.state == VLCMediaPlayerStatePaused);
-    if (wasPaused) {
+    BOOL needRestorePause = !self.krv_userWantsPlay;
+    if (needRestorePause) {
+        // 临时起播，让 VLC 有活跃 demuxer 去取新位置的数据
         [self.mediaPlayer play];
     }
     VLCTime *time = [VLCTime timeWithInt:(int)seekTotime];
     self.mediaPlayer.time = time;
-    KR_DIAG_INFO(@"video", @"seek %lu ms (wasPaused=%d)", (unsigned long)seekTotime, wasPaused ? 1 : 0);
+    KR_DIAG_INFO(@"video", @"seek %lu ms (restorePause=%d)", (unsigned long)seekTotime, needRestorePause ? 1 : 0);
+
+    if (needRestorePause) {
+        // 等 seek 生效后再回到暂停；期间若用户按了播放则以用户意图为准
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (!self.krv_userWantsPlay && self.mediaPlayer) {
+                [self.mediaPlayer pause];
+                KR_DIAG_INFO(@"video", @"restored pause after seek");
+            }
+        });
+    }
 }
 
 - (void)krv_setPropWithKey:(NSString *)propKey propValue:(id)propValue {

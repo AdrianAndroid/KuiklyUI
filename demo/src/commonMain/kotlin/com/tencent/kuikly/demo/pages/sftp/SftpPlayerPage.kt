@@ -416,10 +416,12 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var showEpisodeDrawer: Boolean by observable(false)
 
     private fun onPlayStateChanged(state: PlayState) {
-        when (state) {
-            PlayState.PLAYING -> isPlaying = true
-            PlayState.PAUSED -> isPlaying = false
-            else -> {}
+        // 注意：isPlaying 表示「用户意图」，只由播放键切换，不能跟随播放器状态自动改写。
+        // 否则 seek 时为了保持 demuxer 活跃会短暂起播，状态回调把 isPlaying 改成 true，
+        // 暂停中拖动/快进快退后按钮就会显示成「暂停」。
+        // 仅当真的播完（或出错）时才复位意图。
+        if (state == PlayState.PLAY_END || state == PlayState.ERROR) {
+            isPlaying = false
         }
         if (state == PlayState.PLAY_END) {
             // §19.3.5 自动下一集：3s 倒计时（此前只赋值不递减，弹层永远停在 3s）
