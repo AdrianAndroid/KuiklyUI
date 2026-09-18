@@ -13,6 +13,11 @@
  * limitations under the License.
  */
 #include "KRSftpSession.h"
+#include <stdexcept>
+
+// 未实现能力的统一失败方式（不再伪报成功）
+#define KR_SFTP_NOT_IMPL(name) \
+    throw SftpNotImplementedException(name)
 #include "libohos_render/utils/KRJSONObject.h"
 
 namespace kuikly {
@@ -23,29 +28,8 @@ std::unordered_map<std::string, void *> KRSftpSession::gSessions;
 long long KRSftpSession::gSessionIdCounter = 0;
 
 std::string KRSftpSession::Connect(const KRAnyValue &params) {
-    auto p = KRJSONObject::FromAnyValue(params);
-    std::string host = p->GetString("host");
-    int port = p->GetInt("port", 22);
-    std::string user = p->GetString("user");
-    std::string password = p->GetString("password");
-    std::string privateKey = p->GetString("privateKey");
-    int connectTimeoutMs = p->GetInt("connectTimeoutMs", 15000);
-
-    // Phase 1.2: 用 libssh2 建立 SSH 连接
-    // LIBSSH2_SESSION *session = libssh2_session_init();
-    // libssh2_session_set_timeout(session, connectTimeoutMs);
-    // libssh2_session_handshake(session, sock);
-    // if (privateKey.empty()) {
-    //     libssh2_userauth_password(session, user.c_str(), password.c_str());
-    // } else {
-    //     libssh2_userauth_publickey_fromfile(session, user.c_str(), NULL, privateKey.c_str(), passphrase.c_str());
-    // }
-    // LIBSSH2_SFTP *sftp = libssh2_sftp_init(session);
-
-    std::lock_guard<std::mutex> lock(gLock);
-    auto sessionId = "sftp-" + std::to_string(++gSessionIdCounter);
-    // gSessions[sessionId] = sftp;  // Phase 1.2
-    return sessionId;
+    // 旧实现直接返回 "sftp-1" 假 sessionId，调用方会以为连接成功。
+    KR_SFTP_NOT_IMPL("KRSftpSession::Connect");
 }
 
 void KRSftpSession::Disconnect(const std::string &sessionId) {
@@ -58,28 +42,26 @@ void KRSftpSession::Disconnect(const std::string &sessionId) {
 }
 
 std::vector<KRRenderValueMap> KRSftpSession::List(const std::string &sessionId, const std::string &remotePath) {
-    // Phase 1.2: libssh2_sftp_opendir + readdir
-    return {};
+    KR_SFTP_NOT_IMPL("KRSftpSession::List");
 }
 
 KRRenderValueMap KRSftpSession::Stat(const std::string &sessionId, const std::string &remotePath, bool followSymlink) {
-    // Phase 1.2: libssh2_sftp_stat / libssh2_sftp_lstat
-    return {};
+    KR_SFTP_NOT_IMPL("KRSftpSession::Stat");
 }
 
-float KRSftpSession::Download(const KRAnyValue &params) { return 1.0f; }
-float KRSftpSession::Upload(const KRAnyValue &params) { return 1.0f; }
-void KRSftpSession::Mkdir(const KRAnyValue &params) { /* Phase 1.2: libssh2_sftp_mkdir */ }
-void KRSftpSession::Rm(const KRAnyValue &params) { /* Phase 1.2: libssh2_sftp_unlink / rmdir */ }
-void KRSftpSession::Rename(const KRAnyValue &params) { /* Phase 1.2: libssh2_sftp_rename */ }
+float KRSftpSession::Download(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Download"); }
+float KRSftpSession::Upload(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Upload"); }
+void KRSftpSession::Mkdir(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Mkdir"); }
+void KRSftpSession::Rm(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Rm"); }
+void KRSftpSession::Rename(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Rename"); }
 void KRSftpSession::Move(const KRAnyValue &params) { Rename(params); }
 KRRenderValueMap KRSftpSession::Copy(const KRAnyValue &params) {
-    return {{"success", KRRenderValue::Make(true)}, {"copiedCount", KRRenderValue::Make(1)}, {"failedCount", KRRenderValue::Make(0)}};
+    KR_SFTP_NOT_IMPL("KRSftpSession::Copy");
 }
-void KRSftpSession::Chmod(const KRAnyValue &params) { /* Phase 1.2: libssh2_sftp_setstat */ }
-void KRSftpSession::Chown(const KRAnyValue &params) { /* Phase 1.2 */ }
-void KRSftpSession::SetMtime(const KRAnyValue &params) { /* Phase 1.2 */ }
-float KRSftpSession::BatchTask(const KRAnyValue &params) { return 1.0f; }
+void KRSftpSession::Chmod(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Chmod"); }
+void KRSftpSession::Chown(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::Chown"); }
+void KRSftpSession::SetMtime(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::SetMtime"); }
+float KRSftpSession::BatchTask(const KRAnyValue &params) { KR_SFTP_NOT_IMPL("KRSftpSession::BatchTask"); }
 void KRSftpSession::CancelBatchTask(const std::string &taskId) { /* Phase 1.2 */ }
 
 void KRSftpSession::ShutdownAll() {

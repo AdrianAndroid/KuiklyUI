@@ -19,9 +19,10 @@ import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.EncodingDetector
 import com.tencent.kuikly.core.module.sftp.I18n
-import com.tencent.kuikly.core.module.sftp.LocalMediaProxyApi
-import com.tencent.kuikly.core.module.sftp.MimeExtMap
+import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
+import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.module.sftp.SftpModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.views.Text
@@ -40,7 +41,7 @@ import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
  * 输入：路由参数 `sessionId / remotePath / name / size / connectionId / connectionLabel`。
  * 根据 [MimeExtMap.mimeOfPath] 决定打开哪种预览：
  * - text/markdown/html/image/pdf → 对应预览页
- * - audio/video → 调 [LocalMediaProxyApi] 拿 URL 后渲染
+ * - audio/video → 页面异步申请本地代理 token 后把 URL 传给渲染组件
  * - 其他 → 提示「不支持预览」
  *
  * 预览采用「先 openRead 拉头部 ~8KB → 判断编码 / MIME → 选 viewer」的策略（§4.1）。
@@ -55,8 +56,10 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private var connectionId: String = ""
     private var connectionLabel: String = ""
 
-    private var loading: Boolean = true
-    private var errorMsg: String? = null
+    private var loading: Boolean by observable(true)
+    private var errorMsg: String? by observable(null)
+    /** 本地代理播放地址；图片/音频预览靠它渲染（由本页异步申请，组件只读） */
+    private var mediaUrl: String? by observable(null)
     private var mime: String = ""
     private var encoding: String = "UTF-8"
     private var detectedHead: ByteArray? = null
@@ -65,6 +68,14 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     enum class ViewerKind {
         TEXT, MARKDOWN, HTML, IMAGE, PDF, AUDIO, VIDEO, UNSUPPORTED
     }
+
+    override fun pageWillDestroy() {
+        super.pageWillDestroy()
+        // 释放代理 token（若有申请过）
+        mediaToken?.let { tk -> sftpMediaProxyModule().unregisterToken(tk) }
+    }
+
+    private var mediaToken: String? = null
 
     override fun created() {
         super.created()
@@ -89,6 +100,11 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         } else {
             loading = false
         }
+
+        // 3. 图片/音频需要本地代理地址：副作用在页面层异步完成
+        if (viewer == ViewerKind.IMAGE || viewer == ViewerKind.AUDIO) {
+            resolveMediaUrl()
+        }
     }
 
     private fun decideViewer(mime: String): ViewerKind {
@@ -101,6 +117,30 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
             MimeExtMap.isVideo(mime) -> ViewerKind.VIDEO
             MimeExtMap.isText(mime) -> ViewerKind.TEXT
             else -> ViewerKind.UNSUPPORTED
+        }
+    }
+
+    /**
+     * 申请本地代理端口 + token，拼出播放地址。
+     * 副作用放在页面层（Pager）而不是渲染组件里：组件在 body() 中同步调代理拿不到
+     * 真实 token（旧实现就是坏的），而且违反分层。
+     */
+    private fun resolveMediaUrl() {
+        val proxy = sftpMediaProxyModule()
+        val sid = sessionId.ifEmpty { connectionId }
+        proxy.startOrGetPort { port ->
+            if (port <= 0) {
+                errorMsg = I18n.t("sftp.error.proxy_start_failed")
+                return@startOrGetPort
+            }
+            proxy.registerToken(sid, remotePath, size) { tk ->
+                if (tk.isEmpty()) {
+                    errorMsg = I18n.t("sftp.error.proxy_read_failed")
+                } else {
+                    mediaToken = tk
+                    mediaUrl = SftpMediaUrlBuilder.buildPlayUrl(port, tk, name)
+                }
+            }
         }
     }
 
@@ -174,9 +214,15 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                             ViewerKind.TEXT -> SftpTextViewer(ctx.sessionId, ctx.remotePath, ctx.size, ctx.encoding, ctx.detectedHead)
                             ViewerKind.MARKDOWN -> SftpMarkdownViewer(ctx.sessionId, ctx.remotePath, ctx.size, ctx.encoding)
                             ViewerKind.HTML -> SftpHtmlViewer(ctx.sessionId, ctx.remotePath, ctx.size)
-                            ViewerKind.IMAGE -> SftpImageViewer(ctx.sessionId, ctx.remotePath, ctx.connectionId)
+                            ViewerKind.IMAGE -> SftpImageViewer(
+                                mediaUrlProvider = { ctx.mediaUrl },
+                                fileNameProvider = { ctx.name }
+                            )
                             ViewerKind.PDF -> SftpPdfViewer(ctx.connectionId, ctx.remotePath, ctx.name, ctx.size)
-                            ViewerKind.AUDIO -> SftpAudioViewer(ctx.sessionId, ctx.connectionId, ctx.remotePath, ctx.name, ctx.size)
+                            ViewerKind.AUDIO -> SftpAudioViewer(
+                                mediaUrlProvider = { ctx.mediaUrl },
+                                fileNameProvider = { ctx.name }
+                            )
                             ViewerKind.VIDEO -> {
                                 // 跳到 SftpPlayerPage（Phase 0.3 已实现）
                                 ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()

@@ -16,7 +16,6 @@ package com.tencent.kuikly.demo.pages.sftp.viewer
 
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.sftp.I18n
-import com.tencent.kuikly.core.module.sftp.LocalMediaProxyApi
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.views.Image
 import com.tencent.kuikly.core.views.Text
@@ -26,30 +25,34 @@ import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
 /**
  * 图片预览（§4.5）
  *
- * - 通过 [LocalMediaProxyApi] 拿本地代理 URL → [Image] 加载
+ * - 本地代理 URL 由页面异步申请后传入（组件只渲染）
  * - 支持 jpg / png / gif / webp / bmp / svg
  * - SVG 走特殊路径：Phase 1 接入 `SvgView` 跨端组件
  * - 支持双指缩放手势（Phase 1）
  */
 internal fun ViewContainer<*, *>.SftpImageViewer(
-    sessionId: String,
-    remotePath: String,
-    connectionId: String
+    mediaUrlProvider: () -> String?,
+    fileNameProvider: () -> String
 ) {
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg); allCenter() }
-        // 注册代理 token，加载图片
-        val proxy = LocalMediaProxyApi.getInstance()
-        val port = proxy.startOrGetPort()
-        val sftpSessionId = sessionId.ifEmpty { connectionId }  // 降级：旧链路可能未传 sessionId
-        val token = proxy.registerToken(sftpSessionId, remotePath, 0L)
-        val url = SftpMediaUrlBuilder.buildPlayUrl(port, token, remotePath.substringAfterLast('/'))
-
-        Image {
-            attr {
-                src(url)
-                // 缩放模式：等比例适应
-                // Phase 1：接入 resizeMode + 双指缩放手势
+        // 只负责渲染：代理端口/token 的申请由页面（Pager）异步完成后传入。
+        // 组件内同步调代理是错误分层，且拿不到真实 token（预览会一直是坏的）。
+        val url = mediaUrlProvider()
+        if (url.isNullOrEmpty()) {
+            Text {
+                attr {
+                    text(I18n.t("sftp.ui.loading"))
+                    fontSize(14f)
+                    color(SftpColorTokens.textSecondary)
+                }
+            }
+        } else {
+            Image {
+                attr {
+                    src(url)
+                    // Phase 1：接入 resizeMode + 双指缩放手势
+                }
             }
         }
         // 文件名标注
@@ -57,7 +60,7 @@ internal fun ViewContainer<*, *>.SftpImageViewer(
             attr { marginTop(16f); allCenter() }
             Text {
                 attr {
-                    text(remotePath.substringAfterLast('/'))
+                    text(fileNameProvider())
                     fontSize(12f)
                     color(SftpColorTokens.textSecondary)
                 }

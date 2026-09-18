@@ -9,6 +9,9 @@
 
 ## 1. 背景与目标
 
+> 想快速了解「一份代码怎么跨六端」与「各端真实可用性」，直接看 **§23 跨平台架构**。
+
+
 ### 1.1 需求
 
 - 在 KuiklyUI 之上开发一个 **SFTP 客户端**，业务代码（UI、状态、连接管理）**一份代码跨平台运行**。
@@ -3626,3 +3629,105 @@ jobs:
 | CI | 4 个 job 全绿 |
 
 **最终验收**：V0~V7 全部通过 + CI 4 job 全绿 = 方案验证完成，可发布。
+
+---
+
+## 23. 跨平台架构（实现现状与设计原则）
+
+> 本节回答两个问题：**一份代码怎么在六端跑起来**、**新增能力时该写在哪一层**。
+> 同时记录 2025-09 的真实实现状态（哪些端可用、哪些端是桩），避免"看着有文件其实不能用"。
+
+### 23.1 分层：共享什么、各端写什么
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ ① 业务与 UI 层（100% 共享，commonMain）                            │
+│    · 页面：Pager/Viewer/Player/Props/Favorites/History             │
+│    · 组件：SftpEntriesView / SftpTabBar / SftpFormRow ...          │
+│    · 纯函数：MimeExtMap / SftpMediaUrlBuilder(Range 解析) /        │
+│      formatTime / formatSize / SftpErrorCode                       │
+│    · 状态：observable / observableList（依赖收集在 attr/vif 内）     │
+├──────────────────────────────────────────────────────────────────┤
+│ ② 能力声明层（100% 共享，commonMain）                              │
+│    · SftpModule / SftpConnectionModule / SftpFavoritesModule /     │
+│      SftpPlaybackHistoryModule / SftpMediaProxyModule              │
+│    · 数据模型 SftpEntry / SftpConnectParam / ...（序列化共用）      │
+│    · 这一层只声明「有什么能力」，不关心谁实现                        │
+├──────────────────────────────────────────────────────────────────┤
+│ ③ 原语桥接层（Kuikly Module 机制，各端实现同名类）                   │
+│    · 模块名即原生类名，框架用 NSClassFromString / 反射 / 注册表解析   │
+│    · 入参统一 JSON 字符串，出参 JSON（module-cb 日志可追踪）         │
+├──────────────────────────────────────────────────────────────────┤
+│ ④ 平台实现层（各端各写一份）                                        │
+│    · SSH/SFTP 协议栈：libssh2(NMSSH) / JSch / libssh2(C++) / 网关   │
+│    · 本地 HTTP 代理：GCDWebServer / NanoHTTPD / libmicrohttpd / 无  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**新增一个能力的标准动作**（四步，缺一不可）：
+1. `core/commonMain/.../module/sftp/XxxModule.kt` 声明方法（`asyncToNativeMethod`）；
+2. `ModuleConst.kt` 加模块名常量；
+3. 各端在 ③ 层实现**同名类**的 `hrv_callWithMethod` 分发；
+4. 页面用 `acquireModule(XxxModule.MODULE_NAME)`，并在 `createExternalModules()` 注册。
+
+### 23.2 为什么本地代理统一走 Module，而不是 expect/actual
+
+历史上本地媒体代理有**两套并行机制**：
+- `LocalMediaProxyApi`（`expect/actual`，6 个平台文件）
+- `SftpMediaProxyModule`（Kuikly Module）
+
+两套并存是跨平台维护的典型反模式。现已**删除 `expect/actual` 版本，统一用 Module**，理由：
+
+| 维度 | expect/actual | Kuikly Module（现方案） |
+|------|---------------|------------------------|
+| 与其它 SFTP 能力一致 | ❌ 独树一帜 | ✅ 与 connect/list/stat 完全同构 |
+| 需要改 `core` 的 `expect` 声明 | ✅ 每加一端都要动 core | ❌ 不需要 |
+| 能否访问 Pager 上下文（如页面参数） | ❌ 拿不到 | ✅ 可以 |
+| 原生实现耦合方式 | 必须在 `core` 侧声明符号 | 只需同名类，可运行时解析 |
+| 排查手段 | 无统一日志 | ✅ 模块调度/callback 统一落日志 |
+| KMP `actual` 覆盖强迫 | ✅ 漏一端就编译不过（双刃剑） | ⚠️ 需自查（已用"显式失败"兜底） |
+
+> 例外：需要**在非 Pager 上下文**（如全局后台线程）调用、或返回**同步值**且对性能极敏感的场景，才考虑 `expect/actual`。本地代理两者都不满足，故归 Module。
+
+### 23.3 各端实现状态（真实可用性，非文件是否存在）
+
+| 端 | 协议栈 | SSH/SFTP | 本地 HTTP 代理 | 状态 |
+|----|--------|----------|----------------|------|
+| **iOS / macOS** | NMSSH(libssh2) | ✅ 全量方法（含随机读、上传下载、批量、递归） | ✅ GCDWebServer，支持 Range/206 | **可用**（72/72 自测 + 界面操控验证） |
+| **Android** | 待接 JSch | ❌ 无原生模块（模块缺失会显式报错） | ❌ | **未实现** |
+| **HarmonyOS** | 待接 libssh2 | ❌ 桩（所有方法抛 `not implemented`，错误码 9999） | ❌ 桩 | **未实现** |
+| **Web / 小程序** | 浏览器无 TCP/SSH | ❌ | ❌（设计上不启本地代理） | **需后端网关**（§5.6） |
+
+### 23.4 跨端一致性的三条硬规则
+
+这三条都是从真实事故里总结的，建议作为 review checklist：
+
+1. **桩实现必须显式失败，绝不能伪报成功。**
+   反例（修复前）：HarmonyOS `Connect` 不连接直接返回假 `sessionId`；`Upload/Download` 直接 `return 1.0f`；`Copy` 返回 `success=true`；`Mkdir/Rm/Rename` 空实现但回 `ok=true`。用户会看到"已连接/上传 100%"而远端什么都没有 —— **静默数据丢失**。
+   现所有未实现能力统一抛 `SftpNotImplementedException` → 错误码 `9999`。
+
+2. **错误码跨端同一套语义**（`SftpErrorCode`）：`1001` 连接失败 / `1003` 认证失败 / `2001` 权限 / `2003` 文件不存在 / `3001` 协议错误 / `9999` 未实现。
+   各端 `SftpErrorFormatter` 负责把本端异常映射到这张表，UI 只认 code。
+
+3. **侧效应放页面层，组件只渲染。**
+   反例（修复前）：`SftpImageViewer` 在 `body()` 里同步调代理拿 token，结果 token 恒为空 —— 图片/音频预览其实一直是坏的。
+   现由 `SftpViewerDispatcherPage` 异步申请端口/token，把 URL 通过 provider 传给组件。
+
+### 23.5 跨端还要注意的框架细节
+
+- **异步回调是回到 Kotlin 线程的**，但 Kuikly 的响应式依赖只在 `attr {}` / `vif/vfor` 条件 lambda 内收集；写在 `body()` 结构层的 `if/when` 不会重建（§23.3 曾导致"永久加载中"）。
+- **状态字段必须是 `observable`**，普通 `var` 改了不触发重渲染（曾导致续播弹窗/倒计时/选集抽屉永不出现）。
+- **UI 单位与尺寸**：页面布局只用 `pagerData.pageViewWidth/pageViewHeight`，不要用设备像素，否则各端比例不一致。
+- **native 组件尺寸必须显式给**（如 `Input` 不写 `height()` 会塌成 0），布局引擎不做原生控件测量。
+- **新增原生源文件后必须重跑 `pod install`**（iOS/macOS）/同步 CMake 列表（OHOS），否则文件不参与编译、模块名解析失败。
+- **线程**：libssh2/JSch 的 session 都不是线程安全的。iOS 端已把每个 Module 的调用串行到独立队列；其它端实现时同样要串行化，否则会出现"刚创建目录立刻 list 看不到"。
+
+### 23.6 补齐其它端的推荐路径
+
+| 端 | 协议栈选型 | 代理选型 | 备注 |
+|----|-----------|---------|------|
+| Android | JSch 或 sshj（`core-render-android/.../module/KRSftp*.kt`） | NanoHTTPD（端口 18080-18089 fallback） | 与 iOS 同构：Module → Session → FileHandle |
+| HarmonyOS | libssh2（`core-render-ohos/.../sftp/` 已有骨架） | libmicrohttpd 或自写 | 随机读用 `libssh2_sftp_seek64` |
+| Web/小程序 | 无（浏览器沙箱） | 不启本地代理 | 走后端网关代理 Range（§5.6） |
+
+> 建议顺序：**Android 优先**（用户量最大、JSch 生态成熟），跑通后再对齐 HarmonyOS。

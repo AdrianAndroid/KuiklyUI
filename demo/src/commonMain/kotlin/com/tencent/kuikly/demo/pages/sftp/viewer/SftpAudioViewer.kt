@@ -17,10 +17,9 @@ package com.tencent.kuikly.demo.pages.sftp.viewer
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.sftp.I18n
-import com.tencent.kuikly.core.module.sftp.LocalMediaProxyApi
-import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.Video
+import com.tencent.kuikly.core.views.VideoPlayControl
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
 
@@ -33,11 +32,8 @@ import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
  * - 与 [SftpPlayerPage] 共用 [SftpMediaUrlBuilder]
  */
 internal fun ViewContainer<*, *>.SftpAudioViewer(
-    sessionId: String,
-    connectionId: String,
-    remotePath: String,
-    name: String,
-    size: Long
+    mediaUrlProvider: () -> String?,
+    fileNameProvider: () -> String
 ) {
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg); padding(16f, 16f, 16f, 16f); flexDirectionColumn() }
@@ -46,7 +42,7 @@ internal fun ViewContainer<*, *>.SftpAudioViewer(
             attr { marginBottom(16f); allCenter() }
             Text {
                 attr {
-                    text("🎵 " + name)
+                    text("🎵 " + fileNameProvider())
                     fontSize(16f)
                     fontWeightBold()
                     color(SftpColorTokens.textPrimary)
@@ -64,15 +60,16 @@ internal fun ViewContainer<*, *>.SftpAudioViewer(
             }
             Text { attr { text("🎵"); fontSize(64f); color(SftpColorTokens.primary) } }
         }
-        // 注册代理并播放
-        val proxy = LocalMediaProxyApi.getInstance()
-        val port = proxy.startOrGetPort()
-        val sftpSessionId = sessionId.ifEmpty { connectionId }  // 降级
-        val token = proxy.registerToken(sftpSessionId, remotePath, size)
-        val url = SftpMediaUrlBuilder.buildPlayUrl(port, token, name)
-
+        // 只负责渲染：播放地址由页面异步申请代理 token 后传入
+        val url = mediaUrlProvider()
         Video {
-            attr { src(url); resizeModeToContain() }
+            attr {
+                if (!url.isNullOrEmpty()) {
+                    src(url)
+                    playControl(VideoPlayControl.PLAY)
+                }
+                resizeModeToContain()
+            }
             event {
                 // Phase 1: 接入 playStateDidChanged + playTimeDidChanged 落历史
             }

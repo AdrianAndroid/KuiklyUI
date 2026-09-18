@@ -19,9 +19,22 @@ namespace kuikly {
 namespace module {
 
 std::string SftpErrorFormatter::Format(const std::exception &e) {
-    int code = 0;
     std::string msg = e.what();
-    // Phase 1.2: 根据 exception 类型映射 code
+    // 错误码约定与其它端保持一致（SftpErrorCode）：
+    //   9999 NOT_IMPLEMENTED（桩实现必须显式失败，绝不伪报成功）
+    //   2001 PERMISSION_DENIED / 2003 NO_SUCH_FILE / 1001-1003 连接类
+    int code = 0;
+    if (msg.find("not implemented") != std::string::npos) {
+        code = 9999;
+    } else if (msg.find("NoSuch") != std::string::npos || msg.find("no such") != std::string::npos) {
+        code = 2003;
+    } else if (msg.find("Permission") != std::string::npos || msg.find("permission") != std::string::npos) {
+        code = 2001;
+    } else if (msg.find("connect") != std::string::npos) {
+        code = 1001;
+    } else if (msg.find("auth") != std::string::npos) {
+        code = 1003;
+    }
     return Format(code, msg);
 }
 
