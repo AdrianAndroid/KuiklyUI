@@ -18,7 +18,10 @@ import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.velseif
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.module.sftp.SftpEntry
 import com.tencent.kuikly.core.views.Text
@@ -40,14 +43,15 @@ internal class SftpFilePropsPage : SftpBasePager() {
 
     private var sessionId: String = ""
     private var remotePath: String = ""
-    private var entry: SftpEntry? = null
-    private var loading: Boolean = true
-    private var errorMsg: String? = null
-    private var chmodMode: String = ""           // 用户输入
+    // 必须 observable：异步 stat 回包要能触发重渲染（普通 var + `when` 不会重建结构）
+    private var entry: SftpEntry? by observable(null)
+    private var loading: Boolean by observable(true)
+    private var errorMsg: String? by observable(null)
+    private var chmodMode: String by observable("")           // 用户输入
     private var chownUid: Int = -1
     private var chownGid: Int = -1
     private var setMtimeInput: String = ""        // yyyy-MM-dd HH:mm:ss
-    private var editMode: Int = 0  // 0 查看 / 1 chmod / 2 chown / 3 setMtime
+    private var editMode: Int by observable(0)  // 0 查看 / 1 chmod / 2 chown / 3 setMtime
 
     override fun created() {
         super.created()
@@ -108,10 +112,15 @@ internal class SftpFilePropsPage : SftpBasePager() {
             // 内容
             View {
                 attr { flex(1f) }
-                when {
-                    ctx.loading -> SftpLoadingView()
-                    ctx.errorMsg != null -> SftpErrorView(ctx.errorMsg!!) { ctx.refresh() }
-                    ctx.entry != null -> SftpFilePropsView(
+                // 条件指令：stat 回包后才能从 loading 切到属性面板
+                vif({ ctx.loading }) {
+                    SftpLoadingView()
+                }
+                velseif({ ctx.errorMsg != null }) {
+                    SftpErrorView(ctx.errorMsg ?: "") { ctx.refresh() }
+                }
+                velseif({ ctx.entry != null }) {
+                    SftpFilePropsView(
                         ctx.entry!!,
                         ctx.chmodMode,
                         ctx.chownUid,

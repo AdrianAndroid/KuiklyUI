@@ -238,54 +238,6 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 
 @end
 
-#pragma mark - KRUISecureTextFieldCell
-
-// Secure (password) variant of KRUITextFieldCell.
-// NSTextField has no `secureTextEntry` property — masking is a *cell* behaviour on macOS,
-// so a secure cell must be installed when the password keyboard type is requested.
-// Without this, password inputs render as plain text.
-@interface KRUISecureTextFieldCell : NSSecureTextFieldCell
-@end
-
-@implementation KRUISecureTextFieldCell
-
-- (NSRect)adjustedRectForBounds:(NSRect)rect {
-    NSSize textSize = [self cellSizeForBounds:rect];
-    CGFloat heightDelta = rect.size.height - textSize.height;
-    if (heightDelta > 0) {
-        rect.size.height = textSize.height;
-        rect.origin.y += floor(heightDelta / 2.0);
-    }
-    return rect;
-}
-
-- (NSRect)drawingRectForBounds:(NSRect)rect {
-    return [self adjustedRectForBounds:[super drawingRectForBounds:rect]];
-}
-
-- (NSRect)titleRectForBounds:(NSRect)rect {
-    return [self adjustedRectForBounds:[super titleRectForBounds:rect]];
-}
-
-- (void)editWithFrame:(NSRect)rect
-               inView:(NSView *)controlView
-               editor:(NSText *)textObj
-             delegate:(id)delegate
-                event:(NSEvent *)event {
-    [super editWithFrame:[self adjustedRectForBounds:rect] inView:controlView editor:textObj delegate:delegate event:event];
-}
-
-- (void)selectWithFrame:(NSRect)rect
-                 inView:(NSView *)controlView
-                 editor:(NSText *)textObj
-               delegate:(id)delegate
-                  start:(NSInteger)selStart
-                 length:(NSInteger)selLength {
-    [super selectWithFrame:[self adjustedRectForBounds:rect] inView:controlView editor:textObj delegate:delegate start:selStart length:selLength];
-}
-
-@end
-
 #pragma mark - KRUITextField
 
 @interface KRUITextField ()
@@ -293,6 +245,10 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 @property (nonatomic, copy) NSString *kr_cachedPlaceholder; // Cache for placeholder text
 @property (nonatomic, strong, nullable) NSColor *kr_caretColor;
 @property (nonatomic, assign) BOOL kr_secureTextEntry;
+/** 密码框的真实文本（显示层可能是掩码） */
+@property (nonatomic, copy, nullable) NSString *kr_realText;
+- (void)kr_refreshSecureDisplay;
+- (BOOL)kr_isEditing;
 @end
 
 @implementation KRUITextField
@@ -330,6 +286,11 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 }
 
 - (void)setText:(NSString *)text {
+    _kr_realText = text;
+    if (_kr_secureTextEntry && ![self kr_isEditing]) {
+        [self kr_refreshSecureDisplay];
+        return;
+    }
     self.stringValue = text ?: @"";
 }
 
@@ -384,7 +345,47 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
     }
 }
 
+// Masking is a cell behaviour on macOS; swap the cell so password inputs actually hide input.
+- (void)setSecureTextEntry:(BOOL)secureTextEntry {
+    if (_kr_secureTextEntry == secureTextEntry) return;
+    _kr_secureTextEntry = secureTextEntry;
+    if (secureTextEntry && _kr_realText == nil) {
+        _kr_realText = self.stringValue ?: @"";
+    }
+    [self kr_refreshSecureDisplay];
+}
+
+/**
+ * 密码掩码的显示策略：**不替换 cell**。
+ * 替换成 NSSecureTextFieldCell 会让 AppKit 停止回调 controlTextDidChange /
+ * didBeginEditing（实测连 didBeginEditing 都不来），密码就永远回传不到上层。
+ * 改为只替换显示字符串：
+ *   - 未聚焦：显示 • 掩码
+ *   - 聚焦编辑：显示真实文本，textDidChange 正常工作并同步到 kr_realText
+ * 这样既有静态掩码，又保证输入链路完整。
+ */
+- (BOOL)kr_isEditing {
+    // macOS 编辑期间 window.firstResponder 是 field editor（NSTextView），不是控件本身
+    return [self currentEditor] != nil || (self.window != nil && self.window.firstResponder == self);
+}
+
+- (void)kr_refreshSecureDisplay {
+    if (!_kr_secureTextEntry) return;
+    if ([self kr_isEditing]) return;  // 编辑中保持真实文本
+    NSString *real = _kr_realText ?: self.stringValue ?: @"";
+    _kr_realText = real;
+    NSMutableString *masked = [NSMutableString string];
+    for (NSUInteger i = 0; i < real.length; i++) {
+        [masked appendString:@"\u2022"];
+    }
+    [super setStringValue:masked];
+    [self setNeedsDisplay:YES];
+}
+
 - (BOOL)becomeFirstResponder {
+    if (_kr_secureTextEntry && _kr_realText.length > 0) {
+        [super setStringValue:_kr_realText];   // 编辑前恢复真实文本
+    }
     BOOL result = [super becomeFirstResponder];
     if (result) {
         [self kr_applyCaretColorIfPossible];
@@ -392,30 +393,13 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
     return result;
 }
 
-// Masking is a cell behaviour on macOS; swap the cell so password inputs actually hide input.
-- (void)setSecureTextEntry:(BOOL)secureTextEntry {
-    if (_kr_secureTextEntry == secureTextEntry) {
-        return;
+- (BOOL)resignFirstResponder {
+    BOOL result = [super resignFirstResponder];
+    if (result && _kr_secureTextEntry) {
+        _kr_realText = self.stringValue ?: @"";
+        [self kr_refreshSecureDisplay];
     }
-    _kr_secureTextEntry = secureTextEntry;
-
-    NSTextFieldCell *newCell = secureTextEntry ? (NSTextFieldCell *)[KRUISecureTextFieldCell new]
-                                              : (NSTextFieldCell *)[KRUITextFieldCell new];
-    newCell.bezeled = NO;
-    newCell.bordered = NO;
-    newCell.drawsBackground = NO;
-    newCell.editable = YES;
-    newCell.selectable = YES;
-    newCell.usesSingleLineMode = YES;
-    newCell.wraps = NO;
-    newCell.scrollable = YES;
-    newCell.focusRingType = NSFocusRingTypeNone;
-    newCell.font = self.font;
-    newCell.alignment = self.alignment;
-    newCell.stringValue = self.stringValue ?: @"";
-    newCell.placeholderString = self.kr_cachedPlaceholder ?: self.placeholderString;
-    self.cell = newCell;
-    [self setNeedsDisplay:YES];
+    return result;
 }
 
 - (BOOL)secureTextEntry {
@@ -507,6 +491,9 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 }
 
 - (void)kr_dispatchEditingChanged {
+    if (_kr_secureTextEntry) {
+        _kr_realText = self.stringValue ?: @"";
+    }
     for (NSDictionary *entry in _kr_targets) {
         id t = entry[@"t"]; SEL a = NSSelectorFromString(entry[@"a"]);
         if (t && [t respondsToSelector:a]) {
@@ -528,6 +515,10 @@ NSData *UIImageJPEGRepresentation(NSImage *image, CGFloat compressionQuality) {
 }
 
 - (void)controlTextDidEndEditing:(NSNotification *)obj {
+    if (_kr_secureTextEntry) {
+        _kr_realText = self.stringValue ?: @"";
+        [self kr_refreshSecureDisplay];
+    }
     id<UITextFieldDelegate> d = (id)self.delegate;
     if ([d respondsToSelector:@selector(textFieldDidEndEditing:)]) {
         [d textFieldDidEndEditing:(id)self];

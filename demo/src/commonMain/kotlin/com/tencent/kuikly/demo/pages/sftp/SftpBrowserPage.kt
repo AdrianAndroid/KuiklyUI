@@ -17,7 +17,11 @@ package com.tencent.kuikly.demo.pages.sftp
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.velse
+import com.tencent.kuikly.core.directives.velseif
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.module.sftp.SftpConnectParam
 import com.tencent.kuikly.core.module.sftp.SftpEntry
@@ -44,10 +48,12 @@ internal class SftpBrowserPage : SftpBasePager() {
     private var sessionId: String? = null
     private var connectionId: String = ""
     private var connectionLabel: String = ""
-    private var currentPath: String = "/"
-    private var entries: List<SftpEntry> = emptyList()
-    private var loading: Boolean = true
-    private var errorMsg: String? = null
+    // 必须 observable：异步回调改了状态要能触发重渲染（普通 var + body 里的 Kotlin `when`
+    // 不会重建结构，页面会永远停在首帧的「加载中」）
+    private var entries: List<SftpEntry> by observable(emptyList())
+    private var loading: Boolean by observable(true)
+    private var errorMsg: String? by observable(null)
+    private var currentPath: String by observable("/")
 
     override fun created() {
         super.created()
@@ -133,11 +139,19 @@ internal class SftpBrowserPage : SftpBasePager() {
             // 内容区三态
             View {
                 attr { flex(1f) }
-                when {
-                    ctx.loading -> SftpLoadingView()
-                    ctx.errorMsg != null -> SftpErrorView(ctx.errorMsg!!) { ctx.doConnectAndList() }
-                    ctx.entries.isEmpty() -> SftpEmptyView("空目录")
-                    else -> SftpEntriesView(ctx.entries) { entry -> ctx.onEntryClick(entry) }
+                // 用条件指令而非 Kotlin when：条件 lambda 内的读取会被依赖收集，
+                // 异步拿到列表后才能从 loading 切到列表（空态/错误态同理）
+                vif({ ctx.loading }) {
+                    SftpLoadingView()
+                }
+                velseif({ ctx.errorMsg != null }) {
+                    SftpErrorView(ctx.errorMsg ?: "") { ctx.doConnectAndList() }
+                }
+                velseif({ ctx.entries.isEmpty() }) {
+                    SftpEmptyView("空目录")
+                }
+                velse {
+                    SftpEntriesView(ctx.entries) { entry -> ctx.onEntryClick(entry) }
                 }
             }
         }
