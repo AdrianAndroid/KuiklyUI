@@ -209,21 +209,55 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
     NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
     NSString *content = params[@"content"];
     KR_DIAG_INFO(@"bridge.toast", @"content=%@", content ?: @"<empty>");
-    if (content.length > 0) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSAlert *alert = [[NSAlert alloc] init];
-            alert.messageText = content;
-            // 不显示按钮，仅仅1.5秒后自动消失
-            [alert.window setLevel:NSFloatingWindowLevel];
-            [alert.window setStyleMask:[alert.window styleMask] & ~NSWindowStyleMaskResizable];
-            [alert beginSheetModalForWindow:[NSApplication sharedApplication].keyWindow completionHandler:nil];
-            
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [alert.window orderOut:nil];
-                [NSApp endSheet:alert.window];
-            });
+    if (content.length == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSWindow *window = [NSApplication sharedApplication].keyWindow ?: NSApp.windows.firstObject;
+        NSView *host = window.contentView;
+        if (!host) return;
+
+        // 轻量非模态 HUD：不抢焦点、无按钮、无遮挡弹窗，1.5s 后淡出。
+        // 之前的 NSAlert sheet 是模态的，只为提示「已保存」会盖住整窗并打断操作。
+        NSTextField *label = [NSTextField labelWithString:content ?: @""];
+        label.font = [NSFont systemFontOfSize:14];
+        label.textColor = NSColor.whiteColor;
+        label.alignment = NSTextAlignmentCenter;
+        label.maximumNumberOfLines = 0;
+        label.lineBreakMode = NSLineBreakByWordWrapping;
+        [label sizeToFit];
+
+        const CGFloat padX = 20, padY = 12;
+        NSRect labelFrame = NSMakeRect(padX, padY, label.frame.size.width, label.frame.size.height);
+        NSRect hudFrame = NSMakeRect(0, 0, labelFrame.size.width + padX * 2, labelFrame.size.height + padY * 2);
+
+        NSView *hud = [[NSView alloc] initWithFrame:hudFrame];
+        hud.wantsLayer = YES;
+        hud.layer.backgroundColor = [NSColor colorWithWhite:0.0 alpha:0.82].CGColor;
+        hud.layer.cornerRadius = 8.0;
+        label.frame = labelFrame;
+        [hud addSubview:label];
+
+        // 居中显示，并随窗口尺寸变化保持居中
+        hudFrame.origin.x = NSMidX(host.bounds) - hudFrame.size.width / 2.0;
+        hudFrame.origin.y = NSMidY(host.bounds) - hudFrame.size.height / 2.0;
+        hud.frame = hudFrame;
+        hud.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin | NSViewMaxYMargin;
+        hud.alphaValue = 0.0;
+        [host addSubview:hud];
+
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = 0.15;
+            hud.animator.alphaValue = 1.0;
+        } completionHandler:nil];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+                ctx.duration = 0.25;
+                hud.animator.alphaValue = 0.0;
+            } completionHandler:^{
+                [hud removeFromSuperview];
+            }];
         });
-    }
+    });
 }
 
 - (id)testArray:(NSDictionary *)args {

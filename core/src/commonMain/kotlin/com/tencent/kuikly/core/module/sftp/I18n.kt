@@ -153,6 +153,10 @@ object I18n {
             "en-US" to "Unknown error"
         ),
         // —— UI 通用文案 ——
+        "sftp.connect.saved" to mapOf(
+            "zh-CN" to "连接已保存",
+            "en-US" to "Connection saved"
+        ),
         "sftp.ui.loading" to mapOf(
             "zh-CN" to "加载中...",
             "en-US" to "Loading..."

@@ -47,6 +47,8 @@ internal class SftpHomePage : SftpBasePager() {
     // from async module callbacks will not trigger a re-render (the page would stay on
     // its initial state forever, e.g. stuck on the loading view).
     private var connections: List<SftpConnection> by observable(emptyList())
+    /** 首次出现由 created() 拉取，避免 pageDidAppear 重复请求 */
+    private var hasAppearedOnce = false
     private var loading: Boolean by observable(true)
     private var errorMsg: String? by observable(null)
     private var currentTab: Int by observable(0)  // 0 连接 / 1 收藏 / 2 历史
@@ -197,6 +199,24 @@ internal class SftpHomePage : SftpBasePager() {
     override fun created() {
         super.created()
         refresh()
+    }
+
+    /**
+     * 首页是导航栈根，从「新建连接 / 浏览」返回时不会被重建，created() 不会再跑；
+     * 必须在这里重新拉取，否则新建的连接不会出现在列表里。
+     * 首次出现由 created() 负责，这里只在「再次出现」时刷新，避免首屏重复请求。
+     */
+    override fun pageDidAppear() {
+        super.pageDidAppear()
+        if (!hasAppearedOnce) {
+            hasAppearedOnce = true
+            return
+        }
+        refresh()
+        when (currentTab) {
+            1 -> reloadFavorites()
+            2 -> reloadHistory()
+        }
     }
 
     private fun refresh() {

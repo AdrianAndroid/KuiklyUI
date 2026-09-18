@@ -19,6 +19,8 @@ import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.RouterModule
+import com.tencent.kuikly.core.module.sftp.I18n
+import com.tencent.kuikly.demo.pages.base.Utils
 import com.tencent.kuikly.core.module.sftp.AuthMethod
 import com.tencent.kuikly.core.module.sftp.SftpConnection
 import com.tencent.kuikly.core.views.Input
@@ -234,6 +236,13 @@ internal class SftpConnectEditPage : SftpBasePager() {
             if (error != null) {
                 errorMsg = error.msg
             } else {
+                // 提示是「锦上添花」：即使宿主未提供 toast 能力，也必须返回列表，
+                // 否则用户会以为保存失败而卡在表单页。
+                try {
+                    Utils.bridgeModule(this).toast(I18n.t("sftp.connect.saved"))
+                } catch (e: Throwable) {
+                    com.tencent.kuikly.core.log.KLog.e("SftpConnectEdit", "toast failed: ${e.message}")
+                }
                 acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
             }
         }

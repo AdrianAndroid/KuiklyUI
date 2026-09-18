@@ -38,6 +38,9 @@ internal abstract class SftpBasePager : BasePager() {
 
     override fun createExternalModules(): Map<String, Module>? {
         val map = hashMapOf<String, Module>()
+        // 需要宿主能力（toast 等）：SftpBasePager 覆盖了父类实现，这里显式补上
+        map[com.tencent.kuikly.demo.pages.base.BridgeModule.MODULE_NAME] =
+            com.tencent.kuikly.demo.pages.base.BridgeModule()
         map[SftpModule.MODULE_NAME] = SftpModule()
         map[SftpFavoritesModule.MODULE_NAME] = SftpFavoritesModule()
         map[SftpPlaybackHistoryModule.MODULE_NAME] = SftpPlaybackHistoryModule()
