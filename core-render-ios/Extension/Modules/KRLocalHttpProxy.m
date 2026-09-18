@@ -25,7 +25,7 @@
 static const int kPortMin = 18080;
 static const int kPortMax = 18089;
 static const NSTimeInterval kTTL = 2 * 60 * 60;            // token TTL 2 小时（§21.3.3）
-static const NSInteger kMaxRangeBytes = 8 * 1024 * 1024;   // 单次 Range 最多 8MB，避免大文件整体进内存
+static const NSInteger kMaxRangeBytes = 16 * 1024 * 1024;   // 单次 Range 最多 8MB，避免大文件整体进内存
 static const NSInteger kStreamChunkBytes = 256 * 1024;
 
 /** 一个播放 token 对应一次远端文件的流式读取（§21.3.3） */
@@ -218,15 +218,32 @@ static const NSInteger kStreamChunkBytes = 256 * 1024;
     long long total = entry.totalSize;
     NSString *contentType = [KRLocalHttpProxy mimeForPath:entry.remotePath];
     NSRange range = [KRLocalHttpProxy parseRange:request.headers[@"Range"] total:total];
+    [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp.proxy] req Range=%@ -> loc=%lu len=%lu total=%lld",
+                          request.headers[@"Range"] ?: @"<none>",
+                          (unsigned long)range.location, (unsigned long)range.length, total]];
+
+    // 越界（如 VLC 探测用的 bytes=<size>-）必须回 416，否则会被当成有效请求，
+    // 客户端会拿到错误的数据而反复重试
+    if ([KRLocalHttpProxy isRangeUnsatisfiable:request.headers[@"Range"] total:total]) {
+        GCDWebServerDataResponse *resp = [[GCDWebServerDataResponse alloc] initWithData:[NSData data]
+                                                                          contentType:contentType];
+        resp.statusCode = 416;
+        [resp setValue:[NSString stringWithFormat:@"bytes */%lld", total]
+forAdditionalHeader:@"Content-Range"];
+        return resp;
+    }
 
     if (range.location != NSNotFound) {
         long long start = (long long)range.location;
         long long end = start + (long long)range.length - 1;
         if (end - start + 1 > kMaxRangeBytes) {
-            end = start + kMaxRangeBytes - 1;  // 分片返回；Content-Range 反映真实区间
+            end = start + kMaxRangeBytes - 1;   // 分片返回；Content-Range 反映真实区间
         }
         NSData *data = [KRSftpFileHandle read:fh offset:start length:(int)(end - start + 1)];
-        GCDWebServerDataResponse *resp = [[GCDWebServerDataResponse alloc] initWithData:data contentType:contentType];
+        [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp.proxy] served %lu bytes for %lld-%lld/%lld",
+                              (unsigned long)data.length, start, end, total]];
+        GCDWebServerDataResponse *resp = [[GCDWebServerDataResponse alloc] initWithData:data
+                                                                          contentType:contentType];
         resp.statusCode = 206;
         [resp setValue:@"bytes" forAdditionalHeader:@"Accept-Ranges"];
         [resp setValue:[NSString stringWithFormat:@"bytes %lld-%lld/%lld", start, end, total]
@@ -280,6 +297,18 @@ forAdditionalHeader:@"Content-Range"];
     if (total > 0 && end >= total) end = total - 1;
     if (start < 0 || end < start) return NSMakeRange(NSNotFound, 0);
     return NSMakeRange((NSUInteger)start, (NSUInteger)(end - start + 1));
+}
+
+/** Range 起点 >= 文件大小 时为不可满足（HTTP 416） */
++ (BOOL)isRangeUnsatisfiable:(NSString *)header total:(long long)total {
+    if (header.length == 0 || total <= 0) return NO;
+    if (![header hasPrefix:@"bytes="]) return NO;
+    NSString *spec = [header substringFromIndex:6];
+    if ([spec hasPrefix:@"-"]) return NO;   // 后缀 Range 总可满足
+    NSRange dash = [spec rangeOfString:@"-"];
+    if (dash.location == NSNotFound) return NO;
+    long long start = [[spec substringToIndex:dash.location] longLongValue];
+    return start >= total;
 }
 
 + (NSString *)mimeForPath:(NSString *)path {

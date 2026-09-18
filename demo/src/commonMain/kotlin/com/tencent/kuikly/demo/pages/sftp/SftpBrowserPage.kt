@@ -19,9 +19,12 @@ import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.velseif
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.module.sftp.SftpConnectParam
 import com.tencent.kuikly.core.module.sftp.SftpEntry
@@ -48,9 +51,10 @@ internal class SftpBrowserPage : SftpBasePager() {
     private var sessionId: String? = null
     private var connectionId: String = ""
     private var connectionLabel: String = ""
-    // 必须 observable：异步回调改了状态要能触发重渲染（普通 var + body 里的 Kotlin `when`
-    // 不会重建结构，页面会永远停在首帧的「加载中」）
-    private var entries: List<SftpEntry> by observable(emptyList())
+    // 必须可观察：异步回调改了状态要能触发重渲染。
+    // entries 用 ObservableList，配合 vfor 才能按 diff 增删行（普通 List 在
+    // vif 分支条件不变时不会重建，切目录后列表会一直是旧的）。
+    private var entries by observableList<SftpEntry>()
     private var loading: Boolean by observable(true)
     private var errorMsg: String? by observable(null)
     private var currentPath: String by observable("/")
@@ -91,7 +95,8 @@ internal class SftpBrowserPage : SftpBasePager() {
                 errorMsg = err.msg
                 loading = false
             } else {
-                entries = items
+                entries.clear()
+                entries.addAll(items)
                 loading = false
                 errorMsg = null
             }
@@ -151,7 +156,7 @@ internal class SftpBrowserPage : SftpBasePager() {
                     SftpEmptyView("空目录")
                 }
                 velse {
-                    SftpEntriesView(ctx.entries) { entry -> ctx.onEntryClick(entry) }
+                    SftpEntriesView({ ctx.entries }) { entry -> ctx.onEntryClick(entry) }
                 }
             }
         }
@@ -191,12 +196,15 @@ internal class SftpBrowserPage : SftpBasePager() {
 
 /** 目录项列表渲染 */
 internal fun ViewContainer<*, *>.SftpEntriesView(
-    entries: List<SftpEntry>,
+    entriesProvider: () -> ObservableList<SftpEntry>,
     onClick: (SftpEntry) -> Unit
 ) {
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
-        entries.forEach { entry ->
+        // 用 vfor：条目列表变化时按 diff 增删行。
+        // 若直接把 List 作为入参放进 vif 分支，分支条件（isEmpty）不变时不会重建，
+        // 切目录后列表会一直是旧的（表现为「点了没反应」）。
+        vfor(entriesProvider) { entry ->
             View {
                 attr {
                     width(pagerData.pageViewWidth)

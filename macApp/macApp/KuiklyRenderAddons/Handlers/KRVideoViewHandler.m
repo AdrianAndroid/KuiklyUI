@@ -14,11 +14,16 @@
  */
 
 #import "KRVideoViewHandler.h"
+#import "KRDiagnosticLog.h"
+#if __has_include(<VLCKit/VLCKit.h>)
+#import <VLCKit/VLCKit.h>
+#endif
 
 @interface KRVideoViewHandler () <VLCMediaPlayerDelegate>
 
 @property (nonatomic, strong) VLCMediaPlayer *mediaPlayer;
 @property (nonatomic, copy) NSString *krv_source;
+@property (nonatomic, strong) VLCVideoView *vlcVideoView;
 @property (nonatomic, assign) BOOL krv_hasFirstFrameDisplayed;
 
 @end
@@ -70,11 +75,27 @@
         return;
     }
 
+    // 打开 VLC 内部日志：排查「有解码状态但无画面」这类问题必须看 vout 的报错
+    if ([[[NSProcessInfo processInfo] environment][@"KUIKLY_VLC_DEBUG"] isEqualToString:@"1"]) {
+        [VLCLibrary sharedLibrary].debugLogging = YES;
+        [VLCLibrary sharedLibrary].debugLoggingLevel = 2;
+    }
     VLCMedia *media = [VLCMedia mediaWithURL:url];
-    VLCMediaPlayer *player = [[VLCMediaPlayer alloc] initWithVideoView:self];
+    // 用 VLCKit 自带的 VLCVideoView 作为渲染目标：
+    // 直接把普通 NSView 传给 drawable/initWithVideoView: 时，VLC 会创建视频输出
+    // 但画面挂不上（表现为解码在走、state 到 Playing，屏幕却全黑）。
+    VLCVideoView *videoView = [[VLCVideoView alloc] initWithFrame:self.bounds];
+    videoView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    videoView.backColor = [NSColor blackColor];
+    [self addSubview:videoView];
+    self.vlcVideoView = videoView;
+
+    VLCMediaPlayer *player = [[VLCMediaPlayer alloc] initWithVideoView:videoView];
+    player.drawable = videoView;
     player.media = media;
     player.delegate = self;
     self.mediaPlayer = player;
+    KR_DIAG_INFO(@"video", @"setup media url=%@", self.krv_source);
 }
 
 #pragma mark - KRVideoViewProtocol
@@ -97,16 +118,20 @@
 }
 
 - (void)krv_setVideoContentMode:(KRVideoViewContentMode)videoViewContentMode {
+    VLCVideoView *vv = self.vlcVideoView;
     switch (videoViewContentMode) {
         case KRVideoViewContentModeScaleAspectFit:
             self.fillScreen = NO;
+            if (vv) vv.fillScreen = NO;
             break;
         case KRVideoViewContentModeScaleAspectFill:
             self.fillScreen = YES;
+            if (vv) vv.fillScreen = YES;
             break;
         case KRVideoViewContentModeScaleToFill:
         default:
             self.fillScreen = YES;
+            if (vv) vv.fillScreen = YES;
             break;
     }
 }
@@ -144,6 +169,9 @@
     if (player != self.mediaPlayer) {
         return;
     }
+    KR_DIAG_INFO(@"video", @"vlc state=%ld hasVideo=%d drawableFrame=%@ selfFrame=%@",
+                 (long)player.state, self.vlcVideoView.hasVideo ? 1 : 0,
+                 NSStringFromRect(self.vlcVideoView.frame), NSStringFromRect(self.frame));
 
     KRVideoPlayState playState = KRVideoPlayStateUnknown;
     switch (player.state) {

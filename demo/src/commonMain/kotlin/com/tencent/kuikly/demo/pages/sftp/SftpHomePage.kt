@@ -20,12 +20,15 @@ import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.velseif
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.module.sftp.SftpConnection
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpAccessibility
@@ -46,18 +49,18 @@ internal class SftpHomePage : SftpBasePager() {
     // NOTE: every field read by body() must be `observable`, otherwise mutations made
     // from async module callbacks will not trigger a re-render (the page would stay on
     // its initial state forever, e.g. stuck on the loading view).
-    private var connections: List<SftpConnection> by observable(emptyList())
+    private var connections by observableList<SftpConnection>()
     /** 首次出现由 created() 拉取，避免 pageDidAppear 重复请求 */
     private var hasAppearedOnce = false
     private var loading: Boolean by observable(true)
     private var errorMsg: String? by observable(null)
     private var currentTab: Int by observable(0)  // 0 连接 / 1 收藏 / 2 历史
     // 收藏 Tab 状态
-    internal var favorites: List<com.tencent.kuikly.core.module.sftp.SftpFavorite> by observable(emptyList())
+    internal var favorites by observableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>()
     internal var favoritesLoaded: Boolean by observable(false)
     internal var favoritesError: String? by observable(null)
     // 历史 Tab 状态
-    internal var history: List<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord> by observable(emptyList())
+    internal var history by observableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>()
     internal var historyLoaded: Boolean by observable(false)
     internal var historyError: String? by observable(null)
 
@@ -131,7 +134,7 @@ internal class SftpHomePage : SftpBasePager() {
                     SftpEmptyView("暂无连接，点 + 新建")
                 }
                 velseif({ ctx.currentTab == 0 }) {
-                    SftpConnectionListView(ctx.connections) { conn -> ctx.openBrowser(conn) }
+                    SftpConnectionListView({ ctx.connections }) { conn -> ctx.openBrowser(conn) }
                 }
 
                 // —— 收藏 Tab ——
@@ -142,7 +145,7 @@ internal class SftpHomePage : SftpBasePager() {
                     SftpEmptyView("暂无收藏")
                 }
                 velseif({ ctx.currentTab == 1 }) {
-                    SftpFavoritesList(ctx.favorites)
+                    SftpFavoritesList({ ctx.favorites })
                 }
 
                 // —— 历史 Tab ——
@@ -153,7 +156,7 @@ internal class SftpHomePage : SftpBasePager() {
                     SftpEmptyView("暂无播放历史")
                 }
                 velse {
-                    SftpHistoryList(ctx.history)
+                    SftpHistoryList({ ctx.history })
                 }
             }
         }
@@ -163,7 +166,8 @@ internal class SftpHomePage : SftpBasePager() {
         favoritesLoaded = true
         favoritesError = null
         sftpFavoritesModule().list { items, error ->
-            favorites = items
+            favorites.clear()
+            favorites.addAll(items)
             favoritesError = error?.msg
         }
     }
@@ -172,7 +176,8 @@ internal class SftpHomePage : SftpBasePager() {
         historyLoaded = true
         historyError = null
         sftpPlaybackHistoryModule().listByConnection("") { items, error ->
-            history = items
+            history.clear()
+            history.addAll(items)
             historyError = error?.msg
         }
     }
@@ -227,7 +232,8 @@ internal class SftpHomePage : SftpBasePager() {
             if (error != null) {
                 errorMsg = error.msg
             } else {
-                connections = items
+                connections.clear()
+                connections.addAll(items)
             }
         }
     }
@@ -336,12 +342,13 @@ internal fun ViewContainer<*, *>.SftpErrorView(message: String, onRetry: () -> U
 
 /** 连接列表项视图（§17.3.1 线框） */
 internal fun ViewContainer<*, *>.SftpConnectionListView(
-    connections: List<SftpConnection>,
+    connectionsProvider: () -> ObservableList<SftpConnection>,
     onClick: (SftpConnection) -> Unit
 ) {
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
-        connections.forEach { conn ->
+        // vfor：列表变化按 diff 更新（否则非空→非空的变化不会重建分支，列表会陈旧）
+        vfor(connectionsProvider) { conn ->
             View {
                 attr {
                     width(pagerData.pageViewWidth)
@@ -372,10 +379,10 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
 }
 
 /** 收藏列表渲染 */
-internal fun ViewContainer<*, *>.SftpFavoritesList(items: List<com.tencent.kuikly.core.module.sftp.SftpFavorite>) {
+internal fun ViewContainer<*, *>.SftpFavoritesList(itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>) {
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
-        items.forEach { fav ->
+        vfor(itemsProvider) { fav ->
             View {
                 attr {
                     width(pagerData.pageViewWidth)
@@ -405,10 +412,10 @@ internal fun ViewContainer<*, *>.SftpFavoritesList(items: List<com.tencent.kuikl
 }
 
 /** 历史列表渲染 */
-internal fun ViewContainer<*, *>.SftpHistoryList(items: List<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>) {
+internal fun ViewContainer<*, *>.SftpHistoryList(itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>) {
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
-        items.forEach { rec ->
+        vfor(itemsProvider) { rec ->
             View {
                 attr {
                     width(pagerData.pageViewWidth)

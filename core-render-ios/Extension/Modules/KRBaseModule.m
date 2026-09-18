@@ -53,7 +53,7 @@ NSString *const KR_CALLBACK_KEY = @"callback";
                         : nil;
                     if (json) {
                         NSString *s = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
-                        desc = (s.length > 400) ? [[s substringToIndex:400] stringByAppendingString:@"…"] : s;
+                        desc = (s.length > 4000) ? [[s substringToIndex:4000] stringByAppendingString:@"…"] : s;
                     } else {
                         desc = [result description] ?: @"<desc-nil>";
                     }

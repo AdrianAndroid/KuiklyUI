@@ -19,6 +19,7 @@ import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.I18n
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
@@ -28,6 +29,7 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.views.PlayState
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.Video
+import com.tencent.kuikly.core.views.VideoPlayControl
 import com.tencent.kuikly.core.views.VideoView
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.base.ViewContainer
@@ -66,7 +68,7 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var showCountdown: Boolean = false
     private var episodes: List<String> = emptyList()  // 同目录下的视频列表（§19.3.5 自动下一集）
     private var currentIndex: Int = 0
-    private var firstFrameShown: Boolean = false
+    private var firstFrameShown: Boolean by observable(false)
 
     override fun created() {
         super.created()
@@ -115,9 +117,20 @@ internal class SftpPlayerPage : SftpBasePager() {
             // 视频容器
             View {
                 attr { size(pagerData.pageViewWidth, pagerData.pageViewWidth * 9f / 16f); backgroundColor(Color.BLACK) }
-                ctx.playUrl?.let { url ->
+                // 必须用 vif：playUrl 是异步拿到的，写成 body 结构层的 `let`/`if`
+                // 时首次求值为 null，Video 视图不会被创建，之后也不会重建（=黑屏）。
+                vif({ ctx.playUrl != null }) {
                     Video {
-                        attr { src(url); resizeModeToContain() }
+                        attr {
+                            // 必须给 Video 显式尺寸：只给外层容器尺寸时，Video 自身高度为 0，
+                            // VLC 的渲染视图高度也是 0（hasVideo=0），解码在跑但看不到画面。
+                            size(pagerData.pageViewWidth, pagerData.pageViewWidth * 9f / 16f)
+                            src(ctx.playUrl ?: "")
+                            resizeModeToContain()
+                            // 关键：不设 playControl 时 VLC 只创建播放器不会起播，
+                            // 也就不会向本地代理发起 Range 请求（表现为黑屏且代理无请求）
+                            playControl(VideoPlayControl.PLAY)
+                        }
                         event {
                             firstFrameDidDisplay { ctx.firstFrameShown = true }
                             playStateDidChanged { state, _ -> ctx.onPlayStateChanged(state) }
@@ -126,7 +139,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                     }
                 }
                 // 代理/打开失败时明确提示，而不是停在“加载中”
-                if (ctx.playError != null) {
+                vif({ ctx.playError != null }) {
                     View {
                         attr { allCenter(); size(pagerData.pageViewWidth, 80f) }
                         Text {
@@ -139,7 +152,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                     }
                 }
                 // 首帧未显示 + loading 提示（Phase 0.3 简化）
-                if (!ctx.firstFrameShown && ctx.playUrl != null) {
+                vif({ !ctx.firstFrameShown && ctx.playUrl != null }) {
                     View {
                         attr { allCenter(); size(pagerData.pageViewWidth, 80f) }
                         Text {
