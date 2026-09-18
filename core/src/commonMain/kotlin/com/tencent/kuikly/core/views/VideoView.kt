@@ -32,6 +32,16 @@ class VideoView : DeclarativeBaseView<VideoAttr, VideoEvent>() {
         return ViewConst.TYPE_VIDEO_VIEW
     }
 
+    /**
+     * 进入/退出全屏。
+     *
+     * 由原生侧负责屏幕方向（iOS 旋转到横屏 / 退出时回竖屏），
+     * 页面自身负责全屏下的布局（隐藏导航栏、视频铺满等）。
+     */
+    fun setFullscreen(fullscreen: Boolean) {
+        renderView?.callMethod("setFullscreen", if (fullscreen) "1" else "0")
+    }
+
 }
 
 /**

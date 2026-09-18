@@ -350,6 +350,17 @@ iOS 侧的坑（都已修）：
   同时在 `didMoveToWindow:`（window 为 nil）与 `removeFromSuperview` 里 `pause` + 停表。
   验证靠 WMPlayer 自带的 `NSLog(@"WMPlayer dealloc")` 与 CoreAudio 的
   `AudioQueue has stopped`：退出后应立即出现，且之后音频渲染日志为 0。
+- **iOS 播放器实现已从 WMPlayer 换成系统 AVPlayer + AVPlayerLayer**（`iosApp/.../KRVideoViewHandler.m`）。
+  原因：WMPlayer 5.0 会**无条件创建自己的一整套控件**（左上关闭、播放/暂停、进度条、全屏按钮），
+  无法关闭，会叠在 Kuikly 自绘控件上形成「多余的按钮」；且它还存在 `+IsiPhoneX` 访问 delegate.window 崩溃、
+  `resetWMPlayer` 不摘周期观察者导致 `syncScrubber` 整数除零（SIGFPE）等问题。
+  AVPlayerLayer 没有自带 UI，并已实现进度轮询 / 首帧（KVO `readyForDisplay`）/ 失败与播完回调。
+  注意：实现 `KRVideoViewProtocol` 的类**必须显式 `@synthesize krv_delegate;`** ——
+  协议里声明的属性不会自动合成，否则 `KRVideoView` 设置该属性时会 `doesNotRecognizeSelector` 崩溃。
+- **全屏/横屏**：`VideoView` 增加 `setFullscreen(Boolean)`（走 `renderView.callMethod`），
+  页面用 `ref { }` 拿到 `ViewRef<VideoView>` 再调用（`ref` 给的是 `ViewRef<T>`，取实例要用 `.view`）。
+  iOS 侧 `krv_setFullscreen:` 请求方向：iOS 16+ 用 `UIWindowScene.requestGeometryUpdateWithPreferences:`，
+  低版本回落 `UIDevice`；`Info.plist` 已声明 Landscape，页面在全屏时用 `vif` 隐藏导航栏。
 - **不要在 teardown 里调 WMPlayer 的 `resetWMPlayer`**。它只把 `currentItem`/`player` 置 nil，
   **不摘除** `addPeriodicTimeObserverForInterval:` 注册的观察者；观察者随后再触发一次
   `syncScrubber` 时 `currentItem` 已为 nil → 内部 `currentTime.timescale` 为 0 →

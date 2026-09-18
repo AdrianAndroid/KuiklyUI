@@ -17,6 +17,7 @@ package com.tencent.kuikly.demo.pages.sftp
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
+import com.tencent.kuikly.core.base.ViewRef
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.directives.vif
@@ -70,6 +71,10 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var muted: Boolean by observable(false)
     /** 是否正在播放（驱动 playControl 与按钮图标） */
     private var isPlaying: Boolean by observable(true)
+    /** 是否全屏（全屏时隐藏导航栏，原生侧旋转屏幕） */
+    private var isFullscreen: Boolean by observable(false)
+    /** Video 视图引用：用于调用原生能力（如全屏旋转） */
+    private var videoViewRef: ViewRef<VideoView>? = null
     /** 是否正在拖动进度条 */
     private var draggingProgress: Boolean by observable(false)
     /** 拖动中的比例（0..1），拖动时以它显示，松手才真正 seek（避免拖一次发几十次 seek） */
@@ -152,7 +157,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         return {
             attr { backgroundColor(Color.BLACK) }
 
-            // 顶部导航栏：之前播放页没有返回入口，进来只能关窗口（体验缺陷）
+            // 顶部导航栏（全屏时隐藏，把空间让给画面）
+            vif({ !ctx.isFullscreen }) {
             View {
                 attr {
                     size(pagerData.pageViewWidth, 56f)
@@ -178,6 +184,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                     }
                 }
             }
+            }
 
             // 视频容器：占据窗口剩余高度，画面按 contain 等比缩放（随窗口自适应）
             View {
@@ -186,6 +193,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                 // 时首次求值为 null，Video 视图不会被创建，之后也不会重建（=黑屏）。
                 vif({ ctx.playUrl != null }) {
                     Video {
+                        ref { ctx.videoViewRef = it }
                         attr {
                             // 必须给 Video 尺寸：只给外层容器尺寸时 Video 高度为 0，
                             // VLC 渲染视图高度也是 0（黑屏）。这里跟随容器填满。
@@ -352,6 +360,18 @@ internal class SftpPlayerPage : SftpBasePager() {
                             }
                         }
                     }
+                    // 全屏
+                    View {
+                        attr { size(40f, 40f); allCenter(); marginLeft(8f); accessibility(SftpAccessibility.BTN_FULLSCREEN) }
+                        event { click { ctx.toggleFullscreen() } }
+                        Text {
+                            attr {
+                                text(if (ctx.isFullscreen) "⤡" else "⛶")
+                                fontSize(16f)
+                                color(Color.WHITE)
+                            }
+                        }
+                    }
                     // 上一集 / 选集 / 下一集
                     View {
                         attr { size(40f, 40f); allCenter(); marginLeft(16f); accessibility(SftpAccessibility.BTN_PREV_EPISODE) }
@@ -488,6 +508,12 @@ internal class SftpPlayerPage : SftpBasePager() {
             sftpMediaProxyModule().unregisterToken(tk)
         }
         acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+    }
+
+    /** 切换全屏：页面隐藏导航栏，原生侧负责屏幕旋转 */
+    private fun toggleFullscreen() {
+        isFullscreen = !isFullscreen
+        videoViewRef?.view?.setFullscreen(isFullscreen)
     }
 
     private fun togglePlay() {

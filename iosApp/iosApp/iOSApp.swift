@@ -15,12 +15,12 @@
 
 import SwiftUI
 
-/// 仅供第三方库使用的 AppDelegate。
+/// 供第三方库/系统使用的 AppDelegate。
 ///
-/// WMPlayer 5.0 的 `+[WMPlayer IsiPhoneX]` 里访问 `UIApplication.sharedApplication.delegate.window`
-/// （`UIApplicationDelegate.window` 是 optional 属性）。SwiftUI 生命周期下系统 delegate 不实现
-/// `window`，会触发 `doesNotRecognizeSelector:` → 崩溃（打开视频即崩）。
-/// 这里提供一个带 `window` 属性的 delegate，让该库能正常取到（nil 也安全，只是判定非刘海屏）。
+/// `UIApplicationDelegate.window` 是 optional 属性，而 SwiftUI 生命周期下系统 delegate
+/// 并不实现它；访问 `UIApplication.sharedApplication.delegate.window` 的库会触发
+/// `doesNotRecognizeSelector:` 崩溃（历史上 WMPlayer 5.0 的 +IsiPhoneX 就是这样崩的）。
+/// 这里提供一个带 `window` 属性的 delegate，让这类访问安全（nil 也可接受）。
 class KuiklyAppDelegate: NSObject, UIApplicationDelegate {
     var window: UIWindow?
 }

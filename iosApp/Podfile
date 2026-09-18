@@ -7,7 +7,9 @@ target 'iosApp' do
   pod 'SDWebImage', '~> 5.20.1'
   pod 'OpenKuiklyIOSRender', :path => '../'
   pod 'demo', :path => '../demo'
-  pod 'WMPlayer', "~> 5.0" # 第三方播放器库
+  # 视频播放改用系统 AVPlayer + AVPlayerLayer（见 iosApp/.../KRVideoViewHandler.m）。
+  # 原 WMPlayer 5.0 会无条件创建自带控件（关闭/播放/进度/全屏）无法关闭，
+  # 且存在 +IsiPhoneX 访问 delegate.window 崩溃、resetWMPlayer 不摘周期观察者导致除零等问题。
   pod 'libpag', "~> 4.3.21"
   # SFTP client deps (§2 / §3 / §21.1.1)
   # SSH/SFTP：与 macOS 使用同一个 ridenui fork（2.7.2，内置 libssh2 1.10.0）。
