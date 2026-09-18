@@ -35,12 +35,18 @@ static VideoViewCreator gVideoViewCreator;
 @property (nonatomic, strong) NSString *css_src;
 /** 上次 seek 到的位置，用于对重复下发的属性去重 */
 @property (nonatomic, assign) NSInteger lastSeekMs;
+@property (nonatomic, strong) NSNumber *p_appliedSeekMs;
 /// 播控操作属性
 @property (nonatomic, strong) NSNumber *css_playControl;
+/** 真正已下发给播放器的值；视图重建时清空以强制重放 */
+@property (nonatomic, strong) NSNumber *p_appliedPlayControl;
+/** 播放器尚未进入可播放态时收到的 seek，先存起来，起播后再补发 */
+@property (nonatomic, assign) NSInteger p_pendingSeekMs;
 /// 画面拉伸模式
 @property (nonatomic, strong) NSString *css_resizeMode;
 /// 静音属性
 @property (nonatomic, strong) NSNumber *css_muted;
+@property (nonatomic, strong) NSNumber *p_appliedMuted;
 /// 倍速属性
 @property (nonatomic, strong) NSNumber *css_rate;
 /// 首帧事件
@@ -96,14 +102,60 @@ static VideoViewCreator gVideoViewCreator;
 }
 
 - (void)setCss_seekTo:(NSNumber *)css_seekTo {
-    // 属性可能因其他状态变化而被重复下发，这里去重，避免每帧都 seek
-    if (_lastSeekMs == css_seekTo.intValue) {
+    NSInteger targetMs = css_seekTo.integerValue;
+    // 约定：负值表示「未请求 seek」，直接忽略（避免首帧前下发 seekTo(0) 打断起播）
+    if (targetMs < 0) {
         return;
     }
-    _lastSeekMs = css_seekTo.intValue;
-    if ([_videoView respondsToSelector:@selector(krv_seekToTime:)]) {
-        [_videoView krv_seekToTime:(NSUInteger)css_seekTo.intValue];
+    // 属性可能因其他状态变化而被重复下发，这里去重，避免每帧都 seek
+    if (_p_appliedSeekMs && _p_appliedSeekMs.intValue == targetMs) {
+        return;
     }
+
+    NSInteger currentMs = 0;
+    if ([_videoView respondsToSelector:@selector(krv_currentTimeMs)]) {
+        currentMs = [_videoView krv_currentTimeMs];
+    }
+    // 兜底：若业务把「播放进度」误绑到 seekTo，会出现每秒一次进度的 seek 风暴，
+    // 每次都让 VLC flush + 重缓冲（表现为播放卡顿）。这里丢弃与播放器当前时间
+    // 接近（<1.5s）的 seek 请求；真正的手动跳转差值通常远大于该阈值。
+    if (currentMs > 0 && labs((long)(targetMs - currentMs)) < 1500) {
+        _p_appliedSeekMs = css_seekTo;
+        _lastSeekMs = targetMs;
+        return;
+    }
+
+    // 播放器还没起播（Opening/Buffering/ESAdded）时 seek 会打断 VLC 的启动序列，
+    // 甚至让状态停在 Paused。先暂存，等进入 Playing 再补发。
+    if (![self p_isPlayerPlayable]) {
+        _p_pendingSeekMs = targetMs;
+        _p_appliedSeekMs = css_seekTo;
+        _lastSeekMs = targetMs;
+        return;
+    }
+
+    _lastSeekMs = targetMs;
+    _p_appliedSeekMs = css_seekTo;
+    if ([_videoView respondsToSelector:@selector(krv_seekToTime:)]) {
+        [_videoView krv_seekToTime:(NSUInteger)targetMs];
+    }
+}
+
+/** 播放器是否已进入可接受 seek 的状态 */
+- (BOOL)p_isPlayerPlayable {
+    if (!_videoView) {
+        return NO;
+    }
+    if ([_videoView respondsToSelector:@selector(krv_currentTimeMs)] &&
+        [_videoView krv_currentTimeMs] > 0) {
+        return YES;
+    }
+    if ([_videoView respondsToSelector:@selector(krv_playState)]) {
+        NSInteger st = [_videoView krv_playState];
+        // VLC: 5=Playing 6=Paused 3=Ended 0=Stopped
+        return (st == 5 || st == 6 || st == 3 || st == 0);
+    }
+    return NO;
 }
 
 - (void)setCss_resizeMode:(NSString *)css_resizeMode {
@@ -118,6 +170,15 @@ static VideoViewCreator gVideoViewCreator;
 }
 
 - (void)setCss_playControl:(NSNumber *)css_playControl {
+    // attr 块只要有任一被依赖的状态变化就会整体重算，playControl 往往被一同重复下发。
+    // 不去重的话会在播放中反复调用 krv_play（并可能打断/重启解码），表现为卡顿。
+    // 注意：去重看的是「已真正下发给播放器」的值（p_appliedPlayControl），
+    // 而不是 css_playControl —— 视图尚未创建时下发会被丢弃，创建后必须能重放。
+    if (_p_appliedPlayControl && _p_appliedPlayControl.intValue == css_playControl.intValue) {
+        _css_playControl = css_playControl;
+        return;
+    }
+    _p_appliedPlayControl = css_playControl;
     _css_playControl = css_playControl;
     switch ([css_playControl intValue]) {
         case KRVideoViewPlayControlPreplay:
@@ -138,6 +199,11 @@ static VideoViewCreator gVideoViewCreator;
 }
 
 - (void)setCss_muted:(NSNumber *)css_muted {
+    if (_p_appliedMuted && _p_appliedMuted.boolValue == css_muted.boolValue) {
+        _css_muted = css_muted;
+        return;
+    }
+    _p_appliedMuted = css_muted;
     _css_muted = css_muted;
     [_videoView krv_setMuted:[_css_muted boolValue]];
 }
@@ -195,6 +261,11 @@ static VideoViewCreator gVideoViewCreator;
         NSAssert([_videoView isKindOfClass:[UIView class]], @"videoView需要为UIView的子类");
         [self addSubview:(UIView *)_videoView];
         ((UIView *)_videoView).frame = self.bounds;
+        // 新播放器还没有收到过任何属性，清空标记以强制重放
+        _p_appliedPlayControl = nil;
+        _p_appliedMuted = nil;
+        _p_appliedSeekMs = nil;
+        _p_pendingSeekMs = 0;
         [self setCss_resizeMode:_css_resizeMode];
         [self setCss_muted:_css_muted];
         if (_css_rate) {

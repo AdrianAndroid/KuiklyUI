@@ -86,6 +86,12 @@ typedef id<KRVideoViewProtocol> _Nonnull (^VideoViewCreator)(NSString *src, CGRe
 - (void)krv_seekToTime:(NSUInteger)seekTotime;
 
 @optional
+
+/** 当前播放时间（毫秒）；未实现时返回 0。用于丢弃「把播放进度误绑到 seekTo」造成的 seek 风暴 */
+- (NSInteger)krv_currentTimeMs;
+
+/** 原生播放器状态（VLC: 0=Stopped 3=Ended 5=Playing 6=Paused）；未实现返回 -1 */
+- (NSInteger)krv_playState;
 /*
  * kuikly侧设置的属性，一般用于业务扩展使用
  */

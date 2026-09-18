@@ -32,10 +32,16 @@
 @property (nonatomic, assign) LIBSSH2_SFTP *sftp;          // 本句柄独占
 @property (nonatomic, assign) LIBSSH2_SFTP_HANDLE *handle; // 只读打开
 @property (nonatomic, assign) long long size;
+/** 预读缓存：顺序播放时 VLC 会连续请求多个小 Range，命中缓存可避免重复走 SFTP */
+@property (nonatomic, strong) NSMutableData *cache;
+@property (nonatomic, assign) long long cacheStart;
 @end
 
 @implementation KRSftpOpenFile
 @end
+
+/** 每次未命中时至少读取的字节数（预读单位） */
+static const long long kKRReadAheadUnit = 2 * 1024 * 1024;
 
 static NSMutableDictionary<NSString *, KRSftpOpenFile *> *gHandles;
 static long long gHandleIdCounter = 0;
@@ -133,24 +139,48 @@ static NSLock *gHandleLock;
         return [NSData data]; // 读到文件尾
     }
 
-    NSMutableData *out = [NSMutableData dataWithCapacity:(NSUInteger)length];
-    libssh2_sftp_seek64(open.handle, (uint64_t)offset);
+    // 1) 命中预读缓存直接返回（顺序播放时绝大多数请求都会命中）
+    if (open.cache.length > 0 &&
+        offset >= open.cacheStart &&
+        offset + length <= open.cacheStart + (long long)open.cache.length) {
+        NSUInteger local = (NSUInteger)(offset - open.cacheStart);
+        return [open.cache subdataWithRange:NSMakeRange(local, (NSUInteger)length)];
+    }
 
-    while ((int)out.length < length) {
+    // 2) 未命中：按预读单位读取并缓存。
+    //    只读「本次需要 + 预读」的量，避免为了回一个 Range 把整段几十 MB 读完，
+    //    那样首字节延迟过高，播放器会一直缓冲并反复重发同一个 Range。
+    long long readStart = offset;
+    long long want = MAX((long long)length, kKRReadAheadUnit);
+    if (open.size > 0) {
+        want = MIN(want, open.size - readStart);
+    }
+    if (want <= 0) return [NSData data];
+
+    NSMutableData *chunk = [NSMutableData dataWithCapacity:(NSUInteger)want];
+    libssh2_sftp_seek64(open.handle, (uint64_t)readStart);
+    while ((long long)chunk.length < want) {
         char buf[64 * 1024];
-        size_t want = MIN(sizeof(buf), (size_t)(length - (int)out.length));
-        ssize_t n = libssh2_sftp_read(open.handle, buf, want);
+        size_t ask = (size_t)MIN(sizeof(buf), (size_t)(want - (long long)chunk.length));
+        ssize_t n = libssh2_sftp_read(open.handle, buf, ask);
         if (n > 0) {
-            [out appendBytes:buf length:(NSUInteger)n];
+            [chunk appendBytes:buf length:(NSUInteger)n];
             continue;
         }
-        if (n == 0) break;                    // EOF
-        if (n == LIBSSH2_ERROR_EAGAIN) continue; // 阻塞模式下通常会重试
+        if (n == 0) break;                        // EOF
+        if (n == LIBSSH2_ERROR_EAGAIN) continue;  // 阻塞模式下重试
         [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp] read error %ld at offset=%lld (id=%@)",
                               (long)n, offset, fileHandleId]];
         break;
     }
-    return out;
+
+    open.cache = chunk;
+    open.cacheStart = readStart;
+
+    if (chunk.length <= (NSUInteger)length) {
+        return chunk;
+    }
+    return [chunk subdataWithRange:NSMakeRange(0, (NSUInteger)length)];
 #else
     @throw [NSException exceptionWithName:@"SftpNotImplementedException"
                                    reason:@"NMSSH not available"

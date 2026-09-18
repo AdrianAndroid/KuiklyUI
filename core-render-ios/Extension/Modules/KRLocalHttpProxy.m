@@ -25,7 +25,7 @@
 static const int kPortMin = 18080;
 static const int kPortMax = 18089;
 static const NSTimeInterval kTTL = 2 * 60 * 60;            // token TTL 2 小时（§21.3.3）
-static const NSInteger kMaxRangeBytes = 16 * 1024 * 1024;   // 单次 Range 最多 8MB，避免大文件整体进内存
+static const NSInteger kMaxRangeBytes = 2 * 1024 * 1024;   // 单次 Range 最多 8MB，避免大文件整体进内存
 static const NSInteger kStreamChunkBytes = 256 * 1024;
 
 /** 一个播放 token 对应一次远端文件的流式读取（§21.3.3） */

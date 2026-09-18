@@ -146,6 +146,16 @@
     self.mediaPlayer.rate = rate;
 }
 
+- (NSInteger)krv_currentTimeMs {
+    if (!self.mediaPlayer) return 0;
+    return self.mediaPlayer.time.intValue;  // VLCKit 的 VLCTime 以毫秒为单位
+}
+
+- (NSInteger)krv_playState {
+    if (!self.mediaPlayer) return -1;
+    return (NSInteger)self.mediaPlayer.state;
+}
+
 - (void)krv_seekToTime:(NSUInteger)seekTotime {
     if (!self.mediaPlayer) {
         return;

@@ -29,6 +29,7 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpAccessibility
@@ -345,13 +346,19 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
     connectionsProvider: () -> ObservableList<SftpConnection>,
     onClick: (SftpConnection) -> Unit
 ) {
-    View {
-        attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
+    Scroller {
+        attr {
+            flex(1f)
+            width(pagerData.pageViewWidth)
+            showScrollerIndicator(true)
+            flexDirectionColumn()
+            backgroundColor(SftpColorTokens.bg)
+        }
         // vfor：列表变化按 diff 更新（否则非空→非空的变化不会重建分支，列表会陈旧）
         vfor(connectionsProvider) { conn ->
             View {
                 attr {
-                    width(pagerData.pageViewWidth)
+                    width(pagerData.pageViewWidth - 8f)   // 预留滚动条宽度
                     padding(16f, 12f, 16f, 12f)
                     backgroundColor(SftpColorTokens.cardBg)
                     flexDirectionRow()
@@ -380,12 +387,18 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
 
 /** 收藏列表渲染 */
 internal fun ViewContainer<*, *>.SftpFavoritesList(itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>) {
-    View {
-        attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
+    Scroller {
+        attr {
+            flex(1f)
+            width(pagerData.pageViewWidth)
+            showScrollerIndicator(true)
+            flexDirectionColumn()
+            backgroundColor(SftpColorTokens.bg)
+        }
         vfor(itemsProvider) { fav ->
             View {
                 attr {
-                    width(pagerData.pageViewWidth)
+                    width(pagerData.pageViewWidth - 8f)   // 预留滚动条宽度
                     padding(16f, 12f, 16f, 12f)
                     backgroundColor(SftpColorTokens.cardBg)
                     flexDirectionRow()
@@ -413,12 +426,18 @@ internal fun ViewContainer<*, *>.SftpFavoritesList(itemsProvider: () -> Observab
 
 /** 历史列表渲染 */
 internal fun ViewContainer<*, *>.SftpHistoryList(itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>) {
-    View {
-        attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
+    Scroller {
+        attr {
+            flex(1f)
+            width(pagerData.pageViewWidth)
+            showScrollerIndicator(true)
+            flexDirectionColumn()
+            backgroundColor(SftpColorTokens.bg)
+        }
         vfor(itemsProvider) { rec ->
             View {
                 attr {
-                    width(pagerData.pageViewWidth)
+                    width(pagerData.pageViewWidth - 8f)   // 预留滚动条宽度
                     padding(16f, 12f, 16f, 12f)
                     backgroundColor(SftpColorTokens.cardBg)
                     flexDirectionRow()

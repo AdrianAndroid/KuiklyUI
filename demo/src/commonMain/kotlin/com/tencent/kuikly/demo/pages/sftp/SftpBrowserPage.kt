@@ -29,6 +29,7 @@ import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.module.sftp.SftpConnectParam
 import com.tencent.kuikly.core.module.sftp.SftpEntry
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpAccessibility
@@ -199,15 +200,24 @@ internal fun ViewContainer<*, *>.SftpEntriesView(
     entriesProvider: () -> ObservableList<SftpEntry>,
     onClick: (SftpEntry) -> Unit
 ) {
-    View {
-        attr { flex(1f); backgroundColor(SftpColorTokens.bg) }
+    // 必须放在滚动容器里：此前行直接铺在普通 View 上，没有滚动能力，
+    // 目录条目超过一屏后就再也够不到（文件浏览器基本不可用）。
+    Scroller {
+        attr {
+            flex(1f)
+            width(pagerData.pageViewWidth)
+            showScrollerIndicator(true)
+            flexDirectionColumn()
+            backgroundColor(SftpColorTokens.bg)
+        }
         // 用 vfor：条目列表变化时按 diff 增删行。
         // 若直接把 List 作为入参放进 vif 分支，分支条件（isEmpty）不变时不会重建，
         // 切目录后列表会一直是旧的（表现为「点了没反应」）。
         vfor(entriesProvider) { entry ->
             View {
                 attr {
-                    width(pagerData.pageViewWidth)
+                    // 预留滚动条宽度，否则右侧大小列被裁掉
+                    width(pagerData.pageViewWidth - 8f)
                     padding(16f, 12f, 16f, 12f)
                     backgroundColor(SftpColorTokens.cardBg)
                     flexDirectionRow()

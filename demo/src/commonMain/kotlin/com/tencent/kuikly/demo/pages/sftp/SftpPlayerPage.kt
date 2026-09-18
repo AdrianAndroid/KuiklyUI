@@ -22,6 +22,7 @@ import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord
 import com.tencent.kuikly.core.datetime.DateTime
@@ -58,20 +59,34 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var size: Long = 0L
     // 播放进度与状态都要可观察：控制条依赖它们实时刷新
     private var duration: Int by observable(0)
+    /** 仅用于「显示」的播放进度：由 playTimeDidChanged 刷新 */
     private var currentPosition: Int by observable(0)
+    /**
+     * 仅用于「下发 seek」的目标位置。
+     * 千万不要把它和 currentPosition 合成一个变量：那样每次进度回调都会改写
+     * seekTo 属性，导致每秒一次真实 seek（VLC 每次都 flush + 重缓冲）＝播放卡顿。
+     */
+    private var seekTarget: Int by observable(-1)   // -1 = 未请求 seek（避免起播前下发 seekTo(0)）
+    private var muted: Boolean by observable(false)
     /** 是否正在播放（驱动 playControl 与按钮图标） */
     private var isPlaying: Boolean by observable(true)
+    /** 是否正在拖动进度条 */
+    private var draggingProgress: Boolean by observable(false)
+    /** 拖动中的比例（0..1），拖动时以它显示，松手才真正 seek（避免拖一次发几十次 seek） */
+    private var dragRatio: Float by observable(0f)
 
     private var token: String? = null
     private var playUrl: String? by observable(null)
     private var playError: String? by observable(null)
-    private var hasResumePromptShown: Boolean = false
+    private var hasResumePromptShown: Boolean by observable(false)
     private var resumePosition: Long = 0L
-    private var nextEpisodeCountdown: Int = 0
-    private var showCountdown: Boolean = false
-    private var episodes: List<String> = emptyList()  // 同目录下的视频列表（§19.3.5 自动下一集）
-    private var currentIndex: Int = 0
+    private var nextEpisodeCountdown: Int by observable(0)
+    private var showCountdown: Boolean by observable(false)
+    private var episodes: List<String> by observable(emptyList())  // 同目录下的视频列表（§19.3.5 自动下一集）
+    private var currentIndex: Int by observable(0)
     private var firstFrameShown: Boolean by observable(false)
+    /** 已落历史的整秒，避免同一秒重复写盘 */
+    private var lastSavedSecond: Int = -1
 
     override fun created() {
         super.created()
@@ -82,7 +97,27 @@ internal class SftpPlayerPage : SftpBasePager() {
         remotePath = params.optString("remotePath", "")
         name = params.optString("name", "")
         size = params.optLong("size", 0L)
+        loadEpisodes()
         startPlayback()
+    }
+
+    /**
+     * 拉取同目录视频列表，供「上一集 / 下一集 / 选集」使用。
+     * 之前 episodes 一直是空列表，这三个按钮点了没有任何反应。
+     */
+    private fun loadEpisodes() {
+        val dir = remotePath.substringBeforeLast('/', "")
+        if (dir.isEmpty()) return
+        val sid = sessionId.ifEmpty { connectionId }
+        sftpModule().list(sid, dir) { entries, _, _ ->
+            val videos = entries
+                .filter { !it.isDir && it.name.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS }
+                .map { it.path }
+                .sorted()
+            if (videos.isEmpty()) return@list
+            episodes = videos
+            currentIndex = videos.indexOf(remotePath).coerceAtLeast(0)
+        }
     }
 
     private fun startPlayback() {
@@ -117,6 +152,31 @@ internal class SftpPlayerPage : SftpBasePager() {
         return {
             attr { backgroundColor(Color.BLACK) }
 
+            // 顶部导航栏：之前播放页没有返回入口，进来只能关窗口（体验缺陷）
+            View {
+                attr {
+                    size(pagerData.pageViewWidth, 56f)
+                    flexDirectionRow()
+                    alignItemsCenter()
+                    padding(16f, 8f, 16f, 8f)
+                    backgroundColor(Color(0xFF1A1A1A))
+                }
+                View {
+                    attr { size(36f, 36f); allCenter(); accessibility(SftpAccessibility.BTN_BACK) }
+                    event { click { ctx.closeSelf() } }
+                    Text { attr { text("<"); fontSize(22f); color(Color.WHITE) } }
+                }
+                Text {
+                    attr {
+                        text(ctx.name)
+                        fontSize(15f)
+                        color(Color.WHITE)
+                        flex(1f)
+                        marginLeft(8f)
+                    }
+                }
+            }
+
             // 视频容器：占据窗口剩余高度，画面按 contain 等比缩放（随窗口自适应）
             View {
                 attr { flex(1f); width(pagerData.pageViewWidth); backgroundColor(Color.BLACK) }
@@ -134,8 +194,10 @@ internal class SftpPlayerPage : SftpBasePager() {
                             // 关键：不设 playControl 时 VLC 只创建播放器不会起播，
                             // 也就不会向本地代理发起 Range 请求（表现为黑屏且代理无请求）
                             playControl(if (ctx.isPlaying) VideoPlayControl.PLAY else VideoPlayControl.PAUSE)
-                            // seekTo 以属性下发；原生侧对相同值去重，不会每帧重复 seek
-                            seekTo(ctx.currentPosition)
+                            muted(ctx.muted)
+                            // 只下发「显式 seek 目标」，绝不下发播放进度，
+                            // 否则每秒的进度回调都会变成一次真实 seek（卡顿根因）
+                            seekTo(ctx.seekTarget)
                         }
                         event {
                             firstFrameDidDisplay { ctx.firstFrameShown = true }
@@ -180,21 +242,50 @@ internal class SftpPlayerPage : SftpBasePager() {
                     flexDirectionColumn()
                     backgroundColor(Color(0xFF101010))
                 }
-                // 进度条
+                // 进度条（可拖动：按下/移动预览，松手才 seek）
                 View {
                     attr {
                         width(pagerData.pageViewWidth - 32f)
-                        height(4f)
-                        borderRadius(2f)
-                        backgroundColor(Color(0xFF3A3A3A))
+                        height(24f)          // 触摸区比视觉高度大，便于拖拽
+                        justifyContentCenter()
+                        backgroundColor(Color(0x00000000))
                     }
+                    // 轨道
                     View {
                         attr {
-                            width((pagerData.pageViewWidth - 32f) * ctx.progressRatio())
+                            width(pagerData.pageViewWidth - 32f)
                             height(4f)
                             borderRadius(2f)
-                            backgroundColor(Color(0xFF3D7EFF))
+                            backgroundColor(Color(0xFF3A3A3A))
                         }
+                        // 已播部分 + 滑块
+                        View {
+                            attr {
+                                width((pagerData.pageViewWidth - 32f) * ctx.displayRatio())
+                                height(4f)
+                                borderRadius(2f)
+                                backgroundColor(Color(0xFF3D7EFF))
+                                justifyContentCenter()
+                            }
+                            // 滑块（跟随右端，拖动时变大提示）
+                            View {
+                                attr {
+                                    positionAbsolute()
+                                    right(-6f)
+                                    size(if (ctx.draggingProgress) 14f else 10f,
+                                          if (ctx.draggingProgress) 14f else 10f)
+                                    borderRadius(7f)
+                                    backgroundColor(Color(0xFFFFFFFF))
+                                    marginTop(-5f)
+                                }
+                            }
+                        }
+                    }
+                    event {
+                        touchDown { p -> ctx.beginDragProgress(p.x) }
+                        touchMove { p -> ctx.updateDragProgress(p.x) }
+                        touchUp { _ -> ctx.endDragProgress() }
+                        touchCancel { _ -> ctx.endDragProgress() }
                     }
                 }
                 // 时间
@@ -238,6 +329,18 @@ internal class SftpPlayerPage : SftpBasePager() {
                         event { click { ctx.seekBy(10_000) } }
                         Text { attr { text("⏩"); fontSize(16f); color(Color.WHITE) } }
                     }
+                    // 静音开关
+                    View {
+                        attr { size(40f, 40f); allCenter(); marginLeft(8f) }
+                        event { click { ctx.muted = !ctx.muted } }
+                        Text {
+                            attr {
+                                text(if (ctx.muted) "🔇" else "🔊")
+                                fontSize(15f)
+                                color(Color.WHITE)
+                            }
+                        }
+                    }
                     // 上一集 / 选集 / 下一集
                     View {
                         attr { size(40f, 40f); allCenter(); marginLeft(16f); accessibility(SftpAccessibility.BTN_PREV_EPISODE) }
@@ -273,10 +376,11 @@ internal class SftpPlayerPage : SftpBasePager() {
                     resumeMs = ctx.resumePosition,
                     onContinue = {
                         ctx.hasResumePromptShown = false
-                        // TODO Phase 0.3: 调 videoView.seekTo(resumePosition)
+                        ctx.applySeek(ctx.resumePosition.toInt())   // 真正跳到上次位置
                     },
                     onRestart = {
                         ctx.hasResumePromptShown = false
+                        ctx.applySeek(0)                            // 从头播
                     }
                 )
             }
@@ -300,7 +404,7 @@ internal class SftpPlayerPage : SftpBasePager() {
         }
     }
 
-    private var showEpisodeDrawer: Boolean = false
+    private var showEpisodeDrawer: Boolean by observable(false)
 
     private fun onPlayStateChanged(state: PlayState) {
         when (state) {
@@ -309,10 +413,12 @@ internal class SftpPlayerPage : SftpBasePager() {
             else -> {}
         }
         if (state == PlayState.PLAY_END) {
-            // §19.3.5 自动下一集：3s 倒计时
+            // §19.3.5 自动下一集：3s 倒计时（此前只赋值不递减，弹层永远停在 3s）
             sftpPlaybackHistoryModule().markCompleted(connectionId, remotePath) { _, _ -> }
+            if (episodes.isEmpty() || currentIndex >= episodes.size - 1) return
             nextEpisodeCountdown = 3
             showCountdown = true
+            tickCountdown()
         }
     }
 
@@ -322,20 +428,73 @@ internal class SftpPlayerPage : SftpBasePager() {
         return (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
     }
 
+    /** 进度条显示用比例：拖动中显示拖动位置，否则显示真实进度 */
+    private fun displayRatio(): Float = if (draggingProgress) dragRatio else progressRatio()
+
+    private fun ratioFromX(x: Float): Float {
+        val w = pagerData.pageViewWidth - 32f
+        if (w <= 0f) return 0f
+        return (x / w).coerceIn(0f, 1f)
+    }
+
+    private fun beginDragProgress(x: Float) {
+        draggingProgress = true
+        dragRatio = ratioFromX(x)
+    }
+
+    private fun updateDragProgress(x: Float) {
+        dragRatio = ratioFromX(x)
+    }
+
+    /** 松手才落到真实进度，触发一次 seek */
+    private fun endDragProgress() {
+        if (!draggingProgress) return
+        draggingProgress = false
+        if (duration > 0) {
+            val target = (duration * dragRatio).toInt().coerceIn(0, duration)
+            applySeek(target)
+        }
+    }
+
+    /** 显式跳转：更新显示位置 + 下发 seek（progress 回调不会走这里） */
+    private fun applySeek(targetMs: Int) {
+        val clamped = if (duration > 0) targetMs.coerceIn(0, duration) else targetMs.coerceAtLeast(0)
+        currentPosition = clamped
+        seekTarget = clamped
+    }
+
+    /** 返回上一页（离开前落一次播放历史并释放代理 token） */
+    private fun closeSelf() {
+        if (duration > 0 && currentPosition > 0) {
+            savePlaybackHistory(currentPosition.toLong(), duration.toLong(), false)
+        }
+        token?.let { tk ->
+            token = null
+            sftpMediaProxyModule().unregisterToken(tk)
+        }
+        acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+    }
+
     private fun togglePlay() {
         isPlaying = !isPlaying   // 驱动 playControl(PLAY/PAUSE)
     }
 
     private fun seekBy(deltaMs: Int) {
         if (duration <= 0) return
-        currentPosition = (currentPosition + deltaMs).coerceIn(0, duration)
+        applySeek(currentPosition + deltaMs)
     }
 
     private fun onPlayTimeChanged(cur: Int, total: Int) {
-        currentPosition = cur
+        // 拖动进度条期间不要被播放回调覆盖显示值
+        if (!draggingProgress) currentPosition = cur
         if (total > 0) duration = total
-        // §19.3.3 每 5s 落一次历史
-        if (cur > 0 && cur % 5 == 0 && duration > 0) {
+        // §19.3.3 每 5s 落一次历史。
+        // 注意：cur/total 单位是**毫秒**——之前写成 `cur % 5 == 0` 是按秒的直觉，
+        // 毫秒下几乎每个回调都命中，导致每帧写一次磁盘（卡顿 + 日志刷屏）。
+        if (duration <= 0) return
+        val curSec = cur / 1000
+        if (curSec > 0 && curSec % 5 == 0 && curSec != lastSavedSecond) {
+            lastSavedSecond = curSec
             savePlaybackHistory(cur.toLong(), duration.toLong(), false)
         }
     }
@@ -354,6 +513,20 @@ internal class SftpPlayerPage : SftpBasePager() {
             size = size
         )
         sftpPlaybackHistoryModule().upsert(record) { _, _ -> }
+    }
+
+    /** 每秒递减；到 0 自动切下一集 */
+    private fun tickCountdown() {
+        setTimeout(1000) {
+            if (!showCountdown) return@setTimeout
+            nextEpisodeCountdown -= 1
+            if (nextEpisodeCountdown <= 0) {
+                showCountdown = false
+                playNextEpisode()
+            } else {
+                tickCountdown()
+            }
+        }
     }
 
     private fun playNextEpisode() {
@@ -390,6 +563,10 @@ internal class SftpPlayerPage : SftpBasePager() {
 
     companion object {
         const val PAGE_NAME = "SftpPlayerPage"
+
+        /** 视为「可连播」的扩展名（§19.3.5 自动下一集） */
+        private val VIDEO_EXTENSIONS =
+            setOf("mp4", "m4v", "mov", "mkv", "avi", "webm", "ts", "flv", "wmv")
     }
 }
 

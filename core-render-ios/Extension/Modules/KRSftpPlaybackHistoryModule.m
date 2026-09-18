@@ -115,8 +115,13 @@ static dispatch_queue_t KRSftpPlaybackHistoryModuleSerialQueue(void) {
     dispatch_async(KRSftpPlaybackHistoryModuleSerialQueue(), ^{
         NSArray *all = [self loadAll];
         NSMutableArray *result = [NSMutableArray array];
+        // connectionId 为空表示「全连接」：首页的全局历史 Tab 需要跨连接列出，
+        // 之前按空串精确匹配会永远查不到任何记录（历史 Tab 恒为空）。
+        BOOL allConnections = (connectionId.length == 0);
         for (NSDictionary *item in all) {
-            if ([item[@"connectionId"] isEqualToString:connectionId]) [result addObject:item];
+            if (allConnections || [item[@"connectionId"] isEqualToString:connectionId]) {
+                [result addObject:item];
+            }
         }
         NSArray *sorted = [result sortedArrayUsingDescriptors:@[
             [NSSortDescriptor sortDescriptorWithKey:@"lastPlayedAt" ascending:NO]
