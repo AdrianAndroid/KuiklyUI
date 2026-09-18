@@ -3731,3 +3731,23 @@ jobs:
 | Web/小程序 | 无（浏览器沙箱） | 不启本地代理 | 走后端网关代理 Range（§5.6） |
 
 > 建议顺序：**Android 优先**（用户量最大、JSch 生态成熟），跑通后再对齐 HarmonyOS。
+
+### 23.7 测试服务器（内网低敏，供开发直接使用）
+
+| 项 | 值 |
+|----|----|
+| host | `192.168.2.2` |
+| port | `22` |
+| user | `zhaojian` |
+| password | `zhaojian` |
+| remoteHome | `/home/zhaojian` |
+
+> 这是局域网内的 Ubuntu/OpenSSH 测试机，**已获授权入库**，便于后续开发直接联调。
+> 生产环境凭据/ token 仍禁止入仓。
+
+已在该机器上验证通过：连接、浏览、`stat`、递归 `mkdir`/`rm`、`rename`/`move`、`copy`（含目录递归）、
+`chmod`/`chown`/`setMtime`、`upload`/`download`（逐块校验和比对）、`batchTask`、
+随机读（offset/EOF/越界/全文件校验和）、本地代理 HTTP Range（206 / Content-Range / 后缀 Range / 越界裁剪）、
+收藏与播放历史与连接配置 CRUD。
+
+跑全量集成自测见 `AGENTS.md` §13.5 / §13.6（`SftpIntegrationTestPage`，74 项断言，日志 tag `SftpTest`）。

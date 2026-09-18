@@ -299,11 +299,41 @@ macApp/build/DerivedData/Build/Products/Debug/macApp.app/Contents/MacOS/macApp
 （CGEvent 驱动，配合 `screencapture -R` 截窗口）。要点：先 `activate` 应用再点击；滚动列表要用滚轮事件而非拖拽；
 输入用 CGEvent unicode（AppleScript `keystroke` 对数字/符号不可靠）。
 
-### 13.6 测试服务器
+### 13.6 测试服务器（内网测试机，凭据见下）
 
-本地有一台 Linux/OpenSSH 测试机可用（真实跑通了连接/浏览/上传下载/批量/流式播放）。
-**主机、账号、密码一律不写入仓库**，需要时由使用者通过 pageData 注入（见 13.5）。
-验证媒体能力可在服务器放测试素材（`ffmpeg` 生成彩条+时间码视频最直观）。
+一台局域网内的 Linux/OpenSSH 测试机，真实跑通了连接 / 浏览 / 上传下载 / 批量 / 流式播放：
+
+| 项 | 值 |
+|----|----|
+| host | `192.168.2.2` |
+| port | `22` |
+| user | `zhaojian` |
+| password | `zhaojian` |
+| remoteHome | `/home/zhaojian` |
+
+> 说明：这是**内网低敏测试机**（用户明确同意入库），仅为便于后续开发直接使用。
+> 真实/生产环境的凭据、token **仍然不得写入仓库**。
+
+**跑全量集成自测**（`SftpIntegrationTestPage`，74 项逐条断言）：
+临时把 `macApp/macApp/ContentView.swift` 指向该页并注入参数：
+
+```swift
+KuiklyNavigationViewPage(pageName: "SftpIntegrationTestPage", data: [
+    "host": "192.168.2.2", "port": 22,
+    "user": "zhaojian", "password": "zhaojian",
+    "remoteHome": "/home/zhaojian",
+])
+```
+然后按 13.5 构建/运行（记得 `KUIKLY_SUPPRESS_ERROR_ALERT=1`），结果看日志 tag `SftpTest`。
+测完记得把 `ContentView` 改回 `SftpHomePage`。
+
+**验证媒体能力**：在服务器放测试素材，`ffmpeg` 生成彩条 + 大号时间码视频最直观（seek 落点一眼可辨）：
+```bash
+ffmpeg -y -f lavfi -i "testsrc=size=640x360:rate=25:duration=60" \
+  -f lavfi -i "sine=frequency=440:duration=60" \
+  -vf "drawtext=fontfile=/System/Library/Fonts/Supplemental/Arial.ttf:text='%{eif\\:t\\:d}s':fontsize=96:fontcolor=white:x=20:y=20:box=1:boxcolor=black@0.6" \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart -c:a aac -shortest /tmp/kr_long.mp4
+```
 
 ---
 
@@ -312,5 +342,5 @@ macApp/build/DerivedData/Build/Products/Debug/macApp.app/Contents/MacOS/macApp
 - 本文件由维护者随项目演进同步更新。新增 Module/View/平台支持/重大架构变更时必须更新第 2、6、7、9 节。
 - 新增专题方案文档时，在第 11 节登记。
 - **改动 SFTP 客户端 / 本地媒体代理 / Kuikly 页面响应式**时，必须同步更新第 13 节与 `docs/SFTP-Client.md`（尤其 §23）。
-- 凭据、内网地址、token 不得写入仓库（第 13.6 节）。
+- **生产环境**凭据、token 不得写入仓库；内网测试机凭据集中在第 13.6 节（低敏、已获授权）。
 - 详细开发规范、模块结构、代码模式以本文件 + `openspec/config.yaml` 为准；如有冲突以 `openspec/config.yaml` 为准。
