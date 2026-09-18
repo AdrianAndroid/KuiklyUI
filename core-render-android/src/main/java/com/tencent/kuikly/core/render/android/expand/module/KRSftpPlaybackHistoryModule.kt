@@ -15,6 +15,7 @@
 package com.tencent.kuikly.core.render.android.expand.module
 
 import com.tencent.kuikly.core.render.android.css.ktx.toJSONObjectSafely
+import com.tencent.kuikly.core.render.android.css.ktx.toMap
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderBaseModule
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderCallback
 import org.json.JSONArray
@@ -28,7 +29,9 @@ import org.json.JSONObject
  */
 class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
 
-    private val storage by lazy { SftpPlaybackHistoryStorage(context) }
+    // 注意：不能用 by lazy 缓存 —— 模块是全局单例，首次访问时 context 可能尚未注入，
+    // 一旦缓存成 prefs 为 null 的实例，之后所有读写都会静默失效（表现为 add 返回 id 但 list 为空）。
+    private fun storage(): SftpPlaybackHistoryStorage = SftpPlaybackHistoryStorage(context)
 
     override fun call(method: String, params: String?, callback: KuiklyRenderCallback?): Any? {
         return when (method) {
@@ -47,7 +50,7 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                storage.upsert(json)
+                storage().upsert(json)
                 callback?.invoke(mapOf("ok" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -59,7 +62,7 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                val record = storage.get(json.optString("connectionId"), json.optString("remotePath"))
+                val record = storage().get(json.optString("connectionId"), json.optString("remotePath"))
                 if (record != null) {
                     callback?.invoke(mapOf("record" to record.toMap()))
                 } else {
@@ -75,10 +78,10 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                val records = storage.listByDirectory(json.optString("connectionId"), json.optString("directoryPath"))
-                val arr = JSONArray()
-                records.forEach { arr.put(it) }
-                callback?.invoke(mapOf("records" to arr))
+                val records = storage().listByDirectory(json.optString("connectionId"), json.optString("directoryPath"))
+                val result = JSONObject()
+                result.put("records", arrOf(records))
+                callback?.invoke(result.toMap())
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
@@ -89,10 +92,10 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                val records = storage.listByConnection(json.optString("connectionId"))
-                val arr = JSONArray()
-                records.forEach { arr.put(it) }
-                callback?.invoke(mapOf("records" to arr))
+                val records = storage().listByConnection(json.optString("connectionId"))
+                val result = JSONObject()
+                result.put("records", arrOf(records))
+                callback?.invoke(result.toMap())
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
@@ -103,7 +106,7 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                storage.remove(json.optString("id"))
+                storage().remove(json.optString("id"))
                 callback?.invoke(mapOf("ok" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -115,7 +118,7 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                storage.clearByConnection(json.optString("connectionId"))
+                storage().clearByConnection(json.optString("connectionId"))
                 callback?.invoke(mapOf("ok" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -127,12 +130,19 @@ class KRSftpPlaybackHistoryModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                storage.markCompleted(json.optString("connectionId"), json.optString("remotePath"))
+                storage().markCompleted(json.optString("connectionId"), json.optString("remotePath"))
                 callback?.invoke(mapOf("ok" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
         }
+    }
+
+    /** JSONObject/JSONArray 统一转成可过桥的结构（与 KRSftpModule 保持一致） */
+    private fun arrOf(items: List<JSONObject>): JSONArray {
+        val arr = JSONArray()
+        items.forEach { arr.put(it) }
+        return arr
     }
 
     private fun executeOnSubThread(block: () -> Unit) {

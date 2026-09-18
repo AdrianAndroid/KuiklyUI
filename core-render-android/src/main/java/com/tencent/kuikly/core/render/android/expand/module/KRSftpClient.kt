@@ -19,6 +19,7 @@ import com.jcraft.jsch.JSch
 import com.jcraft.jsch.SftpException
 import com.jcraft.jsch.Session
 import org.json.JSONObject
+import java.util.Vector
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -132,8 +133,8 @@ object KRSftpClient {
         val fileHandleId = "fh-${fileHandleIdCounter.incrementAndGet()}"
         val channel = session.createChannel()
         channel.connect()
-        val input = channel.get(remotePath)  // SFTPInputStream-like (JSch returns InputStream)
-        fileHandles[fileHandleId] = SftpFileHandle(fileHandleId, channel, input, remotePath)
+        // 不预取顺序流：JSch 的 InputStream 只能顺序读，随机读在 read() 里按 offset 打开
+        fileHandles[fileHandleId] = SftpFileHandle(fileHandleId, channel, remotePath)
         return fileHandleId
     }
 
@@ -146,16 +147,24 @@ object KRSftpClient {
         fileHandles.remove(fileHandleId)?.close()
     }
 
-    fun download(params: JSONObject): Float {
+    /**
+     * 下载远端文件到宿主缓存目录，返回本地绝对路径。
+     *
+     * 之前硬编码 `/data/data/com.tencent.kuikly.demo/cache/...`：既是别的应用包名
+     * （必然写失败），也只把文件名当作路径回传。
+     */
+    fun download(params: JSONObject): String {
         val sessionId = params.optString("sessionId")
         val remotePath = params.optString("remotePath")
-        val localName = params.optString("localName")
-        val session = sessions[sessionId] ?: throw IllegalStateException("invalid sessionId")
-        // TODO Phase 1.1: 接入本地缓存路径 + 进度回调
-        session.withChannel { channel ->
-            channel.get(remotePath, "/data/data/com.tencent.kuikly.demo/cache/$localName")
+        val localName = params.optString("localName").ifEmpty { remotePath.substringAfterLast('/') }
+        val cacheDir = params.optString("cacheDir").ifEmpty {
+            throw IllegalStateException("cacheDir required")
         }
-        return 1.0f
+        val session = sessions[sessionId] ?: throw IllegalStateException("invalid sessionId")
+        val dir = java.io.File(cacheDir).apply { if (!exists()) mkdirs() }
+        val dest = java.io.File(dir, localName.ifEmpty { "download" })
+        session.withChannel { channel -> channel.get(remotePath, dest.absolutePath) }
+        return dest.absolutePath
     }
 
     fun upload(params: JSONObject): Float {
@@ -243,21 +252,64 @@ object KRSftpClient {
         val sessionId = params.optString("sessionId")
         val srcPath = params.optString("srcPath")
         val destPath = params.optString("destPath")
+        val cacheDir = params.optString("cacheDir").ifEmpty {
+            throw IllegalStateException("cacheDir required")
+        }
         val session = sessions[sessionId] ?: throw IllegalStateException("invalid sessionId")
-        // JSch 不直接支持 SFTP copy，需要 get + put
-        // TODO Phase 1.2: 用 SFTPInputStream + SFTPOutputStream 流式 copy
+        val dir = java.io.File(cacheDir).apply { if (!exists()) mkdirs() }
+        var copied = 0
+        var failed = 0
         session.withChannel { channel ->
-            // 简化：下载到临时文件再上传
-            val tmpPath = "/data/data/com.tencent.kuikly.demo/cache/.sftp-tmp-${System.currentTimeMillis()}"
-            channel.get(srcPath, tmpPath)
-            channel.put(tmpPath, destPath)
-            java.io.File(tmpPath).delete()
+            copyEntry(channel, dir, srcPath, destPath, 0, { copied++ }, { failed++ })
         }
         val result = JSONObject()
-        result.put("success", true)
-        result.put("copiedCount", 1)
-        result.put("failedCount", 0)
+        result.put("success", failed == 0)
+        result.put("copiedCount", copied)
+        result.put("failedCount", failed)
         return result
+    }
+
+    /**
+     * 远端→远端复制：SFTP 无服务端拷贝原语，文件走「下载到临时文件 → 上传」，目录递归；
+     * 临时文件放在宿主 cacheDir。
+     */
+    private fun copyEntry(
+        channel: ChannelSftp,
+        tmpDir: java.io.File,
+        src: String,
+        dest: String,
+        depth: Int,
+        onCopied: () -> Unit,
+        onFailed: () -> Unit
+    ) {
+        if (depth > 64) { onFailed(); return }
+        val stat = try { channel.stat(src) } catch (e: Exception) {
+            onFailed(); return
+        }
+        if (stat.isDir) {
+            try { mkdirs(channel, dest) } catch (e: Exception) { /* 已存在 */ }
+            @Suppress("UNCHECKED_CAST")
+            val vector = try { channel.ls(src) as Vector<ChannelSftp.LsEntry> } catch (e: Exception) {
+                onFailed(); return
+            }
+            for (e in vector) {
+                if (e.filename == "." || e.filename == "..") continue
+                val childSrc = if (src.endsWith("/")) "$src${e.filename}" else "$src/${e.filename}"
+                val childDest = if (dest.endsWith("/")) "$dest${e.filename}" else "$dest/${e.filename}"
+                copyEntry(channel, tmpDir, childSrc, childDest, depth + 1, onCopied, onFailed)
+            }
+            return
+        }
+        val tmp = java.io.File(tmpDir, ".sftp-copy-${System.nanoTime()}")
+        try {
+            channel.get(src, tmp.absolutePath)
+            channel.put(tmp.absolutePath, dest)
+            onCopied()
+        } catch (e: Exception) {
+            onFailed()
+        } finally {
+            tmp.delete()
+        }
     }
 
     fun chmod(params: JSONObject) {
@@ -280,20 +332,80 @@ object KRSftpClient {
     fun setMtime(params: JSONObject) {
         val sessionId = params.optString("sessionId")
         val remotePath = params.optString("remotePath")
-        val mtime = params.optInt("mtime")
-        val atime = params.optInt("atime", mtime)
+        // 上层传的是毫秒；SFTP setMtime 只接受秒级 int（JSch 0.1.55 仅有 (path, mtime) 两参版本）
+        val mtime = (params.optLong("mtime") / 1000L).toInt()
         val session = sessions[sessionId] ?: throw IllegalStateException("invalid sessionId")
-        // JSch ChannelSftp.setMtime(path, mtime, atime) 两个 int 参数（秒级 epoch）
-        session.withChannel { channel -> channel.setMtime(remotePath, mtime, atime) }
+        session.withChannel { channel -> channel.setMtime(remotePath, mtime) }
     }
 
+    /**
+     * 批量任务：按 action 分发 DELETE/MOVE/COPY/DOWNLOAD。
+     *
+     * 之前直接 `return 1.0f` 伪报成功（§13.3 禁止）：出错必须抛出并由上层转错误码，
+     * 否则用户会以为批量操作成功了。
+     */
     fun batchTask(params: JSONObject): Float {
-        // TODO Phase 1.2: 接入批量任务调度（DELETE/MOVE/COPY/DOWNLOAD）
+        val sessionId = params.optString("sessionId")
+        val action = params.optString("action").ifEmpty { "DELETE" }.uppercase()
+        val targetDir = params.optString("targetDir")
+        val cacheDir = params.optString("cacheDir")
+        val itemsArr = params.optJSONArray("items") ?: throw IllegalArgumentException("items required")
+        if (itemsArr.length() == 0) throw IllegalArgumentException("items required")
+        val session = sessions[sessionId] ?: throw IllegalStateException("invalid sessionId")
+
+        val failures = mutableListOf<String>()
+        session.withChannel { channel ->
+            for (i in 0 until itemsArr.length()) {
+                val item = itemsArr.optString(i)
+                if (item.isEmpty()) continue
+                try {
+                    when (action) {
+                        "DELETE" -> rmRecursive(channel, item)
+                        "MOVE" -> {
+                            val dest = destPathFor(item, targetDir)
+                            mkdirs(channel, dest.substringBeforeLast('/', "/"))
+                            channel.rename(item, dest)
+                        }
+                        "COPY" -> {
+                            if (cacheDir.isEmpty()) throw IllegalStateException("cacheDir required")
+                            val dest = destPathFor(item, targetDir)
+                            mkdirs(channel, dest.substringBeforeLast('/', "/"))
+                            val dir = java.io.File(cacheDir).apply { if (!exists()) mkdirs() }
+                            var failed = false
+                            copyEntry(channel, dir, item, dest, 0, {}, { failed = true })
+                            if (failed) throw IllegalStateException("copy failed")
+                        }
+                        "DOWNLOAD" -> {
+                            if (cacheDir.isEmpty()) throw IllegalStateException("cacheDir required")
+                            val dir = java.io.File(cacheDir).apply { if (!exists()) mkdirs() }
+                            channel.get(item, java.io.File(dir, item.substringAfterLast('/')).absolutePath)
+                        }
+                        else -> throw IllegalArgumentException("unsupported action: $action")
+                    }
+                } catch (e: Exception) {
+                    failures.add("$item: ${e.message}")
+                }
+            }
+        }
+        if (failures.isNotEmpty()) {
+            throw IllegalStateException(
+                "batch $action failed ${failures.size}/${itemsArr.length()}: ${failures.first()}"
+            )
+        }
         return 1.0f
     }
 
+    /** 批量操作目标路径：targetDir + 原文件名 */
+    private fun destPathFor(srcPath: String, targetDir: String): String {
+        val name = srcPath.substringAfterLast('/')
+        if (targetDir.isEmpty()) return srcPath
+        return if (targetDir.endsWith("/")) "$targetDir$name" else "$targetDir/$name"
+    }
+
+    /** 批量取消：同步串行执行无法中断，显式记录而非静默（§13.3） */
     fun cancelBatchTask(taskId: String) {
-        // TODO Phase 1.2
+        com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
+            .krLogAdapter?.e("KRSftpClient", "cancelBatchTask($taskId) no-op: 同步执行无法中断")
     }
 
     /** 关闭所有 session（应用退出时调） */
@@ -335,25 +447,38 @@ private class SftpSession(val id: String, val session: Session) {
     }
 }
 
-/** 流式读文件句柄 */
+/**
+ * 随机读文件句柄。
+ *
+ * JSch 的 `get(src)` 返回的是**只能顺序读**的流，之前实现直接对它 `skip(offset)`：
+ * offset 会被当成「相对当前位置」的位移，且多次 read 后位置早已推进 ——
+ * 随机读返回错位数据，播放器解析 MP4 直接失败。
+ * 这里改用 `get(src, monitor, skip)`：JSch 会把 skip 作为 SFTP 读偏移下发
+ * （不会真的传输被跳过的字节），因此每次都能按绝对偏移取到正确数据。
+ */
 private class SftpFileHandle(
     val id: String,
     val channel: ChannelSftp,
-    val input: java.io.InputStream,
     val remotePath: String
 ) {
     fun read(offset: Long, length: Int): ByteArray {
-        // JSch 不直接支持 random access；这里用 channel.get(remotePath, OutputStream, monitor, resume, offset)
-        // 简化：用 input.skip + read
-        val skipped = input.skip(offset)
-        if (skipped < offset) return ByteArray(0)
-        val buf = ByteArray(length)
-        val read = input.read(buf)
-        return if (read > 0) buf.copyOf(read) else ByteArray(0)
+        if (length <= 0) return ByteArray(0)
+        val stream = channel.get(remotePath, null, offset)
+        try {
+            val buf = ByteArray(length)
+            var total = 0
+            while (total < length) {
+                val n = stream.read(buf, total, length - total)
+                if (n <= 0) break
+                total += n
+            }
+            return if (total == length) buf else buf.copyOf(total)
+        } finally {
+            try { stream.close() } catch (e: Exception) { /* ignore */ }
+        }
     }
 
     fun close() {
-        try { input.close() } catch (e: Exception) { }
         channel.disconnect()
     }
 }

@@ -32,7 +32,7 @@ class SftpFavoritesStorage(private val context: Context?) {
     }
 
     fun add(item: JSONObject): String {
-        val id = if (item.has("id")) item.optString("id") else UUID.randomUUID().toString()
+        val id = item.optString("id").ifEmpty { UUID.randomUUID().toString() } // 空 id 视为未提供
         item.put("id", id)
         if (!item.has("starredAt")) item.put("starredAt", System.currentTimeMillis())
         val all = loadAll()

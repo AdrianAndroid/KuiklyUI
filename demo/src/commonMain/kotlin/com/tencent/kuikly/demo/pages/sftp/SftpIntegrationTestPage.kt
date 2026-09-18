@@ -19,6 +19,7 @@ import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.log.KLog
 import com.tencent.kuikly.core.module.FileModule
 import com.tencent.kuikly.core.module.Module
+import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.module.sftp.AuthMethod
 import com.tencent.kuikly.core.module.sftp.OverwriteMode
 import com.tencent.kuikly.core.module.sftp.SftpBatchAction
@@ -92,6 +93,9 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
     private var user = ""
     private var password = ""
     private var remoteHome = ""
+    /** 可选：连接成功后直接打开的播放路径（端到端播放验证） */
+    private var playPath = ""
+    private var playPathSize = 0L
 
     /** 屏幕上的实时状态，便于截图确认进度 */
     private var status: String by observable("准备中…")
@@ -172,6 +176,8 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
         user = params.optString("user", "")
         password = params.optString("password", "")
         remoteHome = params.optString("remoteHome", "")
+        playPath = params.optString("playPath", "")
+        playPathSize = params.optLong("playPathSize", 0L)
         baseDir = "$remoteHome/sftp_kuikly_it"
         favoriteConnectionId = "it_conn_${host}_${user}"
         buildSteps()
@@ -693,6 +699,25 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
             }
         }
 
+        // ---------- 端到端播放验证（pageData.playPath 非空时执行）----------
+        // 用途：三端统一地验证「本地代理 + SFTP 随机读 + 播放器」整条链路，
+        // 避免依赖手工在文件浏览器里逐层点击（各端目录排序不同，点击不稳定）。
+        if (playPath.isNotEmpty()) {
+            step("openPlayer($playPath)") { next ->
+                val p = JSONObject()
+                p.put("sessionId", sessionId)
+                p.put("connectionId", favoriteConnectionId)
+                p.put("connectionLabel", "IT")
+                p.put("remotePath", playPath)
+                p.put("name", playPath.substringAfterLast('/'))
+                p.put("size", playPathSize)
+                acquireModule<com.tencent.kuikly.core.module.RouterModule>(
+                    com.tencent.kuikly.core.module.RouterModule.MODULE_NAME
+                ).openPage("SftpPlayerPage", p)
+                next(true, "player opened for $playPath")
+            }
+        }
+
         // ---------- 清理 ----------
         step("rm(file copied.txt)") { next ->
             sftpModule().rm(sessionId, "$baseDir/copied.txt", false) { ok, err ->
@@ -720,7 +745,7 @@ internal class SftpIntegrationTestPage : SftpBasePager() {
             }
         }
         // 需要从 HTTP 层用 curl 独立验证代理时置 true：保留会话不 disconnect，便于外部请求
-        if (!HOLD_SESSION_FOR_EXTERNAL_VERIFY) {
+        if (!HOLD_SESSION_FOR_EXTERNAL_VERIFY && playPath.isEmpty()) {
             step("disconnect") { next ->
                 sftpModule().disconnect(sessionId) {
                     next(true, "disconnect called")

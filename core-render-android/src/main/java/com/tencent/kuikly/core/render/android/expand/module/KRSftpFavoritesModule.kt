@@ -15,6 +15,7 @@
 package com.tencent.kuikly.core.render.android.expand.module
 
 import com.tencent.kuikly.core.render.android.css.ktx.toJSONObjectSafely
+import com.tencent.kuikly.core.render.android.css.ktx.toMap
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderBaseModule
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderCallback
 import org.json.JSONArray
@@ -32,7 +33,9 @@ import org.json.JSONObject
  */
 class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
 
-    private val storage by lazy { SftpFavoritesStorage(context) }
+    // 注意：不能用 by lazy 缓存 —— 模块是全局单例，首次访问时 context 可能尚未注入，
+    // 一旦缓存成 prefs 为 null 的实例，之后所有读写都会静默失效（表现为 add 返回 id 但 list 为空）。
+    private fun storage(): SftpFavoritesStorage = SftpFavoritesStorage(context)
 
     override fun call(method: String, params: String?, callback: KuiklyRenderCallback?): Any? {
         return when (method) {
@@ -51,7 +54,7 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                val id = storage.add(json)
+                val id = storage().add(json)
                 callback?.invoke(mapOf("id" to id))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -63,7 +66,7 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                storage.remove(json.optString("id"))
+                storage().remove(json.optString("id"))
                 callback?.invoke(mapOf("ok" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -75,7 +78,7 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                val removedCount = storage.removeByConnection(json.optString("connectionId"))
+                val removedCount = storage().removeByConnection(json.optString("connectionId"))
                 callback?.invoke(mapOf("ok" to true, "removedCount" to removedCount))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -90,10 +93,12 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
                 val connectionId = if (json.has("connectionId")) json.optString("connectionId") else null
                 val sortBy = json.optString("sortBy", "STARRED_AT")
                 val sortOrder = json.optString("sortOrder", "DESC")
-                val items = storage.list(connectionId, sortBy, sortOrder)
-                val arr = JSONArray()
-                items.forEach { arr.put(it) }
-                callback?.invoke(mapOf("items" to arr))
+                val items = storage().list(connectionId, sortBy, sortOrder)
+                // 必须用 JSONObject + toMap()：裸 JSONArray 无法过桥，
+                // Kotlin 侧会拿不到数组（表现为列表恒为空）。KRSftpModule.list 就是这么返回的。
+                val result = JSONObject()
+                result.put("items", arrOf(items))
+                callback?.invoke(result.toMap())
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
@@ -104,7 +109,7 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                val id = storage.findId(json.optString("connectionId"), json.optString("remotePath"))
+                val id = storage().findId(json.optString("connectionId"), json.optString("remotePath"))
                 callback?.invoke(mapOf("id" to (id ?: "")))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -116,7 +121,7 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
-                storage.update(json.optString("id"), json)
+                storage().update(json.optString("id"), json)
                 callback?.invoke(mapOf("ok" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
@@ -129,14 +134,23 @@ class KRSftpFavoritesModule : KuiklyRenderBaseModule() {
             try {
                 val json = params.toJSONObjectSafely()
                 val keyword = json.optString("keyword")
-                val items = storage.search(keyword)
-                val arr = JSONArray()
-                items.forEach { arr.put(it) }
-                callback?.invoke(mapOf("items" to arr))
+                val items = storage().search(keyword)
+                // 必须用 JSONObject + toMap()：裸 JSONArray 无法过桥，
+                // Kotlin 侧会拿不到数组（表现为列表恒为空）。KRSftpModule.list 就是这么返回的。
+                val result = JSONObject()
+                result.put("items", arrOf(items))
+                callback?.invoke(result.toMap())
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
         }
+    }
+
+    /** JSONObject/JSONArray 统一转成可过桥的结构（与 KRSftpModule 保持一致） */
+    private fun arrOf(items: List<JSONObject>): JSONArray {
+        val arr = JSONArray()
+        items.forEach { arr.put(it) }
+        return arr
     }
 
     private fun executeOnSubThread(block: () -> Unit) {

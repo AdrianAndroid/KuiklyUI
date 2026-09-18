@@ -48,6 +48,14 @@ import com.tencent.kuikly.core.render.android.expand.module.KRKeyboardModule
 import com.tencent.kuikly.core.render.android.expand.module.KRSharedPreferencesModule
 import com.tencent.kuikly.core.render.android.expand.module.KRMemoryCacheModule
 import com.tencent.kuikly.core.render.android.expand.module.KRNetworkModule
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpModule
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpFavoritesModule
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpFavoritesModuleHolder
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpPlaybackHistoryModule
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpPlaybackHistoryModuleHolder
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpConnectionModule
+import com.tencent.kuikly.core.render.android.expand.module.KRSftpConnectionModuleHolder
+import com.tencent.kuikly.core.render.android.expand.module.KRLocalMediaProxyModule
 import com.tencent.kuikly.core.render.android.expand.module.KRNotifyModule
 import com.tencent.kuikly.core.render.android.expand.module.KRPerformanceModule
 import com.tencent.kuikly.core.render.android.expand.module.KRRouterModule
@@ -539,6 +547,9 @@ open class KuiklyRenderViewBaseDelegator(private val delegate: KuiklyRenderViewB
             }
             moduleExport(KRSftpConnectionModule.MODULE_NAME) {
                 KRSftpConnectionModuleHolder.instance
+            }
+            moduleExport(KRLocalMediaProxyModule.MODULE_NAME) {
+                KRLocalMediaProxyModule()
             }
             delegate.registerExternalModule(this) // 代理给外部，让宿主工程可以暴露自己的module
             delegate.registerTDFModule(this)

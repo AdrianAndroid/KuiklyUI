@@ -32,7 +32,7 @@ class SftpPlaybackHistoryStorage(private val context: Context?) {
     }
 
     fun upsert(record: JSONObject) {
-        val id = if (record.has("id")) record.optString("id") else buildId(record)
+        val id = record.optString("id").ifEmpty { buildId(record) } // 空 id 视为未提供
         record.put("id", id)
         val all = loadAll()
         var found = false

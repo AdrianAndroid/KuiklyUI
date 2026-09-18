@@ -16,7 +16,6 @@ package com.tencent.kuikly.core.render.android.expand.module
 
 import com.tencent.kuikly.core.render.android.adapter.KuiklyRenderLog
 import fi.iki.elonen.NanoHTTPD
-import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -25,56 +24,83 @@ import java.util.concurrent.ConcurrentHashMap
  * - 基于 NanoHTTPD；端口 18080-18089 fallback
  * - URL 格式：`http://127.0.0.1:<port>/<token>/<fileName>`
  * - Token TTL 2 小时，每次 read 续期（§21.3.3）
- * - 支持 HTTP Range 请求（§21.3.4）
- * - 通过 [KRSftpClient.read] 流式读 SFTP 文件
+ * - 支持 HTTP Range 请求（§21.3.4）：把播放器的 Range 转成 SFTP 的随机读
+ *   （[KRSftpClient.openRead] 懒打开 + [KRSftpClient.read] 按偏移读）
  *
- * **Phase 1 简化**：当前用 RandomAccessFile 演示；Phase 1.2 改为通过 sessionId 调用 [KRSftpClient.read]
+ * 与 macOS/iOS 端语义保持一致：
+ * - 只回「客户端请求的区间」，单次不超过 [MAX_CHUNK_BYTES]，播放器会继续请求后续区间；
+ * - 首位字节无需读完整个文件即可下发（避免高首字节延迟导致播放器反复重发同一 Range）；
+ * - 未实现/打开失败一律显式返回错误码，**绝不伪报成功**（§13.3）。
  */
 class LocalHttpProxyServer private constructor(port: Int) : NanoHTTPD(port) {
 
     private val tokens = ConcurrentHashMap<String, ProxyToken>()
-    private val lock = Any()
-
-    init {
-        // 启动 server；启动失败在 start() 抛
-    }
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri  // e.g. "/<token>/<fileName>"
         val pathParts = uri.trimStart('/').split('/', limit = 2)
-        if (pathParts.size < 2) return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "invalid url")
+        if (pathParts.size < 2) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "invalid url")
+        }
         val token = pathParts[0]
-        val fileName = pathParts[1]
 
-        val tokenInfo = tokens[token] ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "token expired")
+        val tokenInfo = tokens[token]
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "token not found")
         if (tokenInfo.isExpired()) {
-            tokens.remove(token)
+            releaseToken(token, tokenInfo)
             return newFixedLengthResponse(Response.Status.GONE, "text/plain", "token expired")
         }
-
-        // 续期
         tokenInfo.renew()
 
-        // 处理 Range
-        val rangeHeader = session.headers["range"]
+        // 懒打开远端读句柄：注册 token 时不占资源，首次请求才真正 open
+        val handleId = try {
+            tokenInfo.fileHandleId ?: KRSftpClient
+                .openRead(tokenInfo.sessionId, tokenInfo.remotePath)
+                .also { tokenInfo.fileHandleId = it }
+        } catch (e: Exception) {
+            KuiklyRenderLog.e(TAG, "open remote failed: ${tokenInfo.remotePath}, ${e.message}")
+            return newFixedLengthResponse(
+                Response.Status.INTERNAL_ERROR, "text/plain", "open failed: ${e.message}"
+            )
+        }
+
         val totalSize = tokenInfo.totalSize
-        val (start, end) = parseRange(rangeHeader, totalSize)
-        val length = end - start + 1
+        val rangeHeader = session.headers["range"]
+        val range = parseRange(rangeHeader, totalSize)
+        if (range == null) {
+            // 起点越界（如播放器的 bytes=<size>- 探测）：按 HTTP 语义返回 416
+            val resp = newFixedLengthResponse(Response.Status.RANGE_NOT_SATISFIABLE, "text/plain", "")
+            resp.addHeader("Content-Range", "bytes */$totalSize")
+            return resp
+        }
 
-        // Phase 1.2: 这里应该通过 sessionId 调用 KRSftpClient.read
-        // 当前简化：直接返回 200 OK 占位
-        // 真实实现：
-        // val bytes = KRSftpClient.read(tokenInfo.fileHandleId, start, length.toInt())
-        // val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, tokenInfo.mime, bytes.inputStream(), length)
-        // response.addHeader("Content-Range", "bytes $start-$end/$totalSize")
+        val start = range.first
+        // 单次响应上限：避免为了回一个 Range 读入过多数据；播放器会请求后续区间
+        val end = minOf(range.second, start + MAX_CHUNK_BYTES - 1)
+        val length = (end - start + 1).toInt()
 
-        // Phase 1 stub：返回空内容
-        val response = newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
+        val bytes = try {
+            KRSftpClient.read(handleId, start, length)
+        } catch (e: Exception) {
+            KuiklyRenderLog.e(TAG, "read failed: offset=$start len=$length, ${e.message}")
+            return newFixedLengthResponse(
+                Response.Status.INTERNAL_ERROR, "text/plain", "read failed: ${e.message}"
+            )
+        }
+
+        val status = if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            Response.Status.PARTIAL_CONTENT
+        } else {
+            Response.Status.OK
+        }
+        val response = newFixedLengthResponse(
+            status, mimeOf(tokenInfo.remotePath), bytes.inputStream(), bytes.size.toLong()
+        )
         response.addHeader("Accept-Ranges", "bytes")
-        response.addHeader("Content-Length", length.toString())
-        if (rangeHeader != null) {
+        if (status == Response.Status.PARTIAL_CONTENT) {
             response.addHeader("Content-Range", "bytes $start-$end/$totalSize")
         }
+        response.addHeader("Cache-Control", "no-store")
         return response
     }
 
@@ -93,7 +119,17 @@ class LocalHttpProxyServer private constructor(port: Int) : NanoHTTPD(port) {
     }
 
     fun unregisterToken(token: String) {
+        tokens.remove(token)?.let { releaseToken(token, it) }
+    }
+
+    /** 释放 token 持有的远端读句柄，避免泄漏 SFTP channel */
+    private fun releaseToken(token: String, info: ProxyToken) {
         tokens.remove(token)
+        info.fileHandleId?.let { handleId ->
+            runCatching { KRSftpClient.close(handleId) }
+                .onFailure { KuiklyRenderLog.e(TAG, "close handle failed: ${it.message}") }
+        }
+        info.fileHandleId = null
     }
 
     private fun generateToken(): String =
@@ -103,21 +139,76 @@ class LocalHttpProxyServer private constructor(port: Int) : NanoHTTPD(port) {
             bytes.joinToString("") { String.format("%02x", it) }
         }
 
-    private fun parseRange(rangeHeader: String?, totalSize: Long): Pair<Long, Long> {
-        if (rangeHeader == null || !rangeHeader.startsWith("bytes=")) return Pair(0, totalSize - 1)
-        val rangeStr = rangeHeader.removePrefix("bytes=").trim()
-        if (rangeStr.isEmpty()) return Pair(0, totalSize - 1)
-        val dashIdx = rangeStr.indexOf('-')
-        val start = rangeStr.substring(0, dashIdx).toLong()
-        val endStr = rangeStr.substring(dashIdx + 1)
-        val end = if (endStr.isEmpty()) totalSize - 1 else endStr.toLong()
-        return Pair(start, end.coerceAtMost(totalSize - 1))
+    /**
+     * 解析 `bytes=start-end` / `bytes=start-` / `bytes=-suffix`。
+     * 返回 null 表示起点越界（不可满足，应回 416）。
+     */
+    private fun parseRange(rangeHeader: String?, totalSize: Long): Pair<Long, Long>? {
+        if (rangeHeader == null || !rangeHeader.startsWith("bytes=") || totalSize <= 0) {
+            return Pair(0, (totalSize - 1).coerceAtLeast(0))
+        }
+        val spec = rangeHeader.removePrefix("bytes=").trim()
+        if (spec.contains(',')) return Pair(0, totalSize - 1)   // 多段不支持，退化为整段
+        val dashIdx = spec.indexOf('-')
+        if (dashIdx < 0) return Pair(0, totalSize - 1)
+
+        val startStr = spec.substring(0, dashIdx)
+        val endStr = spec.substring(dashIdx + 1)
+
+        if (startStr.isEmpty()) {
+            // 后缀 Range：最后 N 字节
+            val suffix = endStr.toLongOrNull() ?: return Pair(0, totalSize - 1)
+            if (suffix <= 0) return null
+            val start = (totalSize - suffix).coerceAtLeast(0)
+            return Pair(start, totalSize - 1)
+        }
+
+        val start = startStr.toLongOrNull() ?: return Pair(0, totalSize - 1)
+        if (start >= totalSize) return null          // 起点越界 → 416
+        val end = if (endStr.isEmpty()) totalSize - 1
+                  else (endStr.toLongOrNull() ?: (totalSize - 1)).coerceAtMost(totalSize - 1)
+        if (end < start) return null
+        return Pair(start, end)
+    }
+
+    /** 按扩展名给出 MIME，便于播放器/预览器识别容器格式 */
+    private fun mimeOf(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "mp4", "m4v" -> "video/mp4"
+            "mov" -> "video/quicktime"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "avi" -> "video/x-msvideo"
+            "ts" -> "video/mp2t"
+            "flv" -> "video/x-flv"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "wav" -> "audio/wav"
+            "flac" -> "audio/flac"
+            "ogg" -> "audio/ogg"
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "bmp" -> "image/bmp"
+            "pdf" -> "application/pdf"
+            "txt" -> "text/plain; charset=utf-8"
+            "md" -> "text/markdown; charset=utf-8"
+            "html" -> "text/html; charset=utf-8"
+            "json" -> "application/json"
+            "xml" -> "application/xml"
+            else -> "application/octet-stream"
+        }
     }
 
     companion object {
         private const val PORT_MIN = 18080
         private const val PORT_MAX = 18089
-        private const val TTL_MS = 2 * 60 * 60 * 1000L  // 2 小时
+        private const val TTL_MS = 2 * 60 * 60 * 1000L        // 2 小时
+        private const val MAX_CHUNK_BYTES = 4 * 1024 * 1024L  // 单次响应上限 4MB
+        private const val SOCKET_READ_TIMEOUT_MS = 5000       // NanoHTTPD socket 读超时
 
         @Volatile
         private var instance: LocalHttpProxyServer? = null
@@ -130,15 +221,30 @@ class LocalHttpProxyServer private constructor(port: Int) : NanoHTTPD(port) {
                 for (port in PORT_MIN..PORT_MAX) {
                     try {
                         val server = LocalHttpProxyServer(port)
-                        server.start(SOCKET_READ_TIMEOUT_DEFAULT, false)
+                        server.start(SOCKET_READ_TIMEOUT_MS, false)
                         KuiklyRenderLog.i(TAG, "LocalHttpProxyServer started on port $port")
                         instance = server
                         return server
                     } catch (e: Exception) {
-                        KuiklyRenderLog.w(TAG, "Failed to start on port $port: ${e.message}")
+                        KuiklyRenderLog.e(TAG, "Failed to start on port $port: ${e.message}")
                     }
                 }
                 throw RuntimeException("All ports $PORT_MIN-$PORT_MAX are in use")
+            }
+        }
+
+        /** App 退出/业务结束时关闭代理并释放所有远端句柄 */
+        fun stopServer() {
+            synchronized(this) {
+                instance?.let { server ->
+                    runCatching {
+                        server.tokens.keys.toList().forEach { token ->
+                            server.tokens[token]?.let { server.releaseToken(token, it) }
+                        }
+                        server.stop()
+                    }
+                    instance = null
+                }
             }
         }
     }

@@ -15,6 +15,8 @@
 package com.tencent.kuikly.core.render.android.expand.module
 
 import android.content.Context
+import com.tencent.kuikly.core.render.android.css.ktx.toJSONObjectSafely
+import com.tencent.kuikly.core.render.android.css.ktx.toMap
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderBaseModule
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderCallback
 import org.json.JSONArray
@@ -97,9 +99,12 @@ class KRSftpConnectionModule : KuiklyRenderBaseModule() {
                 val items = storage.loadAll()
                 // 按 lastUsedAt DESC 排序
                 val sorted = items.sortedByDescending { it.optLong("lastUsedAt", 0L) }
+                // 裸 JSONArray 过不了桥，必须 JSONObject + toMap()（与 KRSftpModule.list 一致）
+                val result = JSONObject()
                 val arr = JSONArray()
                 sorted.forEach { arr.put(it) }
-                callback?.invoke(mapOf("items" to arr))
+                result.put("items", arr)
+                callback?.invoke(result.toMap())
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
@@ -114,7 +119,9 @@ class KRSftpConnectionModule : KuiklyRenderBaseModule() {
                 val storage = storage()
                 val conn = storage.findById(id)
                 if (conn != null) {
-                    callback?.invoke(mapOf("conn" to conn))
+                    val result = JSONObject()
+                    result.put("conn", conn)
+                    callback?.invoke(result.toMap())
                 } else {
                     callback?.invoke(mapOf("error" to """{"code":3001,"msg":"connection not found"}"""))
                 }
@@ -139,6 +146,11 @@ class KRSftpConnectionModule : KuiklyRenderBaseModule() {
     }
 
     private fun storage(): SftpConnectionStorage = SftpConnectionStorage(context)
+
+    private fun executeOnSubThread(block: () -> Unit) {
+        com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
+            .krThreadAdapter?.executeOnSubThread(block) ?: Thread(block).start()
+    }
 
     companion object {
         const val MODULE_NAME = "KRSftpConnectionModule"

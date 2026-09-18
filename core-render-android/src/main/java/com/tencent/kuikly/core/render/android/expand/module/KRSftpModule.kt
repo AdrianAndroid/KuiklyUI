@@ -15,6 +15,7 @@
 package com.tencent.kuikly.core.render.android.expand.module
 
 import com.tencent.kuikly.core.render.android.css.ktx.toJSONObjectSafely
+import com.tencent.kuikly.core.render.android.css.ktx.toMap
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderBaseModule
 import com.tencent.kuikly.core.render.android.export.KuiklyRenderCallback
 import org.json.JSONArray
@@ -171,8 +172,9 @@ class KRSftpModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             val json = params.toJSONObjectSafely()
             try {
-                val progress = KRSftpClient.download(json)
-                callback?.invoke(mapOf("progress" to progress, "path" to json.optString("localName")))
+                json.put("cacheDir", cacheDir())
+                val localPath = KRSftpClient.download(json)
+                callback?.invoke(mapOf("progress" to 1.0f, "path" to localPath, "success" to true))
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
@@ -242,9 +244,14 @@ class KRSftpModule : KuiklyRenderBaseModule() {
     private fun copy(params: String?, callback: KuiklyRenderCallback?) {
         executeOnSubThread {
             val json = params.toJSONObjectSafely()
+            json.put("cacheDir", cacheDir())
             try {
                 val result = KRSftpClient.copy(json)
-                callback?.invoke(mapOf("result" to result, "ok" to true))
+                // 裸 JSONObject 过不了桥（Kotlin 侧会读不到字段），统一 JSONObject + toMap()
+                val payload = JSONObject()
+                payload.put("result", result)
+                payload.put("ok", true)
+                callback?.invoke(payload.toMap())
             } catch (e: Exception) {
                 callback?.invoke(mapOf("error" to SftpErrorFormatter.format(e)))
             }
@@ -291,6 +298,7 @@ class KRSftpModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
+                json.put("cacheDir", cacheDir())
                 val progress = KRSftpClient.batchTask(json)
                 callback?.invoke(mapOf("progress" to progress, "success" to true))
             } catch (e: Exception) {
@@ -307,6 +315,10 @@ class KRSftpModule : KuiklyRenderBaseModule() {
             callback?.invoke(mapOf("ok" to true))
         }
     }
+
+    /** 本地缓存目录（下载/复制的临时文件落地处），由宿主 Context 提供 */
+    private fun cacheDir(): String =
+        (context?.cacheDir ?: java.io.File(System.getProperty("java.io.tmpdir") ?: "/tmp")).absolutePath
 
     private fun executeOnSubThread(block: () -> Unit) {
         com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
