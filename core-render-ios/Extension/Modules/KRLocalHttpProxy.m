@@ -27,6 +27,8 @@ static const int kPortMax = 18089;
 static const NSTimeInterval kTTL = 2 * 60 * 60;            // token TTL 2 小时（§21.3.3）
 static const NSInteger kMaxRangeBytes = 2 * 1024 * 1024;   // 单次 Range 最多 8MB，避免大文件整体进内存
 static const NSInteger kStreamChunkBytes = 256 * 1024;
+/** 无 Range 请求时，小于该值直接整包返回（图片/文本预览依赖 Content-Length） */
+static const long long kNoRangeInlineMaxBytes = 8 * 1024 * 1024;
 
 /** 一个播放 token 对应一次远端文件的流式读取（§21.3.3） */
 @interface KRLocalHttpProxyToken : NSObject
@@ -252,7 +254,18 @@ forAdditionalHeader:@"Content-Range"];
         return resp;
     }
 
-    // 无 Range：顺序流式返回，避免整文件进内存
+    // 无 Range：
+    //   - 小文件（图片/文本等）直接整包返回，带 Content-Length。图片加载器通常不认
+    //     没有 Content-Length 的流式响应，之前图片预览因此始终空白。
+    //   - 大文件才走流式，避免整文件进内存。
+    if (total >= 0 && total <= kNoRangeInlineMaxBytes) {
+        NSData *data = [KRSftpFileHandle read:fh offset:0 length:(int)total];
+        GCDWebServerDataResponse *resp = [[GCDWebServerDataResponse alloc] initWithData:data contentType:contentType];
+        [resp setValue:@"bytes" forAdditionalHeader:@"Accept-Ranges"];
+        [resp setValue:@"no-store" forAdditionalHeader:@"Cache-Control"];
+        return resp;
+    }
+
     __block long long offset = 0;
     GCDWebServerStreamedResponse *resp =
         [GCDWebServerStreamedResponse responseWithContentType:contentType

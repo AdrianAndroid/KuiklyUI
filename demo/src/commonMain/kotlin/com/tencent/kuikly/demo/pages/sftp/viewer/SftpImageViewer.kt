@@ -15,6 +15,8 @@
 package com.tencent.kuikly.demo.pages.sftp.viewer
 
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.velse
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.views.Image
@@ -37,9 +39,9 @@ internal fun ViewContainer<*, *>.SftpImageViewer(
     View {
         attr { flex(1f); backgroundColor(SftpColorTokens.bg); allCenter() }
         // 只负责渲染：代理端口/token 的申请由页面（Pager）异步完成后传入。
-        // 组件内同步调代理是错误分层，且拿不到真实 token（预览会一直是坏的）。
-        val url = mediaUrlProvider()
-        if (url.isNullOrEmpty()) {
+        // 必须用 vif/velse：URL 是异步就绪的，写在结构层的 if 在首帧只会求值一次，
+        // 之后 URL 就绪也不会重建分支（表现为永远停在「加载中」）。
+        vif({ mediaUrlProvider().isNullOrEmpty() }) {
             Text {
                 attr {
                     text(I18n.t("sftp.ui.loading"))
@@ -47,11 +49,15 @@ internal fun ViewContainer<*, *>.SftpImageViewer(
                     color(SftpColorTokens.textSecondary)
                 }
             }
-        } else {
+        }
+        velse {
             Image {
                 attr {
-                    src(url)
-                    // Phase 1：接入 resizeMode + 双指缩放手势
+                    // 必须给显式尺寸：布局引擎不测原生控件，Image 不给尺寸就是 0x0（不可见）
+                    size(pagerData.pageViewWidth - 32f, pagerData.pageViewHeight * 0.6f)
+                    src(mediaUrlProvider() ?: "")
+                    resizeContain()
+                    // Phase 1：接入双指缩放手势
                 }
             }
         }

@@ -233,6 +233,18 @@ object I18n {
             "zh-CN" to "加载超时，请检查网络或文件格式",
             "en-US" to "Load timeout, check network or file format"
         ),
+        "sftp.viewer.image_phase_hint" to mapOf(
+            "zh-CN" to "当前为等比适应显示，Phase 1 将支持缩放与手势",
+            "en-US" to "Aspect-fit preview; zoom & gestures land in Phase 1"
+        ),
+        "sftp.viewer.audio_phase_hint" to mapOf(
+            "zh-CN" to "Phase 1 将支持音频进度与后台播放",
+            "en-US" to "Audio progress & background playback land in Phase 1"
+        ),
+        "sftp.viewer.unsupported" to mapOf(
+            "zh-CN" to "暂不支持预览该文件类型",
+            "en-US" to "Preview is not supported for this file type"
+        ),
         "sftp.ui.codec_unsupported" to mapOf(
             "zh-CN" to "设备不支持此编码",
             "en-US" to "Codec not supported on this device"

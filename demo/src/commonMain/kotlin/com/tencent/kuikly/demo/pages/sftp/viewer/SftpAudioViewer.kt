@@ -60,11 +60,11 @@ internal fun ViewContainer<*, *>.SftpAudioViewer(
             }
             Text { attr { text("🎵"); fontSize(64f); color(SftpColorTokens.primary) } }
         }
-        // 只负责渲染：播放地址由页面异步申请代理 token 后传入
-        val url = mediaUrlProvider()
+        // 只负责渲染：播放地址由页面异步申请代理 token 后传入。
+        // 注意在 attr 内读取 provider：若在结构层取值，闭包会捕获首帧的 null（陈旧值）。
         Video {
             attr {
-                if (!url.isNullOrEmpty()) {
+                mediaUrlProvider()?.takeIf { it.isNotEmpty() }?.let { url ->
                     src(url)
                     playControl(VideoPlayControl.PLAY)
                 }
