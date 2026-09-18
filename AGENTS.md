@@ -214,7 +214,7 @@
 |----|----------------|----------------|------|
 | **iOS / macOS** | NMSSH(libssh2 1.10.0，ridenui fork 2.7.2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：两端各 74/74 集成自测（含字节级校验）；macOS 另做界面操控验证（流式播放/拖动 seek/暂停恢复） |
 | Android | JSch 0.1.55 `core-render-android/.../expand/module/KRSftp*.kt` | NanoHTTPD `LocalHttpProxyServer.kt` | **可用**：74/74 集成自测（模拟器 Pixel_8a_API_35 / Android 15）+ 经代理用 ExoPlayer 播放 SFTP 视频出画 |
-| HarmonyOS | 桩 `core-render-ohos/src/main/cpp/.../sftp/`（已有骨架，待接 libssh2） | 桩 | **未实现**（所有方法抛 `not implemented`） |
+| HarmonyOS | 桩 `core-render-ohos/src/main/cpp/.../sftp/`（已有骨架，待接 libssh2/NAPI） | 桩 | **构建通过**（`./2.0_ohos_demo_build.sh` → `BUILD SUCCESSFUL`，产出并拷入 `libshared.so`），但 SFTP 原生实现仍是桩 → **功能不可用，待实现** |
 | Web / 小程序 | 浏览器无 TCP/SSH | 不启本地代理 | **需后端网关**（§5.6）；JS 产物本身可构建（`npm install` + `./gradlew :demo:packLocalJsBundleDebug -Pkuikly.useLocalKsp=false`），但 SFTP 能力在浏览器沙箱内无法实现（无原始 socket），属架构限制而非实现缺陷 |
 
 Android 构建 / 验证（模拟器 Pixel_8a_API_35 / Android 15，JDK 17）：
@@ -245,6 +245,33 @@ Android 侧的坑（都已修）：
 - 沉浸式（edge-to-edge）下状态栏会**吞掉点击**：页面自绘导航栏若不加顶部安全区，
   「+ 新建」点不动。SFTP 页面已统一加 `paddingTop(pagerData.statusBarHeight)` 的根容器。
 - Android 视频适配器原本没实现 `playTimeDidChangedWithCurrentTime` → 播放页时间恒 `00:00/00:00`，已补轮询。
+
+### 13.1.1 六端构建 / 验证矩阵（2026-09 实测）
+
+| 端 | 构建 | 运行/功能验证 | 说明 |
+|----|------|--------------|------|
+| **macOS** | ✅ `xcodebuild` BUILD SUCCEEDED | ✅ 界面操控验证（播放/拖动 seek/暂停恢复） | SFTP 全链路可用 |
+| **iOS** | ✅ `xcodebuild`（-Werror）BUILD SUCCEEDED | ✅ 模拟器 74/74 + AVPlayer 播放 | SFTP 全链路可用 |
+| **Android** | ✅ `./gradlew :androidApp:assembleDebug` | ✅ 模拟器 **74/74 × 连续 10 轮**（零失败）+ ExoPlayer 经代理播放 SFTP 视频出画 | SFTP 全链路可用 |
+| **HarmonyOS** | ✅ `./2.0_ohos_demo_build.sh` → `libshared.so` | ❌ 未实现 | 业务 .so 可构建；SFTP 原生仍是桩 |
+| **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | ➖ 架构受限 | 浏览器无原始 socket，SFTP 需后端网关 |
+| **MiniApp** | ✅ 同上（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | ➖ 架构受限 | 同 Web |
+
+HarmonyOS 构建要点：
+- `./2.0_ohos_demo_build.sh` 会自动把 wrapper 切到 **Gradle 8.0**、用 **`Kotlin 2.0.21-KBA-010`**（华为定制版）
+  与 `settings.2.0.ohos.gradle.kts`，跑 `:demo:linkSharedDebugSharedOhosArm64`，最后把
+  `libshared.so` / `libshared_api.h` 拷进 `ohosApp`。
+- OHOS SDK 在 **DevEco 内部**：`/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native/sysroot`
+  —— `~/Library/Huawei/Sdk` 为空**不影响** Kotlin/Native 链接。
+- 首次构建约 20+ 分钟（要下载 Kotlin/Native 工具链与 ohosArm64 依赖）；中途若出现
+  `SSLHandshakeException / SSL peer shut down incorrectly`（下载 knoi-processor 等 jar 时），
+  是代理网络抖动，**直接重跑即可**（编译缓存会复用）。
+- 继续实现 OHOS SFTP 时：按 §6 的模块流程在 `core-render-ohos` 侧接 libssh2（或走 NAPI 调 OHOS 的网络能力），
+  并遵循 §13.3 的「桩必须显式失败」。
+
+构建环境（本机实测，Intel Mac）：JDK 17（corretto）+ Gradle 7.6.3（OHOS 用 8.0）+ Xcode 26.3 +
+Android SDK（Pixel_8a_API_35 / Android 15 模拟器）+ DevEco Studio（内置 OHOS SDK）。
+**所有需要外网依赖的下载都走本机 Clash 代理 `127.0.0.1:7897`**（`pod install` / Gradle 均需）。
 
 各层位置：
 - 业务/UI（100% 共享）：`demo/src/commonMain/.../pages/sftp/`（首页/浏览/编辑/播放/属性/预览器）
