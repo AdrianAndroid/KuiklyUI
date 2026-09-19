@@ -251,11 +251,50 @@ Android 侧的坑（都已修）：
 | 端 | 构建 | 运行/功能验证 | 说明 |
 |----|------|--------------|------|
 | **macOS** | ✅ `xcodebuild` BUILD SUCCEEDED | ✅ 界面操控验证（播放/拖动 seek/暂停恢复） | SFTP 全链路可用 |
-| **iOS** | ✅ `xcodebuild`（-Werror）BUILD SUCCEEDED | ✅ 模拟器 74/74 + AVPlayer 播放 | SFTP 全链路可用 |
+| **iOS** | ✅ `xcodebuild` BUILD SUCCEEDED | ✅ 模拟器 74/74 + AVPlayer 播放 | SFTP 全链路可用 |
 | **Android** | ✅ `./gradlew :androidApp:assembleDebug` | ✅ 模拟器 **74/74 × 连续 10 轮**（零失败）+ ExoPlayer 经代理播放 SFTP 视频出画 | SFTP 全链路可用 |
-| **HarmonyOS** | ✅ `./2.0_ohos_demo_build.sh` → `libshared.so` | ❌ 未实现 | 业务 .so 可构建；SFTP 原生仍是桩 |
+| **HarmonyOS** | ✅ 渲染器 `libkuikly.so`（真实 CMake，含 SFTP）+ 业务 `libshared.so` 均构建通过 | ❌ 运行时未验证（本机无 OHOS 设备/模拟器镜像） | SFTP 核心已实现（连接/浏览/随机读/上传下载/文件管理等）+ 收藏/历史/连接持久化；视频本地代理与播放器未实现 |
 | **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | ➖ 架构受限 | 浏览器无原始 socket，SFTP 需后端网关 |
 | **MiniApp** | ✅ 同上（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | ➖ 架构受限 | 同 Web |
+
+### 13.1.2 六端「全部编译一遍」实测（2026-09，本机 Intel Mac，不运行）
+
+> 本轮把六端从"部分可构建"推进到**六端全部编译通过**，过程中修掉 9 个真实阻断项。
+
+| 端 | 命令 | 结果 |
+|----|------|------|
+| macOS | `xcodebuild -workspace macApp.xcworkspace -scheme macApp -configuration Debug build` | ✅ BUILD SUCCEEDED |
+| iOS | `xcodebuild -workspace iosApp.xcworkspace -scheme iosApp -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build` | ✅ BUILD SUCCEEDED |
+| Android | `./gradlew :androidApp:assembleDebug`（JDK 17） | ✅ BUILD SUCCESSFUL |
+| HarmonyOS（渲染器） | `cmake` + DevEco `ohos.toolchain.cmake` 直接构建 `core-render-ohos/src/main/cpp/CMakeLists.txt` | ✅ `libkuikly.so`（aarch64，197 个 KRSftp 符号，255 个 libssh2 符号，0 未解析） |
+| HarmonyOS（业务） | `./2.0_ohos_demo_build.sh` | ✅ `libshared.so` 并拷入 `ohosApp` |
+| Web (H5) | `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | ✅ BUILD SUCCESSFUL（产物 `nativevue2.js`） |
+| MiniApp | 同上 + `:miniApp:jsMiniAppDevelopmentWebpack` | ✅ BUILD SUCCESSFUL |
+
+**本轮修复的阻断项（勿回退）**：
+
+1. **`core-ksp` 缺 JS 入口构建器**（Web/MiniApp 必挂）：JS 目标落入 `else` 分支被当成 Android，生成的 `jsMain/KuiklyCoreEntry.kt` 引用 androidMain-only 的 `IKuiklyCoreEntry` → Kotlin/JS 编译必然失败。
+   新增 `impl/JsTargetEntryBuilder`：**不生成任何平台代码**，只直写首行 `//页面名|页面名…`（Gradle 插件 `JSProcessor.getPageListFromEntryFile` 会取「最后一个 `/` 之后」按 `|` 切分页面列表，KotlinPoet 的 `// ` 前缀与折行会破坏该解析，故必须直写）。
+   同时把页面筛选抽成 `selectPages()`，`getEntryBuilder()` 改为可返回 JS 构建器。
+   ⚠️ 注意 `getEntryBuilder()` 依赖 `codeGenerator.generatedFile`，**必须在 `createNewFile` 之后调用**。
+2. **iOS `EXCLUDED_ARCHS` 覆盖 Pod 设置**：`iosApp.xcodeproj` 把 `EXCLUDED_ARCHS[sdk=iphonesimulator*]` 设为空，
+   导致模拟器同时构建 arm64，而 NMSSH 自带的 libssh2/libssl/libcrypto 只有 x86_64（Intel 机）→
+   `found architecture 'x86_64', required architecture 'arm64'` + `linking object file built for 'iOS'`。
+   改为 `$(inherited)`，让 podspec 的 `arm64` 排除生效。
+3. **iOS Pods 未同步**：`pod install` 前 NMSSH/Pods-iosApp 目标不在构建计划里 → `ld: library 'NMSSH' not found`、`library 'Pods-iosApp' not found`。
+   重跑 `pod install` 即可；**注意 CocoaPods 需要 UTF-8 locale**（否则 Ruby 报
+   `Unicode Normalization not appropriate for ASCII-8BIT`）：`export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8`。
+4. **OHOS `NODE_TEXT_INPUT/AREA_ON_WILL_CHANGE` 不存在于 API 19** → 整个渲染器编译失败。
+   按仓库既有 `OH_CURRENT_API_VERSION` 模式加 `KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE`（>=20），低版本不注册也不分发该事件（仅失去输入「改变前拦截」）。
+5. **OHOS `OH_Drawing_TextVerticalAlignment` / `TEXT_VERTICAL_ALIGNMENT_CENTER` 不存在于 API 19** → 同上加
+   `KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE`（>=20），低版本走既有手动校准分支。
+6. **OHOS `NODE_IMAGE_SOURCE_SIZE` 不存在于 API 19** → 加 `KUIKLY_IMAGE_SOURCE_SIZE_AVAILABLE`（>=24），
+   低版本 `SetArkUIImageSourceSize` 为 no-op，由 `SetArkUIImageCapInsetsWithLattice` 的运行时弱符号检测退回老四值路径。
+7. **OHOS `librcp_c.so` 本机 SDK 无此库且源码无任何引用** → 改为按存在性条件链接（否则 `unable to find library -lrcp_c`）。
+8. **OHOS SFTP thirdparty 路径用了相对 `NATIVERENDER_ROOT_PATH`（`.`）** → 在 DevEco 独立构建目录下
+   `if(EXISTS …)` 失败、libssh2 不被链接（配置期只给 warning，最终链接期才炸）。改用 `CMAKE_CURRENT_SOURCE_DIR` 绝对路径。
+9. 上述 OHOS 门控阈值（20 / 24）依据代码注释与仓库既有 `KUIKLY_TEXT_EDITOR_AVAILABLE(>=24)` 推定；
+   若换用更高版本 SDK 且出现"符号本应存在却被跳过"，应据此调整阈值。
 
 HarmonyOS 构建要点：
 - `./2.0_ohos_demo_build.sh` 会自动把 wrapper 切到 **Gradle 8.0**、用 **`Kotlin 2.0.21-KBA-010`**（华为定制版）
@@ -266,8 +305,52 @@ HarmonyOS 构建要点：
 - 首次构建约 20+ 分钟（要下载 Kotlin/Native 工具链与 ohosArm64 依赖）；中途若出现
   `SSLHandshakeException / SSL peer shut down incorrectly`（下载 knoi-processor 等 jar 时），
   是代理网络抖动，**直接重跑即可**（编译缓存会复用）。
-- 继续实现 OHOS SFTP 时：按 §6 的模块流程在 `core-render-ohos` 侧接 libssh2（或走 NAPI 调 OHOS 的网络能力），
-  并遵循 §13.3 的「桩必须显式失败」。
+OHOS SFTP 现状（2026-09 实测）：
+- **依赖已 vendor 进仓库**：`core-render-ohos/src/main/cpp/thirdparty/libssh2-ohos/arm64-v8a/`
+  内含交叉编译好的 `libssh2.a` + mbedTLS 2.28.8（`libmbedtls/libmbedx509/libmbedcrypto`）静态库与头文件。
+  重建方式：用 DevEco 自带 `ohos.toolchain.cmake`（`--target=aarch64-linux-ohos`）编译 mbedTLS
+  （`-DCMAKE_C_FLAGS="-Wno-unused-command-line-argument -Wno-error"`，否则 clang 15 会把
+  `--gcc-toolchain` 判为 unused 而因 `-Werror` 失败），再以 `-DCRYPTO_BACKEND=mbedTLS` 编译 libssh2。
+- **CMake 已接线**：`core-render-ohos/src/main/cpp/CMakeLists.txt` 的 `SOURCE_SET` 已加入 sftp 全部源文件
+  （此前**根本没进构建**，且 `KRSftpModule.cpp` 调用了并不存在的 `KRJSONObject::FromAnyValue` → 无法编译），
+  并在 `target_link_libraries` 中按 `${OHOS_ARCH}` 链接上述静态库。
+- **实现**：`KRSftpSession`（libssh2 阻塞式会话，TCP 带超时，密码/公钥认证；list/stat/mkdir/rm/
+  rename/move/copy/chmod/chown/setMtime/upload/download/batchTask）、`KRSftpFileHandle`（随机读，
+  `[meta, ByteArray]` 原子通道）、三个存储模块（JSON 文件持久化，连接 label 去重 + 删连接级联清收藏/历史，
+  历史 2000 条 LRU）。
+- **值通道约定**：OHOS 侧 `KRAnyValue` 只有 `toLong()/toInt()/toMap()/toArray()/toString()`；
+  取参数用 `params->toMap()`，Map/Array 的 `toString()` 直接得到 JSON。`Make(long long)` 在 LP64 下
+  **重载歧义**，必须写 `static_cast<int64_t>(x)`。
+- **实现期/复查期修掉的关键缺陷（勿回退）**：
+  1. `Connect` 误读 `username`/`privateKeyPath`（Kotlin 实发 `user`/`privateKey`）→ 连接恒失败。
+  2. `Download` 拿**本地**路径的父目录去**远端** `mkdir` → 下载必失败；改用 `EnsureLocalDir`。
+  3. `Copy` 以 `/data/local/tmp` 作中转（OHOS 沙盒不可写）+ 先整份下载到 `/dev/null`（双倍传输）
+     → 改为真正的远端→远端流式复制 `CopyRemoteToRemote`。
+  4. `BatchTask` 契约理解错误（当作带 `type` 的对象数组）→ 重写为 `action` + 字符串 `items`，对齐 Android。
+  5. `CancelBatchTask` 曾调 `Disconnect(taskId)`（会误断正常会话）→ 改为幂等空操作。
+  6. 三个存储模块 `MODULE_NAME` 未定义（注册表引用）→ 补定义。
+  7. `OnDestroy` 曾全局 `ShutdownAll/CloseAll`，会断掉其它 Page 的会话 → 对齐 Android/iOS 不清理。
+  8. 上传续传用 `LIBSSH2_FXF_APPEND` + `seek64`（APPEND 忽略 seek）→ 去掉 APPEND。
+  9. batch MOVE/COPY 未先建目标目录 → 补 `EnsureRemoteDir(targetDir)`。
+  10. `Disconnect` 未置 `broken`，并发可能解引用已释放句柄 → 补标记。
+- **未实现**：`KRLocalHttpProxy`（仍是 stub，无 HTTP server，且**未进 SOURCE_SET**）→ Kotlin `SftpMediaProxyModule`
+  （`KRLocalMediaProxyModule`）在 OHOS 无原生实现；`core-render-ohos` 也没有视频组件 → **OHOS 暂不支持播放 SFTP 视频**。
+- **验证方式（无设备时）**：
+  1. `cmake` + DevEco `ohos.toolchain.cmake` 独立编译 sftp 源并链接 libssh2/mbedTLS → aarch64 `libsftpcheck.so`
+     （无未解析应用符号，仅剩 libc++/系统库符号）。
+  2. **注册探针**（`registration_probe.cpp`）：按 `ModulesRegisterEntry.h` 的方式引用 4 个 `MODULE_NAME`
+     并构造各模块实例，把「注册表引用但未定义」这类**只在完整构建才暴露的断链**提前暴露
+     —— 该探针正是发现了存储模块 `MODULE_NAME` 未定义。
+  3. **字段名机械核对**：比对 Kotlin `params.put/json.put` 发出的 key 与 C++ 读取的 key
+     —— 该核对发现了 `Connect` 误读 `username`/`privateKeyPath`（Kotlin 实发 `user`/`privateKey`）。
+  真机/模拟器就绪后需补：`./2.0_ohos_demo_build.sh` → DevEco 构建 `libkuikly.so` → 运行 SFTP 测试页。
+
+OHOS 侧跨端行为差异（与 Android 实测对照，需知悉）：
+- `list` 的 `includeHidden` / `offset` / `limit` / `hasMore`：**OHOS 已实现**（按 limit 截断并置 hasMore），
+  Android 未实现（忽略这三个参数、恒 `hasMore=false`）。默认参数（`includeHidden=true, limit=10000`）下两者结果一致。
+- `overwrite`（`SKIP` / `FAIL` / `RENAME_APPEND_SUFFIX`）：**OHOS 与 Android 均未实现**，一律按覆盖处理。
+- `batchTask`：两端一致（`action` 默认 `DELETE`、大小写不敏感、逐项容错后汇总抛错、成功返回 `1.0f`；
+  batch MOVE/COPY 先建目标目录）。
 
 构建环境（本机实测，Intel Mac）：JDK 17（corretto）+ Gradle 7.6.3（OHOS 用 8.0）+ Xcode 26.3 +
 Android SDK（Pixel_8a_API_35 / Android 15 模拟器）+ DevEco Studio（内置 OHOS SDK）。
