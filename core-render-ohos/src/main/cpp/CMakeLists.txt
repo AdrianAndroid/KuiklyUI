@@ -116,6 +116,14 @@ set(SOURCE_SET
         libohos_render/expand/components/mask/KRMaskView.cpp
         libohos_render/expand/modules/preferences/KROhSharedPreferencesModule.cpp
         libohos_render/expand/modules/preferences/KROhPreferences.cpp
+        libohos_render/expand/modules/sftp/SftpErrorFormatter.cpp
+        libohos_render/expand/modules/sftp/SftpJsonStore.cpp
+        libohos_render/expand/modules/sftp/KRSftpSession.cpp
+        libohos_render/expand/modules/sftp/KRSftpFileHandle.cpp
+        libohos_render/expand/modules/sftp/KRSftpModule.cpp
+        libohos_render/expand/modules/sftp/KRSftpConnectionModule.cpp
+        libohos_render/expand/modules/sftp/KRSftpFavoritesModule.cpp
+        libohos_render/expand/modules/sftp/KRSftpPlaybackHistoryModule.cpp
 )
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake" OPTIONAL)
@@ -155,6 +163,22 @@ target_include_directories(kuikly PUBLIC ${HMOS_SDK_NATIVE}/sysroot/usr/include)
 target_link_directories(kuikly PUBLIC ${HMOS_SDK_NATIVE}/sysroot/usr/lib/aarch64-linux-ohos)
 target_include_directories(kuikly PRIVATE ${NATIVERENDER_ROOT_PATH}
                     ${NATIVERENDER_ROOT_PATH}/include)
+
+# ---- SFTP: vendored libssh2 + mbedTLS (cross-compiled for OHOS arm64-v8a) ----
+# 必须用 CMAKE_CURRENT_SOURCE_DIR 绝对路径：NATIVERENDER_ROOT_PATH 是 "."，
+# 在 DevEco 独立构建目录（build 目录 ≠ 源目录）下 exists 会失败、导致 libssh2 未链接。
+set(KUIKLY_SFTP_THIRDPARTY ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libssh2-ohos/${OHOS_ARCH})
+if(EXISTS ${KUIKLY_SFTP_THIRDPARTY}/lib/libssh2.a)
+    target_include_directories(kuikly PRIVATE ${KUIKLY_SFTP_THIRDPARTY}/include)
+    target_link_libraries(kuikly PUBLIC
+            ${KUIKLY_SFTP_THIRDPARTY}/lib/libssh2.a
+            ${KUIKLY_SFTP_THIRDPARTY}/lib/libmbedtls.a
+            ${KUIKLY_SFTP_THIRDPARTY}/lib/libmbedx509.a
+            ${KUIKLY_SFTP_THIRDPARTY}/lib/libmbedcrypto.a)
+    message(STATUS "SFTP: libssh2+mbedTLS linked from ${KUIKLY_SFTP_THIRDPARTY}")
+else()
+    message(WARNING "SFTP: thirdparty missing for OHOS_ARCH=${OHOS_ARCH}: ${KUIKLY_SFTP_THIRDPARTY}")
+endif()
 target_link_libraries(kuikly PUBLIC hilog_ndk.z.so
                                     libability_runtime.so
                                     libace_napi.z.so
@@ -170,7 +194,6 @@ target_link_libraries(kuikly PUBLIC hilog_ndk.z.so
                                     libpixelmap.so
                                     libpixelmap_ndk.z.so
                                     librawfile.z.so
-                                    librcp_c.so
                                     libuv.so
                                     libz.so
                                     libohhidebug.so
@@ -180,3 +203,11 @@ target_link_libraries(kuikly PUBLIC hilog_ndk.z.so
                                     libhilog_ndk.z.so
                                     libqos.so
                                     )
+
+# librcp_c.so（Remote Communication Kit）仅较新 SDK 提供；当前源码中无任何引用，
+# 低版本 SDK（如本机 API 19）缺失时直接跳过，否则链接期报 "unable to find library -lrcp_c"。
+if(EXISTS ${HMOS_SDK_NATIVE}/sysroot/usr/lib/aarch64-linux-ohos/librcp_c.so)
+    target_link_libraries(kuikly PUBLIC librcp_c.so)
+else()
+    message(STATUS "RCP: librcp_c.so not in this SDK, skipped (no source references it)")
+endif()

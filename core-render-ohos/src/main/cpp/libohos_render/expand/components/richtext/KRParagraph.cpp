@@ -32,9 +32,18 @@ extern "C" {
 #endif
 // Remove this declaration if compatable api is raised to 14 and above
 extern OH_Drawing_FontCollection *OH_Drawing_GetFontCollectionGlobalInstance(void) __attribute__((weak));
-// 垂直对齐接口的弱符号声明（系统 API 20+ 提供，低版本系统该符号为 nullptr）
+// 垂直对齐接口的弱符号声明（系统 API 20+ 提供，低版本系统该符号为 nullptr）。
+// 类型 OH_Drawing_TextVerticalAlignment 在 API 19 及更早的 SDK 中不存在，需版本门控。
+#include <info/application_target_sdk_version.h>
+#if defined(OH_CURRENT_API_VERSION) && OH_CURRENT_API_VERSION >= 20
+#define KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE 1
+#else
+#define KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE 0
+#endif
+#if KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE
 extern void OH_Drawing_SetTypographyVerticalAlignment(OH_Drawing_TypographyStyle* style,
                                                       OH_Drawing_TextVerticalAlignment alignment) __attribute__((weak));
+#endif
 #ifdef __cplusplus
 };
 #endif
@@ -214,10 +223,12 @@ ArkUI_StyledString *KRParagraph::GetStyledString() {
 OH_Drawing_TypographyStyle *KRParagraph::CreateTypographyStyle() {
     OH_Drawing_TypographyStyle *typography_style = OH_Drawing_CreateTypographyStyle();
 
+#if KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE
     // 垂直居中：系统 API 20+ 支持时使用新接口，后续基线策略会相应调整
     if (&OH_Drawing_SetTypographyVerticalAlignment != nullptr) {
         OH_Drawing_SetTypographyVerticalAlignment(typography_style, TEXT_VERTICAL_ALIGNMENT_CENTER);
     }
+#endif
 
     auto numberOfLines = GetKTValue("numberOfLines", props_, props_)->toInt();
     if (numberOfLines == 0) {

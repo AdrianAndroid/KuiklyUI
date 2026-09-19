@@ -49,9 +49,19 @@ extern "C" {
 extern OH_Drawing_FontCollection* OH_Drawing_GetFontCollectionGlobalInstance(void) __attribute__((weak));
 extern OH_Drawing_Array* OH_Drawing_TypographyGetTextLines(OH_Drawing_Typography* typography) __attribute__((weak));
 extern void OH_Drawing_DestroyTextLines(OH_Drawing_Array* lines) __attribute__((weak));
-// 垂直对齐接口的弱符号声明（系统 API 20+ 提供，低版本系统该符号为 nullptr）
+// 垂直对齐接口的弱符号声明（系统 API 20+ 提供，低版本系统该符号为 nullptr）。
+// 类型 OH_Drawing_TextVerticalAlignment 在 API 19 及更早的 SDK 中不存在，
+// 必须按版本门控，否则整个渲染器无法编译。
+#include <info/application_target_sdk_version.h>
+#if defined(OH_CURRENT_API_VERSION) && OH_CURRENT_API_VERSION >= 20
+#define KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE 1
+#else
+#define KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE 0
+#endif
+#if KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE
 extern void OH_Drawing_SetTypographyVerticalAlignment(OH_Drawing_TypographyStyle* style,
                                                       OH_Drawing_TextVerticalAlignment alignment) __attribute__((weak));
+#endif
 
 #ifdef __cplusplus
 };
@@ -543,9 +553,14 @@ OH_Drawing_Typography *KRRichTextShadow::BuildTextTypography(double constraint_w
             // 低版本系统（不支持 OH_Drawing_SetTypographyVerticalAlignment）的 work around：
             // cai 系统绘制存在偏移问题，手动校准 drawOffsetY_ 实现垂直居中
             // 高版本系统通过 OH_Drawing_SetTypographyVerticalAlignment 设置垂直居中，无需此校准
+#if KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE
             if (&OH_Drawing_SetTypographyVerticalAlignment == nullptr) {
                 context_thread_drawOffsetY_ = (fontSize * lineHeight - fontSize) / 4;
             }
+#else
+            // SDK 本身不提供该接口（API < 20）：始终走手动校准分支。
+            context_thread_drawOffsetY_ = (fontSize * lineHeight - fontSize) / 4;
+#endif
         }
         // fontFamily
         if (!fontFamily.empty()) {
@@ -587,11 +602,13 @@ OH_Drawing_Typography *KRRichTextShadow::BuildTextTypography(double constraint_w
                  */
                 OH_Drawing_TypographyTextSetHeightBehavior(typoStyle, TEXT_HEIGHT_DISABLE_ALL);
             }
+#if KUIKLY_DRAWING_VERTICAL_ALIGN_AVAILABLE
             // 设置文本垂直居中：API 20+ 系统支持 OH_Drawing_SetTypographyVerticalAlignment
             // 弱符号检查：地址为 nullptr 表示当前系统不提供该接口，将回退到基线 work around
             if (&OH_Drawing_SetTypographyVerticalAlignment != nullptr) {
                 OH_Drawing_SetTypographyVerticalAlignment(typoStyle, TEXT_VERTICAL_ALIGNMENT_CENTER);
             }
+#endif
             handler = CreateTypographyHandler(typoStyle);
         } else {
             isFirst = false;

@@ -17,9 +17,26 @@
 #define CORE_RENDER_OHOS_KRTEXTFIELDVIEW_H
 
 #include "libohos_render/export/IKRRenderViewExport.h"
+#include <arkui/native_type.h>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
+
+/**
+ * `NODE_TEXT_INPUT_ON_WILL_CHANGE` / `NODE_TEXT_AREA_ON_WILL_CHANGE` 是较新 ArkUI SDK
+ * 才提供的枚举（本机 API 19 的 native_node.h 中不存在），直接引用会导致**整个渲染器编译失败**。
+ *
+ * 策略（与 KRTextEditorSwitch.h 的 `KUIKLY_TEXT_EDITOR_AVAILABLE` 一致）：
+ * 编译期按 `OH_CURRENT_API_VERSION` 决定是否启用 willChange 事件；不可用时
+ * 既不注册也不分发该事件，仅损失输入「改变前拦截」能力，其余输入能力不受影响。
+ */
+#ifndef KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE
+#if defined(OH_CURRENT_API_VERSION) && OH_CURRENT_API_VERSION >= 20
+#define KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE 1
+#else
+#define KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE 0
+#endif
+#endif
 
 class KRTextFieldView : public IKRRenderViewExport {
  public:
@@ -60,9 +77,11 @@ class KRTextFieldView : public IKRRenderViewExport {
     virtual ArkUI_NodeEventType GetOnPasteEventType() {
         return ArkUI_NodeEventType::NODE_TEXT_INPUT_ON_PASTE;
     }
+#if KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE
     virtual ArkUI_NodeEventType GetOnWillChangeEventType() {
         return ArkUI_NodeEventType::NODE_TEXT_INPUT_ON_WILL_CHANGE;
     }
+#endif
     /**
      * 选区变化事件类型。子类（如 KRTextAreaView）可 override 以适配不同的 ArkUI 节点类型。
      */

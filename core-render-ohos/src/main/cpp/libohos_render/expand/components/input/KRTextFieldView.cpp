@@ -344,8 +344,10 @@ void KRTextFieldView::OnEvent(ArkUI_NodeEvent *event, const ArkUI_NodeEventType 
         OnWillInsertText(event);
     } else if (event_type == GetOnPasteEventType()) {
         OnPasteText(event);
+#if KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE
     } else if (event_type == GetOnWillChangeEventType()) {
         OnWillChangeText(event);
+#endif
     } else if (event_type == GetOnTextSelectionChangeEventType()) {
         OnTextSelectionChange(event);  // 选区变化
     } else if (event_type == ArkUI_NodeEventType::NODE_ON_DRAG_ENTER) {
@@ -724,7 +726,9 @@ void KRTextFieldView::SetupLengthInputFilter() {
     length_input_filter_ = true;
     RegisterEvent(GetOnWillInsertEventType());
     RegisterEvent(GetOnPasteEventType());
+#if KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE
     RegisterEvent(GetOnWillChangeEventType());
+#endif
     RegisterEvent(ArkUI_NodeEventType::NODE_ON_DRAG_ENTER);
     RegisterEvent(ArkUI_NodeEventType::NODE_ON_DRAG_LEAVE);
 }

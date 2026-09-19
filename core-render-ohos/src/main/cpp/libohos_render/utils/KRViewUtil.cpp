@@ -945,6 +945,7 @@ void SetArkUIImageCapInsets(ArkUI_NodeHandle handle, float top, float left, floa
 }
 
 void SetArkUIImageSourceSize(ArkUI_NodeHandle handle, float width_px, float height_px) {
+#if KUIKLY_IMAGE_SOURCE_SIZE_AVAILABLE
     if (!handle) {
         return;
     }
@@ -954,6 +955,14 @@ void SetArkUIImageSourceSize(ArkUI_NodeHandle handle, float width_px, float heig
     ArkUI_NumberValue value[] = {{.i32 = static_cast<int>(width_px)}, {.i32 = static_cast<int>(height_px)}};
     ArkUI_AttributeItem item = {value, sizeof(value) / sizeof(ArkUI_NumberValue)};
     GetNodeApi()->setAttribute(handle, NODE_IMAGE_SOURCE_SIZE, &item);
+#else
+    // 本 SDK（API < 24）未提供 NODE_IMAGE_SOURCE_SIZE：该属性属九宫格(Lattice)能力，
+    // 这里保持 no-op；capInsets 会由 SetArkUIImageCapInsetsWithLattice 的既有
+    // 运行时弱符号检测自动退回老的 NODE_IMAGE_RESIZABLE 四值路径。
+    (void)handle;
+    (void)width_px;
+    (void)height_px;
+#endif
 }
 
 // ============================================================================

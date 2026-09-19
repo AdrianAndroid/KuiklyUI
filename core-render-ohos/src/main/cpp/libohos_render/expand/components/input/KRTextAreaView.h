@@ -43,9 +43,11 @@ class KRTextAreaView : public KRTextFieldView {
     ArkUI_NodeEventType GetOnPasteEventType() override {
         return ArkUI_NodeEventType::NODE_TEXT_AREA_ON_PASTE;
     }
+#if KUIKLY_TEXT_ON_WILL_CHANGE_AVAILABLE
     ArkUI_NodeEventType GetOnWillChangeEventType() override {
         return ArkUI_NodeEventType::NODE_TEXT_AREA_ON_WILL_CHANGE;
     }
+#endif
     ArkUI_NodeEventType GetOnTextSelectionChangeEventType() override {
         return ArkUI_NodeEventType::NODE_TEXT_AREA_ON_TEXT_SELECTION_CHANGE;
     }

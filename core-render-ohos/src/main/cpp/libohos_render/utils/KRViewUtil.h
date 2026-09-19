@@ -17,6 +17,7 @@
 #define CORE_RENDER_OHOS_KRVIEWUTIL_H
 
 #include <ace/xcomponent/native_interface_xcomponent.h>
+#include <info/application_target_sdk_version.h>
 #include <arkui/native_animate.h>
 #include <arkui/native_dialog.h>
 #include <arkui/native_interface.h>
@@ -42,6 +43,19 @@
 #include "libohos_render/utils/KRTransformParser.h"
 #include "libohos_render/utils/animate/KRAnimateOption.h"
 #include "libohos_render/utils/animate/KRAnimationUtils.h"
+
+/**
+ * `NODE_IMAGE_SOURCE_SIZE` 属九宫格(Lattice)图像能力，需较新 ArkUI SDK（本机 API 19 的
+ * native_node.h 未提供该枚举，直接引用会导致整个渲染器编译失败）。
+ * 与 `KUIKLY_TEXT_EDITOR_AVAILABLE` 一致按 `OH_CURRENT_API_VERSION` 编译期决定是否启用。
+ */
+#ifndef KUIKLY_IMAGE_SOURCE_SIZE_AVAILABLE
+#if defined(OH_CURRENT_API_VERSION) && OH_CURRENT_API_VERSION >= 24
+#define KUIKLY_IMAGE_SOURCE_SIZE_AVAILABLE 1
+#else
+#define KUIKLY_IMAGE_SOURCE_SIZE_AVAILABLE 0
+#endif
+#endif
 
 // forward-declare 以避免直接依赖 rawfile/raw_file_manager.h（该头文件在此仅需类型指针）。
 struct NativeResourceManager;
