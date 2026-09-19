@@ -49,6 +49,15 @@ abstract class KuiklyCoreAbsEntryBuilder {
 
     abstract fun packageName(): String
 
+    /**
+     * 若返回非 null，处理器直接写入该文本，不再走 KotlinPoet 生成。
+     *
+     * 存在原因：Gradle 插件（JSProcessor）会读取生成文件**第一行**中「最后一个 `/` 之后」
+     * 的内容并按 `|` 切分来获得页面列表；而 KotlinPoet 的注释会加 `// ` 前缀且长行会折行，
+     * 导致该解析取不到页面名。JS/Web 侧需要精确控制首行格式，故走原始文本写入。
+     */
+    open fun buildRawEntry(pagesAnnotations: List<PageInfo>): String? = null
+
     protected open fun getCommonComments(pagesAnnotations: List<PageInfo>): List<String> {
         return emptyList()
     }

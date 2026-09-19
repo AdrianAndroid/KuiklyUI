@@ -26,6 +26,7 @@ import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.TypeSpec
 import com.tencent.kuikly.core.annotations.Page
 import impl.AndroidTargetEntryBuilder
+import impl.JsTargetEntryBuilder
 import impl.KuiklyCoreAbsEntryBuilder
 import impl.IOSTargetEntryBuilder
 import impl.OhOsTargetEntryBuilder
@@ -97,14 +98,31 @@ class CoreProcessor(
             error(msg)
         }
 
+        // 注意：getEntryBuilder() 依赖 codeGenerator.generatedFile 推断源集，
+        // 必须在 createNewFile 之后调用（否则 generatedFile 为空 → NoSuchElementException）。
+        // 无匹配目标（JS / Web / MiniApp）时不写内容，只留下一个空文件，避免生成
+        // 引用 androidMain-only 的 IKuiklyCoreEntry 的 jsMain 源码导致 JS 编译失败。
         codeGenerator.createNewFile(
             dependencies = Dependencies(aggregating = true, *pages),
             packageName = "",
             fileName = "KuiklyCoreEntry",
             extensionName = "kt"
         ).use { output ->
-            buildEntryFile(pageClasses, getEntryBuilder()).forEach { fileSpec ->
-                output.write(fileSpec.toString().toByteArray())
+            val entryBuilder = getEntryBuilder()
+            if (entryBuilder == null) {
+                logger.warn(
+                    "KSP: no entry builder for current target (source set below ksp), skip KuiklyCoreEntry content"
+                )
+            } else {
+                val selectedPages = selectPages(pageClasses)
+                val rawEntry = entryBuilder.buildRawEntry(selectedPages)
+                if (rawEntry != null) {
+                    output.write(rawEntry.toByteArray())
+                } else {
+                    buildEntryFile(selectedPages, entryBuilder).forEach { fileSpec ->
+                        output.write(fileSpec.toString().toByteArray())
+                    }
+                }
             }
         }
 
@@ -116,10 +134,8 @@ class CoreProcessor(
         return emptyList()
     }
 
-    private fun buildEntryFile(
-        pageClasses: Sequence<KSClassDeclaration>,
-        absEntryBuilder: KuiklyCoreAbsEntryBuilder,
-    ): List<FileSpec> {
+    /** 按打包配置筛选出要写入入口的页面。 */
+    private fun selectPages(pageClasses: Sequence<KSClassDeclaration>): List<PageInfo> {
         val pageName = option["pageName"] ?: ""
         val packLocalAarBundle = option["packLocalAarBundle"] ?: ""
         val packBundleByModuleId = option["packBundleByModuleId"] ?: ""
@@ -144,10 +160,18 @@ class CoreProcessor(
                 pageClassDeclarations.add(pageInfo)
             }
         }
-        return absEntryBuilder.build(pageClassDeclarations)
+        return pageClassDeclarations
     }
 
-    private fun getEntryBuilder(): KuiklyCoreAbsEntryBuilder{
+    private fun buildEntryFile(
+        pages: List<PageInfo>,
+        absEntryBuilder: KuiklyCoreAbsEntryBuilder,
+    ): List<FileSpec> {
+        return absEntryBuilder.build(pages)
+    }
+
+    /** 返回与当前编译目标匹配的入口生成器；无匹配（如 JS/Web/MiniApp）返回 null。 */
+    private fun getEntryBuilder(): KuiklyCoreAbsEntryBuilder?{
         val enableMultiModule = option["enableMultiModule"]?.toBoolean() ?: false
         val isMainModule = option["isMainModule"]?.toBoolean() ?: false
         val subModules = option["subModules"] ?: ""
@@ -178,7 +202,10 @@ class CoreProcessor(
                 }
             }
             else -> {
-                AndroidTargetEntryBuilder(caughtException)
+                // JS / Web / MiniApp：无原生入口类（由 core-render-web / core-wx 自行引导），
+                // 不能回退到 Android 构建器（会生成引用 androidMain-only 符号、无法编译的 jsMain 源码）。
+                // 但仍需产出页面列表供 Gradle 插件(JSProcessor)读取。
+                JsTargetEntryBuilder()
             }
         }
     }
