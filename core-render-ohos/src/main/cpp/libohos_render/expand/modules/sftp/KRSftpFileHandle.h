@@ -15,6 +15,7 @@
 #pragma once
 #include <string>
 #include "libohos_render/export/IKRRenderModuleExport.h"
+#include "KRSftpInternal.h"
 
 namespace kuikly {
 namespace module {
@@ -33,7 +34,7 @@ class KRSftpFileHandle {
 
  private:
     static std::mutex gLock;
-    static std::unordered_map<std::string, void *> gHandles;  // fileHandleId → LIBSSH2_SFTP_HANDLE*
+    static std::unordered_map<std::string, std::shared_ptr<sftp_internal::OpenFileHandle>> gHandles;
     static long long gHandleIdCounter;
 };
 

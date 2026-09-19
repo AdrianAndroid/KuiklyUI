@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <mutex>
 #include "libohos_render/export/IKRRenderModuleExport.h"
+#include "KRSftpInternal.h"
 
 namespace kuikly {
 namespace module {
@@ -61,9 +62,12 @@ class KRSftpSession {
     static void CancelBatchTask(const std::string &taskId);
     static void ShutdownAll();
 
+    /** 供 KRSftpFileHandle 复用同一条连接（同一会话的 SFTP 操作必须串行）。找不到返回 nullptr。 */
+    static std::shared_ptr<sftp_internal::SessionHandle> FindSession(const std::string &sessionId);
+
  private:
     static std::mutex gLock;
-    static std::unordered_map<std::string, void *> gSessions;  // sessionId → LIBSSH2_SESSION*
+    static std::unordered_map<std::string, std::shared_ptr<sftp_internal::SessionHandle>> gSessions;
     static long long gSessionIdCounter;
 };
 

@@ -15,7 +15,7 @@
 #ifndef KRSFTP_CONNECTION_MODULE_H
 #define KRSFTP_CONNECTION_MODULE_H
 
-#include "IKRRenderModuleExport.h"
+#include "libohos_render/export/IKRRenderModuleExport.h"
 #include <string>
 
 namespace kuikly {
