@@ -520,7 +520,8 @@ const mediaProxyModule = {
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// 数据目录：默认在网关目录下；Electron 安装后由 SFTP_GATEWAY_DATA_DIR 指向可写的 userData
+const DATA_DIR = process.env.SFTP_GATEWAY_DATA_DIR || path.join(__dirname, 'data');
 const F_CONNECTIONS = path.join(DATA_DIR, 'sftp_connections.json');
 const F_FAVORITES = path.join(DATA_DIR, 'sftp_favorites.json');
 const F_HISTORY = path.join(DATA_DIR, 'sftp_playback_history.json');
@@ -538,10 +539,14 @@ function loadArray(file) {
 }
 
 function saveArray(file, arr) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(arr));
-  fs.renameSync(tmp, file);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(arr));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    console.warn('[sftp-gateway] 持久化失败（不影响本次连接）:', file, e.message);
+  }
 }
 
 const nowMs = () => Date.now();
@@ -557,10 +562,14 @@ function loadObject(file) {
 }
 
 function saveObject(file, obj) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
-  fs.renameSync(tmp, file);
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    console.warn('[sftp-gateway] 持久化失败（不影响本次连接）:', file, e.message);
+  }
 }
 
 function fingerprintOf(key) {

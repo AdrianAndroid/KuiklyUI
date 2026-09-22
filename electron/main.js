@@ -42,8 +42,14 @@ let gatewayUrl = 'http://127.0.0.1:18090';
 function startGateway() {
   return new Promise((resolve, reject) => {
     const entry = gatewayEntry();
+    // 数据目录必须可写：安装到 /Applications 后 App 包是只读的，故指向 userData
+    const dataDir = path.join(app.getPath('userData'), 'gateway-data');
     gatewayProc = utilityProcess.fork(entry, [], {
-      env: { ...process.env, SFTP_GATEWAY_PORT: '0' },
+      env: {
+        ...process.env,
+        SFTP_GATEWAY_PORT: '0',
+        SFTP_GATEWAY_DATA_DIR: dataDir,
+      },
       stdio: 'inherit',
     });
     const timer = setTimeout(() => reject(new Error('gateway start timeout')), 15000);
