@@ -93,11 +93,11 @@ class KuiklyRenderContextHandler : IKuiklyRenderContextHandler {
             argsList
         }
 
-        // 3. Call method registered globally for native to call kuikly side
-        kuiklyWindow.asDynamic()[METHOD_NAME_CALL_KOTLIN](
+        // 3. Call the bridge exported by nativevue2.js. The JS bundle exposes this
+        // method under the shared Kuikly namespace, not as a window-level function.
+        kuiklyWindow.asDynamic().com.tencent.kuikly.core.nvi.callKotlinMethod(
             // Use enum ordinal value directly
             method.ordinal,
-            // Parameter values
             argsList.firstArg(),
             argsList.secondArg(),
             argsList.thirdArg(),

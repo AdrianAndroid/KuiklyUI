@@ -17,9 +17,12 @@ object KuiklyRouter {
     private const val CONTAINER_ID = "root"
     private const val SCROLL_KEY_PREFIX = "kr_scroll_"
     
-    // Feature Flag: Set to true to enable SPA mode by default, 
+    // Feature Flag: Set to true to enable SPA mode by default,
     // or control via URL param "use_spa=1"
-    private const val ENABLE_BY_DEFAULT = false
+    // NOTE: Web SFTP client requires SPA mode for in-page navigation
+    // (openPage/closePage must NOT use window.open/window.close, which
+    // either open new tabs or get silently rejected by the browser).
+    private const val ENABLE_BY_DEFAULT = true
 
     private const val DEFAULT_PAGE_NAME = "router"
     private const val URL_PARAM_USE_SPA = "use_spa"

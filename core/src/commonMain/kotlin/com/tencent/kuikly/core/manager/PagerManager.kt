@@ -133,6 +133,12 @@ object PagerManager {
             if (url.contains("pagerName")) {
                 return getParamFromUrl(url, "pagerName")
             }
+            // H5 host (KuiklyRouter) exposes the page via the `page_name` query
+            // parameter while the native hosts use `pageName`. Accept both so the
+            // shared PagerManager can resolve direct H5 deep links.
+            if (url.contains("page_name")) {
+                return getParamFromUrl(url, "page_name")
+            }
         }
         return url
     }

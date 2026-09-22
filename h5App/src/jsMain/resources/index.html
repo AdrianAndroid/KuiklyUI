@@ -56,7 +56,22 @@
 </style>
 <body>
 <div id="root"></div>
-<script type="text/javascript" src="http://127.0.0.1:8083/nativevue2.js"></script>
+<script type="text/javascript" src="nativevue2.js"></script>
+<script type="text/javascript">
+    // Keep both bridge shapes available. Kotlin/JS exports the bridge under
+    // com.tencent.kuikly.core.nvi, while older Web render bundles call the
+    // window-level function directly.
+    (function (global) {
+        var nvi = global.com && global.com.tencent && global.com.tencent.kuikly &&
+            global.com.tencent.kuikly.core && global.com.tencent.kuikly.core.nvi;
+        if (nvi && typeof nvi.callKotlinMethod === 'function') {
+            global.callKotlinMethod = nvi.callKotlinMethod;
+        }
+        if (nvi && typeof nvi.registerCallNative === 'function') {
+            global.registerCallNative = nvi.registerCallNative;
+        }
+    })(window);
+</script>
 <script type="text/javascript"
         src="https://cdn.jsdelivr.net/npm/libpag@4.3.51/lib/libpag.umd.min.js"></script>
 <script type="text/javascript" src="h5App.js"></script>

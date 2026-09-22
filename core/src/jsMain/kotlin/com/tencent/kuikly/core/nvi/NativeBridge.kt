@@ -74,3 +74,22 @@ fun registerCallNative(pagerId: String, callback: CallNativeCallback) {
         BridgeManager.registerNativeBridge(pagerId, NativeBridge())
     }
 }
+
+@JsName(name = "callKotlinMethod")
+@JsExport
+@ExperimentalJsExport
+/**
+ * Web host callback used by the rendered H5 bundle to dispatch events
+ * back into the shared Kotlin bridge.
+ */
+fun callKotlinMethod(
+    methodId: Int,
+    arg0: Any? = null,
+    arg1: Any? = null,
+    arg2: Any? = null,
+    arg3: Any? = null,
+    arg4: Any? = null,
+    arg5: Any? = null
+) {
+    BridgeManager.callKotlinMethod(methodId, arg0, arg1, arg2, arg3, arg4, arg5)
+}

@@ -23,6 +23,22 @@ fun main() {
 
     console.log("##### Kuikly H5 #####")
 
+    // Web 端的 Pager 注册由业务 bundle（nativevue2.js）提供：KSP 在 JS 目标只生成
+    // 页面名注释，不生成运行时注册代码，因此这里必须在创建页面（callKotlinMethod(0)）
+    // 之前显式调用注册入口（幂等，见 demo/src/jsMain/.../WebSftpPageRegistry.kt）。
+    try {
+        val g = window.asDynamic()
+        val registerFn = g.com?.tencent?.kuikly?.demo?.pages?.sftp?.registerKuiklyDemoWebPages
+        if (registerFn != null) {
+            registerFn()
+            console.log("##### Kuikly H5: demo pages registered #####")
+        } else {
+            console.warn("##### Kuikly H5: registerKuiklyDemoWebPages not found #####")
+        }
+    } catch (e: Throwable) {
+        console.warn("##### Kuikly H5: register demo pages failed: $e #####")
+    }
+
     // Create and initialize the page delegator using shared logic
     val delegator = KuiklyRouter.createDelegator(window.location.href)
 
