@@ -12,6 +12,14 @@
 'use strict';
 
 const { app, BrowserWindow, utilityProcess, ipcMain, dialog, shell, Notification } = require('electron');
+
+// 常见环境坑：从 VS Code / 某些终端启动时会带 ELECTRON_RUN_AS_NODE=1，
+// 此时 Electron 以纯 Node 运行，require('electron') 只返回二进制路径（拿不到 API）。
+if (!app) {
+  console.error('[electron] 未拿到 Electron API：请清除 ELECTRON_RUN_AS_NODE 后启动，例如');
+  console.error('           env -u ELECTRON_RUN_AS_NODE electron .');
+  process.exit(1);
+}
 const path = require('path');
 
 const RES_DIR = path.join(__dirname, 'resources');

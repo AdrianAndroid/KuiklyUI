@@ -7,12 +7,13 @@
   "scripts": {
     "build:web": "node scripts/build-web.mjs",
     "sync": "node scripts/sync-resources.mjs",
-    "start": "npm run sync && electron .",
-    "dist": "npm run sync && electron-builder",
+    "start": "npm run sync && env -u ELECTRON_RUN_AS_NODE electron .",
+    "start:noenv": "npm run sync && electron .",
+    "dist": "npm run sync && env -u ELECTRON_RUN_AS_NODE electron-builder",
     "test": "node test/smoke.mjs"
   },
   "devDependencies": {
-    "electron": "^32.0.0",
+    "electron": "33.4.11",
     "electron-builder": "^24.13.3"
   }
 }

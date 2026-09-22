@@ -205,6 +205,8 @@
 - ❌ 新增 `Kotlin/Native` 平台时改 `kotlin {}` 后忘了同步更新 `settings.<version>.gradle.kts`。
 - ❌ iOS `User Script Sandboxing = Yes` 导致 KMP 脚本权限错误 → 设为 `No`。
 - ❌ 在 Web/MiniApp 假设有 TCP/SSH 能力 → 浏览器沙箱限制，必须走后端网关（Web 端已实现 `sftp-gateway/`，见 §13.1.3）。
+- ❌ 在 VS Code / Kilo 环境直接 `electron .` → 会继承 `ELECTRON_RUN_AS_NODE=1`，Electron 退化纯 Node，
+  `require('electron')` 只返回路径（`ipcMain` 为 undefined）。必须 `env -u ELECTRON_RUN_AS_NODE electron .`。
 
 ---
 
