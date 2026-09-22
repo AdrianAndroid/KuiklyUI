@@ -1,0 +1,13 @@
+{
+  "name": "kuikly-sftp-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kuikly SFTP Web gateway: holds real SSH/SFTP sessions and exposes them to the browser (H5) over HTTP, including HTTP Range media streaming.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ssh2": "^1.15.0"
+  }
+}

@@ -23,7 +23,9 @@ import com.tencent.kuikly.core.module.sftp.I18n
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.sftp.SftpMediaProxyModule
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.pager.IPagerEventObserver
 import com.tencent.kuikly.core.timer.setTimeout
+import com.tencent.kuikly.core.timer.clearTimeout
 import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord
 import com.tencent.kuikly.core.datetime.DateTime
@@ -80,6 +82,40 @@ internal class SftpPlayerPage : SftpBasePager() {
     /** 拖动中的比例（0..1），拖动时以它显示，松手才真正 seek（避免拖一次发几十次 seek） */
     private var dragRatio: Float by observable(0f)
 
+    /** 全屏时控制条是否可见（自动隐藏）。非全屏时控制条恒显示，不受此值影响。 */
+    private var controlsVisible: Boolean by observable(true)
+
+    /** 已缓冲位置（毫秒）。Web 端由 Video 的 customEvent 回传，用于进度条「已缓冲」段。 */
+    private var bufferedPosition: Int by observable(0)
+
+    /** 播放倍速（对齐 Plyr 的 settings/speed） */
+    private var speed: Float by observable(1f)
+
+    /** 设置菜单（倍速）是否展开；展开时不自动隐藏控制条 */
+    private var showSettingsMenu: Boolean by observable(false)
+    /** 自动隐藏定时器 id */
+    private var hideControlsTimer: String? = null
+
+    /**
+     * 宿主（桌面 Web）会把鼠标移动转成页面事件，用来「动一下就显示控制条」。
+     * 移动端没有鼠标移动，靠触摸/点击触发，逻辑一致。
+     */
+    private val hostEventObserver = object : IPagerEventObserver {
+        override fun onPagerEvent(pagerEvent: String, eventData: JSONObject) {
+            when (pagerEvent) {
+                EVENT_CONTROLS_ACTIVITY -> if (isFullscreen) showControls()
+                EVENT_FULLSCREEN_CHANGED -> {
+                    val fs = eventData.optBoolean("fullscreen", isFullscreen)
+                    if (fs != isFullscreen) {
+                        isFullscreen = fs
+                        if (fs) showControls()
+                    }
+                }
+                EVENT_PLAYER_KEY -> handlePlayerKey(eventData.optString("key"))
+            }
+        }
+    }
+
     private var token: String? = null
     private var playUrl: String? by observable(null)
     private var playError: String? by observable(null)
@@ -95,6 +131,7 @@ internal class SftpPlayerPage : SftpBasePager() {
 
     override fun created() {
         super.created()
+        addPagerEventObserver(hostEventObserver)
         val params = pageData.params
         sessionId = params.optString("sessionId", "")
         connectionId = params.optString("connectionId", "")
@@ -198,6 +235,8 @@ internal class SftpPlayerPage : SftpBasePager() {
             // 视频容器：占据窗口剩余高度，画面按 contain 等比缩放（随窗口自适应）
             View {
                 attr { flex(1f); width(pagerData.pageViewWidth); backgroundColor(Color.BLACK) }
+                // 全屏时点击画面切换控制条显隐（移动端主要靠这个；桌面 Web 还会靠鼠标移动）
+                event { click { ctx.toggleControls() } }
                 // 必须用 vif：playUrl 是异步拿到的，写成 body 结构层的 `let`/`if`
                 // 时首次求值为 null，Video 视图不会被创建，之后也不会重建（=黑屏）。
                 vif({ ctx.playUrl != null }) {
@@ -214,6 +253,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                             // 也就不会向本地代理发起 Range 请求（表现为黑屏且代理无请求）
                             playControl(if (ctx.isPlaying) VideoPlayControl.PLAY else VideoPlayControl.PAUSE)
                             muted(ctx.muted)
+                            rate(ctx.speed)
                             // 只下发「显式 seek 目标」，绝不下发播放进度，
                             // 否则每秒的进度回调都会变成一次真实 seek（卡顿根因）
                             seekTo(ctx.seekTarget)
@@ -222,6 +262,14 @@ internal class SftpPlayerPage : SftpBasePager() {
                             firstFrameDidDisplay { ctx.firstFrameShown = true }
                             playStateDidChanged { state, _ -> ctx.onPlayStateChanged(state) }
                             playTimeDidChanged { cur, total -> ctx.onPlayTimeChanged(cur, total) }
+                            // 引擎回传的扩展数据（Web：已缓冲进度）
+                            customEvent { data ->
+                                val obj = data as? JSONObject ?: return@customEvent
+                                if (obj.optString("event") == "buffered") {
+                                    val b = obj.optInt("bufferedTime")
+                                    if (b > ctx.bufferedPosition) ctx.bufferedPosition = b
+                                }
+                            }
                         }
                     }
                 }
@@ -251,52 +299,116 @@ internal class SftpPlayerPage : SftpBasePager() {
                         }
                     }
                 }
+                // 中央大播放键：暂停时显示（对齐 Plyr 的 play-large）
+                vif({ !ctx.isPlaying && ctx.playUrl != null }) {
+                    View {
+                        attr {
+                            positionAbsolute()
+                            left(0f); right(0f); top(0f); bottom(0f)
+                            allCenter()
+                        }
+                        event { click { ctx.togglePlay() } }
+                        View {
+                            attr {
+                                size(64f, 64f)
+                                borderRadius(32f)
+                                allCenter()
+                                backgroundColor(Color(0x88000000))
+                            }
+                            Text { attr { text("▶"); fontSize(26f); color(Color.WHITE) } }
+                        }
+                    }
+                }
             }
 
-            // 控制条：进度 + 时间 + 播放/暂停 + 快退快进 + 选集
+            // 控制面板：始终覆盖在视频底部（对齐 Plyr 的控件层），全屏时自动隐藏。
+            vif({ !ctx.isFullscreen || ctx.controlsVisible }) {
             View {
                 attr {
                     width(pagerData.pageViewWidth)
-                    padding(16f, 10f, 16f, 14f)
+                    positionAbsolute()
+                    bottom(0f)
+                    padding(12f, 8f, 12f, 10f)
                     flexDirectionColumn()
-                    backgroundColor(Color(0xFF101010))
+                    backgroundColor(Color(0xCC101010))
                 }
-                // 进度条（可拖动：按下/移动预览，松手才 seek）
+                // ── 进度条：已缓冲段 + 已播段 + 滑块 + 拖动时间预览 ──
                 View {
                     attr {
-                        width(pagerData.pageViewWidth - 32f)
-                        height(24f)          // 触摸区比视觉高度大，便于拖拽
+                        width(pagerData.pageViewWidth - 24f)
+                        height(28f)          // 触摸区比视觉高度大，便于拖拽
                         justifyContentCenter()
                         backgroundColor(Color(0x00000000))
-                        touchEnable(true)    // 显式开启触摸，保证 touchDown/Move/Up 能收到
+                        touchEnable(true)    // 显式开启触摸，保证 pan 能收到
                     }
-                    // 轨道
+                    // 轨道（子元素用绝对定位叠放；规格对齐 Plyr：track 5 / thumb 13）
                     View {
                         attr {
-                            width(pagerData.pageViewWidth - 32f)
-                            height(4f)
-                            borderRadius(2f)
-                            backgroundColor(Color(0xFF3A3A3A))
+                            width(pagerData.pageViewWidth - 24f)
+                            height(5f)
+                            borderRadius(3f)
+                            backgroundColor(Color(0x55FFFFFF))
                         }
-                        // 已播部分 + 滑块
+                        // 已缓冲段
                         View {
                             attr {
-                                width((pagerData.pageViewWidth - 32f) * ctx.displayRatio())
-                                height(4f)
-                                borderRadius(2f)
-                                backgroundColor(Color(0xFF3D7EFF))
-                                justifyContentCenter()
+                                positionAbsolute()
+                                left(0f); top(0f)
+                                width((pagerData.pageViewWidth - 24f) * ctx.bufferedRatio())
+                                height(5f)
+                                borderRadius(3f)
+                                backgroundColor(Color(0x99FFFFFF))
                             }
-                            // 滑块（跟随右端，拖动时变大提示）
+                        }
+                        // 已播段
+                        View {
+                            attr {
+                                positionAbsolute()
+                                left(0f); top(0f)
+                                width((pagerData.pageViewWidth - 24f) * ctx.displayRatio())
+                                height(5f)
+                                borderRadius(3f)
+                                backgroundColor(Color(0xFF3D7EFF))
+                            }
+                        }
+                        // 滑块：拖动时变大并加外圈（Plyr thumb-active-shadow）
+                        View {
+                            attr {
+                                positionAbsolute()
+                                left(((pagerData.pageViewWidth - 24f) * ctx.displayRatio()) -
+                                    (if (ctx.draggingProgress) 10f else 7f))
+                                top(if (ctx.draggingProgress) -8f else -4f)
+                                size(if (ctx.draggingProgress) 20f else 14f,
+                                      if (ctx.draggingProgress) 20f else 14f)
+                                borderRadius(if (ctx.draggingProgress) 10f else 7f)
+                                backgroundColor(if (ctx.draggingProgress) Color(0x553D7EFF) else Color(0x00000000))
+                                allCenter()
+                            }
                             View {
                                 attr {
-                                    positionAbsolute()
-                                    right(-6f)
-                                    size(if (ctx.draggingProgress) 14f else 10f,
-                                          if (ctx.draggingProgress) 14f else 10f)
+                                    size(13f, 13f)
                                     borderRadius(7f)
                                     backgroundColor(Color(0xFFFFFFFF))
-                                    marginTop(-5f)
+                                }
+                            }
+                        }
+                    }
+                    // 拖动时在滑块上方显示目标时间
+                    if (ctx.draggingProgress) {
+                        View {
+                            attr {
+                                positionAbsolute()
+                                left(((pagerData.pageViewWidth - 24f) * ctx.dragRatio) - 26f)
+                                top(-26f)
+                                padding(6f, 2f, 6f, 2f)
+                                borderRadius(4f)
+                                backgroundColor(Color(0xCC000000))
+                            }
+                            Text {
+                                attr {
+                                    text(formatTime((ctx.duration * ctx.dragRatio).toLong()))
+                                    fontSize(11f)
+                                    color(Color.WHITE)
                                 }
                             }
                         }
@@ -316,104 +428,84 @@ internal class SftpPlayerPage : SftpBasePager() {
                         }
                     }
                 }
-                // 时间
-                Text {
-                    attr {
-                        text(formatTime(ctx.currentPosition.toLong()) + " / " + formatTime(ctx.duration.toLong()))
-                        fontSize(12f)
-                        color(Color(0xFFBBBBBB))
-                        marginTop(6f)
-                    }
-                }
-                // 按钮行
+                // 按钮行：播放控制 + 时间 + 倍速/静音/选集/全屏
                 View {
-                    attr { flexDirectionRow(); alignItemsCenter(); marginTop(8f) }
-                    // 快退 10s
-                    View {
-                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_SEEK_BACKWARD) }
-                        event { click { ctx.seekBy(-10_000) } }
-                        Text { attr { text("⏪"); fontSize(16f); color(Color.WHITE) } }
-                    }
+                    attr { flexDirectionRow(); alignItemsCenter(); marginTop(4f) }
                     // 播放 / 暂停
                     View {
                         attr {
                             size(44f, 44f); allCenter(); borderRadius(22f)
                             backgroundColor(Color(0xFF2A2A2A))
-                            marginLeft(8f)
                             accessibility(if (ctx.isPlaying) SftpAccessibility.BTN_PAUSE else SftpAccessibility.BTN_PLAY)
                         }
                         event { click { ctx.togglePlay() } }
                         Text {
                             attr {
-                                text(if (ctx.isPlaying) "⏸" else "▶")
-                                fontSize(18f)
+                                text(if (ctx.isPlaying) "❚❚" else "▶")
+                                fontSize(if (ctx.isPlaying) 15f else 18f)
                                 color(Color.WHITE)
                             }
                         }
+                    }
+                    // 快退 10s
+                    View {
+                        attr { size(40f, 40f); allCenter(); marginLeft(6f); accessibility(SftpAccessibility.BTN_SEEK_BACKWARD) }
+                        event { click { ctx.seekBy(-10_000) } }
+                        Text { attr { text("◀◀"); fontSize(12f); color(Color.WHITE) } }
                     }
                     // 快进 10s
                     View {
-                        attr { size(40f, 40f); allCenter(); marginLeft(8f); accessibility(SftpAccessibility.BTN_SEEK_FORWARD) }
+                        attr { size(40f, 40f); allCenter(); marginLeft(6f); accessibility(SftpAccessibility.BTN_SEEK_FORWARD) }
                         event { click { ctx.seekBy(10_000) } }
-                        Text { attr { text("⏩"); fontSize(16f); color(Color.WHITE) } }
+                        Text { attr { text("▶▶"); fontSize(12f); color(Color.WHITE) } }
                     }
-                    // 静音开关
+                    // 时间
+                    Text {
+                        attr {
+                            text(formatTime(ctx.currentPosition.toLong()) + " / " + formatTime(ctx.duration.toLong()))
+                            fontSize(12f)
+                            color(Color(0xFFBBBBBB))
+                            marginLeft(10f)
+                        }
+                    }
+                    // 占位：把右侧按钮推到最右
+                    View { attr { flex(1f) } }
+                    // 设置（倍速菜单，对齐 Plyr 的 settings）
                     View {
-                        attr { size(40f, 40f); allCenter(); marginLeft(8f) }
+                        attr { size(44f, 40f); allCenter() }
+                        event { click { ctx.showSettingsMenu = !ctx.showSettingsMenu; ctx.showControls() } }
+                        Text {
+                            attr {
+                                text(if (ctx.speed == 1f) "1.0×" else "${ctx.speed}×")
+                                fontSize(12f)
+                                color(Color.WHITE)
+                            }
+                        }
+                    }
+                    // 静音
+                    View {
+                        attr { size(40f, 40f); allCenter() }
                         event { click { ctx.muted = !ctx.muted } }
-                        Text {
-                            attr {
-                                text(if (ctx.muted) "🔇" else "🔊")
-                                fontSize(15f)
-                                color(Color.WHITE)
-                            }
-                        }
+                        Text { attr { text(if (ctx.muted) "🔇" else "🔊"); fontSize(14f); color(Color.WHITE) } }
                     }
-                    // 全屏
-                    View {
-                        attr { size(40f, 40f); allCenter(); marginLeft(8f); accessibility(SftpAccessibility.BTN_FULLSCREEN) }
-                        event { click { ctx.toggleFullscreen() } }
-                        Text {
-                            attr {
-                                text(if (ctx.isFullscreen) "⤡" else "⛶")
-                                fontSize(16f)
-                                color(Color.WHITE)
-                            }
-                        }
-                    }
-                    // 上一集 / 选集 / 下一集
-                    View {
-                        attr { size(40f, 40f); allCenter(); marginLeft(16f); accessibility(SftpAccessibility.BTN_PREV_EPISODE) }
-                        event { click { ctx.playPrevEpisode() } }
-                        Text { attr { text("◀"); fontSize(15f); color(Color.WHITE) } }
-                    }
+                    // 选集
                     View {
                         attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_EPISODE_LIST) }
                         event { click { ctx.showEpisodeDrawer = !ctx.showEpisodeDrawer } }
                         Text { attr { text("☰"); fontSize(15f); color(Color.WHITE) } }
                     }
+                    // 全屏
                     View {
-                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_NEXT_EPISODE) }
-                        event { click { ctx.playNextEpisode() } }
-                        Text { attr { text("▶"); fontSize(15f); color(Color.WHITE) } }
-                    }
-                    // 文件名
-                    Text {
-                        attr {
-                            text(ctx.name)
-                            fontSize(12f)
-                            color(Color(0xFF999999))
-                            flex(1f)
-                            marginLeft(8f)
-                            lines(1)
-                            textOverFlowTail()
-                        }
+                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_FULLSCREEN) }
+                        event { click { ctx.toggleFullscreen() } }
+                        Text { attr { text(if (ctx.isFullscreen) "⤡" else "⛶"); fontSize(16f); color(Color.WHITE) } }
                     }
                 }
             }
+            }
 
-            // 续播提示对话框
-            if (ctx.hasResumePromptShown) {
+            // 续播提示对话框（必须用 vif：body 结构层的 if 只在首帧求值，不会响应式重建）
+            vif({ ctx.hasResumePromptShown }) {
                 SftpResumePromptDialog(
                     resumeMs = ctx.resumePosition,
                     onContinue = {
@@ -428,7 +520,7 @@ internal class SftpPlayerPage : SftpBasePager() {
             }
 
             // 自动下一集倒计时
-            if (ctx.showCountdown) {
+            vif({ ctx.showCountdown }) {
                 SftpNextEpisodeCountdownDialog(
                     seconds = ctx.nextEpisodeCountdown,
                     onCancel = { ctx.showCountdown = false },
@@ -436,8 +528,16 @@ internal class SftpPlayerPage : SftpBasePager() {
                 )
             }
 
+            // 播放设置菜单（倍速，对齐 Plyr 的 settings）
+            vif({ ctx.showSettingsMenu }) {
+                SftpPlayerSettingsMenu(ctx.speed) { picked ->
+                    ctx.speed = picked
+                    ctx.showSettingsMenu = false
+                }
+            }
+
             // 选集抽屉
-            if (ctx.showEpisodeDrawer && ctx.episodes.isNotEmpty()) {
+            vif({ ctx.showEpisodeDrawer && ctx.episodes.isNotEmpty() }) {
                 SftpEpisodeDrawer(ctx.episodes, ctx.currentIndex) { index ->
                     ctx.showEpisodeDrawer = false
                     ctx.switchToEpisode(index)
@@ -477,7 +577,7 @@ internal class SftpPlayerPage : SftpBasePager() {
     private fun displayRatio(): Float = if (draggingProgress) dragRatio else progressRatio()
 
     private fun ratioFromX(x: Float): Float {
-        val w = pagerData.pageViewWidth - 32f
+        val w = pagerData.pageViewWidth - 24f   // 与进度条轨道宽度一致（控制面板左右各留 12）
         if (w <= 0f) return 0f
         return (x / w).coerceIn(0f, 1f)
     }
@@ -485,6 +585,8 @@ internal class SftpPlayerPage : SftpBasePager() {
     private fun beginDragProgress(x: Float) {
         draggingProgress = true
         dragRatio = ratioFromX(x)
+        // 重置自动隐藏计时，避免拖动过程中面板被隐藏而中断手势
+        showControls()
     }
 
     private fun updateDragProgress(x: Float) {
@@ -510,6 +612,9 @@ internal class SftpPlayerPage : SftpBasePager() {
 
     /** 返回上一页（离开前落一次播放历史并释放代理 token） */
     private fun closeSelf() {
+        removePagerEventObserver(hostEventObserver)
+        hideControlsTimer?.let { clearTimeout(it) }
+        hideControlsTimer = null
         if (duration > 0 && currentPosition > 0) {
             savePlaybackHistory(currentPosition.toLong(), duration.toLong(), false)
         }
@@ -524,10 +629,68 @@ internal class SftpPlayerPage : SftpBasePager() {
     private fun toggleFullscreen() {
         isFullscreen = !isFullscreen
         videoViewRef?.view?.setFullscreen(isFullscreen)
+        if (isFullscreen) showControls() else controlsVisible = true
+    }
+
+    /** 显示控制条并重新计时自动隐藏（全屏时用） */
+    private fun showControls() {
+        controlsVisible = true
+        scheduleHideControls()
+    }
+
+    /** 3 秒无操作后隐藏控制条（仅全屏且正在播放时） */
+    private fun scheduleHideControls() {
+        hideControlsTimer?.let { clearTimeout(it) }
+        hideControlsTimer = setTimeout(2000) {
+            // 正在拖动进度 / 打开设置菜单时绝不隐藏：隐藏会移除手势元素，拖动会被中断
+            if (isFullscreen && isPlaying && !draggingProgress && !showSettingsMenu) {
+                controlsVisible = false
+            }
+        }
+    }
+
+    /** 键盘快捷键（桌面 Web）：对齐 Plyr 的常用键位 */
+    private fun handlePlayerKey(key: String) {
+        when (key.lowercase()) {
+            " ", "k" -> togglePlay()
+            "arrowleft" -> seekBy(-10_000)
+            "arrowright" -> seekBy(10_000)
+            "m" -> muted = !muted
+            "f" -> toggleFullscreen()
+        }
+        showControls()
+    }
+
+    /** 点击画面：全屏时切换控制条显隐 */
+    private fun toggleControls() {
+        if (!isFullscreen) return
+        if (controlsVisible) {
+            hideControlsTimer?.let { clearTimeout(it) }
+            hideControlsTimer = null
+            controlsVisible = false
+        } else {
+            showControls()
+        }
+    }
+
+    /** 已缓冲比例（0..1） */
+    private fun bufferedRatio(): Float =
+        if (duration <= 0) 0f else (bufferedPosition.toFloat() / duration).coerceIn(0f, 1f)
+
+    /** 循环切换倍速（对齐 Plyr 的 settings/speed） */
+    private fun cycleSpeed() {
+        val options = floatArrayOf(0.5f, 1f, 1.25f, 1.5f, 2f)
+        var idx = -1
+        for (i in options.indices) {
+            if (kotlin.math.abs(options[i] - speed) < 0.01f) { idx = i; break }
+        }
+        speed = options[if (idx < 0) 1 else (idx + 1) % options.size]
+        showControls()
     }
 
     private fun togglePlay() {
         isPlaying = !isPlaying   // 驱动 playControl(PLAY/PAUSE)
+        showControls()
     }
 
     private fun seekBy(deltaMs: Int) {
@@ -614,6 +777,15 @@ internal class SftpPlayerPage : SftpBasePager() {
 
     companion object {
         const val PAGE_NAME = "SftpPlayerPage"
+
+        /** 宿主（桌面 Web）鼠标/触摸活动：用于显示控制条 */
+        private const val EVENT_CONTROLS_ACTIVITY = "sftp_controls_activity"
+
+        /** 全屏状态变化（含用户按 ESC 退出）：宿主回传，保持页面状态同步 */
+        private const val EVENT_FULLSCREEN_CHANGED = "sftp_fullscreen_changed"
+
+        /** 键盘快捷键（桌面 Web）：宿主 keydown 转页面事件 */
+        private const val EVENT_PLAYER_KEY = "sftp_player_key"
 
         /** 视为「可连播」的扩展名（§19.3.5 自动下一集） */
         private val VIDEO_EXTENSIONS =
@@ -761,6 +933,48 @@ internal fun ViewContainer<*, *>.SftpEpisodeDrawer(
                             fontSize(14f)
                             color(if (index == currentIndex) Color.WHITE else SftpColorTokens.textPrimary)
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 播放设置菜单（对齐 Plyr 的 settings）。
+ * 当前只提供倍速；字幕 / 清晰度等需引擎能力，后续可在此扩展。
+ */
+internal fun ViewContainer<*, *>.SftpPlayerSettingsMenu(
+    currentSpeed: Float,
+    onPick: (Float) -> Unit
+) {
+    val options = listOf(0.5f, 1f, 1.25f, 1.5f, 2f)
+    View {
+        attr {
+            positionAbsolute()
+            right(12f)
+            bottom(60f)
+            width(132f)
+            padding(6f, 6f, 6f, 6f)
+            borderRadius(10f)
+            flexDirectionColumn()
+            backgroundColor(Color(0xF0222222))
+        }
+        options.forEach { opt ->
+            View {
+                attr {
+                    width(120f)
+                    height(36f)
+                    allCenter()
+                    borderRadius(6f)
+                    backgroundColor(if (opt == currentSpeed) Color(0xFF3D7EFF) else Color(0x00000000))
+                }
+                event { click { onPick(opt) } }
+                Text {
+                    attr {
+                        text("${opt}×")
+                        fontSize(13f)
+                        color(Color.WHITE)
                     }
                 }
             }

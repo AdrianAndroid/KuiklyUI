@@ -11,7 +11,12 @@ import com.tencent.kuikly.h5app.components.KRWebView
 import com.tencent.kuikly.h5app.components.KuiklyPageView
 import com.tencent.kuikly.h5app.module.KRBridgeModule
 import com.tencent.kuikly.h5app.module.KRCacheModule
+import com.tencent.kuikly.h5app.module.KRLocalMediaProxyModule
 import com.tencent.kuikly.h5app.module.KRRouterModule
+import com.tencent.kuikly.h5app.module.KRSftpConnectionModule
+import com.tencent.kuikly.h5app.module.KRSftpFavoritesModule
+import com.tencent.kuikly.h5app.module.KRSftpModule
+import com.tencent.kuikly.h5app.module.KRSftpPlaybackHistoryModule
 
 class ViewPropExternalHandler : IKuiklyRenderViewPropExternalHandler {
     override fun setViewExternalProp(
@@ -98,6 +103,21 @@ class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
     }
 
     /**
+     * Update the root view size (used on window/container resize).
+     */
+    fun updateRootViewSize(width: Int, height: Int) {
+        delegate.updateRootViewSize(width, height)
+    }
+
+    /**
+     * Send an event to the current Kuikly page.
+     * 页面侧通过 `addPagerEventObserver(IPagerEventObserver)` 接收。
+     */
+    fun sendEvent(event: String, data: Map<String, Any>) {
+        delegate.sendEvent(event, data)
+    }
+
+    /**
      * Register custom modules
      */
     override fun registerExternalModule(kuiklyRenderExport: IKuiklyRenderExport) {
@@ -116,6 +136,14 @@ class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
         kuiklyRenderExport.moduleExport(KRRouterModule.MODULE_NAME) {
             KRRouterModule()
         }
+
+        // Web SFTP 模块：转发到本地 Node 网关（sftp-gateway），由网关代持真实 SSH/SFTP。
+        // 页面（commonMain）无需改动，模块名与 ModuleConst 一致。
+        kuiklyRenderExport.moduleExport(KRSftpModule.MODULE_NAME) { KRSftpModule() }
+        kuiklyRenderExport.moduleExport(KRSftpConnectionModule.MODULE_NAME) { KRSftpConnectionModule() }
+        kuiklyRenderExport.moduleExport(KRSftpFavoritesModule.MODULE_NAME) { KRSftpFavoritesModule() }
+        kuiklyRenderExport.moduleExport(KRSftpPlaybackHistoryModule.MODULE_NAME) { KRSftpPlaybackHistoryModule() }
+        kuiklyRenderExport.moduleExport(KRLocalMediaProxyModule.MODULE_NAME) { KRLocalMediaProxyModule() }
     }
 
     fun getKuiklyRenderContext() = delegate.getKuiklyRenderContext()

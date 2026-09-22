@@ -148,6 +148,21 @@ class KRVideoView : IKuiklyRenderViewExport {
             )
         })
 
+        // 缓冲进度：通过 customEvent 通道回传，供进度条绘制「已缓冲」段
+        addEventListener("progress", {
+            val item = this.unsafeCast<HTMLVideoElement>()
+            val buffered = item.buffered
+            val bufferedTime = if (buffered.length > 0) buffered.end(buffered.length - 1) * 1000 else 0.0
+            val totalTime = if (item.duration.isFinite()) item.duration * 1000 else 0.0
+            customEventCallback?.invoke(
+                mapOf(
+                    "event" to "buffered",
+                    "bufferedTime" to bufferedTime.toInt(),
+                    "totalTime" to totalTime.toInt(),
+                )
+            )
+        })
+
         this.unsafeCast<HTMLVideoElement>().apply {
             // Set autoplay
             autoplay = true
@@ -170,6 +185,47 @@ class KRVideoView : IKuiklyRenderViewExport {
 
     override val ele: HTMLVideoElement
         get() = video.unsafeCast<HTMLVideoElement>()
+
+    /**
+     * 处理 Kuikly 侧的 renderView.callMethod（目前只有全屏）。
+     * common `VideoView.setFullscreen()` → `callMethod("setFullscreen", "1"/"0")`。
+     */
+    override fun call(method: String, params: String?, callback: KuiklyRenderCallback?): Any? {
+        return when (method) {
+            CALL_SET_FULLSCREEN -> {
+                setFullscreen(params == "1")
+                null
+            }
+
+            else -> super.call(method, params, callback)
+        }
+    }
+
+    /**
+     * Web 全屏。
+     *
+     * 关键：对**包含 Kuikly 全部 DOM 的根容器**（#root）请求全屏，而不是对 <video> 元素。
+     * 若只把 <video> 全屏，浏览器会把它提升到独立的 top layer，Kuikly 绘制的控制条仍留在
+     * 普通文档流里，二者不在同一层级 → 全屏后看不到控制条。
+     * 全屏 #root 后：视频与控件同处一个全屏层，由页面自身布局决定控件覆盖在视频之上。
+     */
+    private fun setFullscreen(fullscreen: Boolean) {
+        try {
+            if (fullscreen) {
+                // 对包含 Kuikly 全部 DOM 的根容器请求全屏（不能只全屏 <video>，
+                // 否则控件会被留在普通文档流、不在同一层级）
+                js("(function(){var el=document.getElementById('root')||document.documentElement;if(el.requestFullscreen){el.requestFullscreen();}})()")
+                ele.style.width = "100%"
+                ele.style.height = "100%"
+            } else {
+                js("(function(){if(document.fullscreenElement&&document.exitFullscreen){document.exitFullscreen();}})()")
+                ele.style.width = ""
+                ele.style.height = ""
+            }
+        } catch (e: dynamic) {
+            Log.warn("KRVideoView setFullscreen error: $e")
+        }
+    }
 
     override fun setProp(propKey: String, propValue: Any): Boolean {
         return when (propKey) {
@@ -283,6 +339,9 @@ class KRVideoView : IKuiklyRenderViewExport {
 
     companion object {
         const val VIEW_NAME = "KRVideoView"
+
+        // Methods
+        private const val CALL_SET_FULLSCREEN = "setFullscreen"
 
         // Properties
         private const val SRC = "src"
