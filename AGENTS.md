@@ -386,7 +386,8 @@ Android SDK（Pixel_8a_API_35 / Android 15 模拟器）+ DevEco Studio（内置 
     `SftpMediaUrlBuilder.buildPlayUrl` 完全一致（`http://127.0.0.1:<port>/<token>/<name>`）
   - **安全（主机指纹）**：`connect` 传 `hostKeyPolicy` = `TOFU`(默认)/`STRICT`/`INSECURE`，
     首次连接记录指纹到 `data/sftp_known_hosts.json`，不匹配抛 `HOSTKEY_MISMATCH` → 错误码 `1004`；
-    并提供 `knownHosts.list` / `knownHosts.remove`。**Android/iOS/OHOS 端待补（M1-1 未完）**。
+    并提供 `knownHosts.list` / `knownHosts.remove`。
+    **Android 已接（JSch `HostKeyRepository`，TOFU，编译验证通过）；iOS/OHOS 端待补（M1-1 未完）**。
 - 浏览器模块：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`（Kotlin/JS，5 个类转发到 `/rpc`），
   在 `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt` 的 `registerExternalModule` 注册；
   **commonMain 页面零改动**。网关地址默认 `http://127.0.0.1:18090`，可用

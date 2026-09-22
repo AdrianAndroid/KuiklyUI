@@ -47,7 +47,7 @@ object SftpErrorFormatter {
                 val msg = e.message ?: ""
                 when {
                     msg.contains("Auth fail") -> Pair(1003, "认证失败")
-                    msg.contains("UnknownHostKey") || msg.contains("reject HOSTKEY") -> Pair(1004, "主机指纹不匹配")
+                    msg.contains("UnknownHostKey") || msg.contains("reject HOSTKEY") || msg.contains("HostKey has been changed") -> Pair(1004, "主机指纹不匹配")
                     else -> Pair(1999, msg.ifEmpty { "SSH 错误" })
                 }
             }

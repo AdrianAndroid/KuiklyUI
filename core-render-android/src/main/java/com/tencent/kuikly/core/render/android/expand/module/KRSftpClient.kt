@@ -59,9 +59,18 @@ object KRSftpClient {
                 jsch.addIdentity(user, privateKey.toByteArray(), null, null)
             }
         }
+        // 主机指纹校验：默认 TOFU（首次记录、变化即拒绝），防中间人。策略与 Web 网关一致。
+        val hostKeyPolicy = params.optString("hostKeyPolicy", KnownHostsRepository.POLICY_TOFU).uppercase()
+        val knownHostsFile = params.optString("knownHostsFile")
+        if (knownHostsFile.isNotEmpty()) {
+            jsch.setHostKeyRepository(KnownHostsRepository(java.io.File(knownHostsFile), hostKeyPolicy))
+        }
         val session = jsch.getSession(user, host, port)
         if (password.isNotEmpty()) session.setPassword(password)
-        session.setConfig("StrictHostKeyChecking", "no")  // TODO Phase 1.1: 接入 known_hosts 校验
+        session.setConfig(
+            "StrictHostKeyChecking",
+            if (hostKeyPolicy == KnownHostsRepository.POLICY_INSECURE) "no" else "yes",
+        )
         if (compression) session.setConfig("compression.s2c", "zlib@openssh.com,zlib,none")
         session.connect(connectTimeoutMs)
         session.serverVersion  // 触发握手

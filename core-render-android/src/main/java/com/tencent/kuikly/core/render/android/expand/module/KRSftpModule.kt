@@ -71,6 +71,10 @@ class KRSftpModule : KuiklyRenderBaseModule() {
         executeOnSubThread {
             try {
                 val json = params.toJSONObjectSafely()
+                // 注入 known_hosts 存储路径（TOFU 指纹落这里）；调用方已显式指定则不覆盖
+                if (!json.has("knownHostsFile")) {
+                    json.put("knownHostsFile", java.io.File(filesDir(), "sftp_known_hosts.json").absolutePath)
+                }
                 val sessionId = KRSftpClient.connect(json)
                 callback?.invoke(mapOf("sessionId" to sessionId))
             } catch (e: Exception) {
@@ -319,6 +323,11 @@ class KRSftpModule : KuiklyRenderBaseModule() {
     /** 本地缓存目录（下载/复制的临时文件落地处），由宿主 Context 提供 */
     private fun cacheDir(): String =
         (context?.cacheDir ?: java.io.File(System.getProperty("java.io.tmpdir") ?: "/tmp")).absolutePath
+
+    /** filesDir 优先（持久化：known_hosts 需要跨会话保留），退回 cacheDir/tmp */
+    private fun filesDir(): String =
+        (context?.filesDir ?: context?.cacheDir
+            ?: java.io.File(System.getProperty("java.io.tmpdir") ?: "/tmp")).absolutePath
 
     private fun executeOnSubThread(block: () -> Unit) {
         com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
