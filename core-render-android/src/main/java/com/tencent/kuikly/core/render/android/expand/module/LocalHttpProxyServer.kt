@@ -31,8 +31,10 @@ import java.util.concurrent.ConcurrentHashMap
  * - 只回「客户端请求的区间」，单次不超过 [MAX_CHUNK_BYTES]，播放器会继续请求后续区间；
  * - 首位字节无需读完整个文件即可下发（避免高首字节延迟导致播放器反复重发同一 Range）；
  * - 未实现/打开失败一律显式返回错误码，**绝不伪报成功**（§13.3）。
+ * - **安全：只绑定回环 127.0.0.1**。`NanoHTTPD(port)` 会绑到 0.0.0.0（全网卡），
+ *   把远端文件内容通过明文 HTTP 暴露到局域网；token 泄露即文件泄露。
  */
-class LocalHttpProxyServer private constructor(port: Int) : NanoHTTPD(port) {
+class LocalHttpProxyServer private constructor(port: Int) : NanoHTTPD("127.0.0.1", port) {
 
     private val tokens = ConcurrentHashMap<String, ProxyToken>()
 

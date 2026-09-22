@@ -101,7 +101,14 @@ static const long long kNoRangeInlineMaxBytes = 8 * 1024 * 1024;
                 __strong typeof(weakSelf) strong = weakSelf;
                 return [strong responseForRequest:request];
             }];
-            if ([server startWithPort:p bonjourName:nil]) {
+            // 安全：只绑定回环（GCDWebServer 默认绑 INADDR_ANY，会把 SFTP 内容暴露到局域网）。
+            // 关闭 Bonjour 广播，避免被同一网络发现。
+            NSDictionary *options = @{
+                GCDWebServerOption_Port: @(p),
+                GCDWebServerOption_BindToLocalhost: @YES,
+            };
+            NSError *startError = nil;
+            if ([server startWithOptions:options error:&startError]) {
                 self.server = server;
                 self.port = p;
                 [KRLogModule logInfo:[NSString stringWithFormat:@"[sftp.proxy] started on 127.0.0.1:%d", p]];
