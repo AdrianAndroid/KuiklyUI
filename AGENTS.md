@@ -182,6 +182,7 @@
 | 文档 | 路径 | 主题 |
 |------|------|------|
 | 跨平台 SFTP 客户端 + 流式视频播放 | `docs/SFTP-Client.md` | SftpModule + SftpFavoritesModule + 本地 HTTP 代理 + VideoView 复用；完整文件管理（CRUD/权限/批量）+ 文件与文件夹收藏 + 点击即流式播放；四端落地方案。**先看本文件第 13 节的压缩上下文，再按需深入** |
+| SFTP 实现详解（学习/实现向） | `docs/SFTP-实现详解.md` | 从架构到各端实现的完整走读：分层、Module 桥接、共享层、本地代理、三端原生实现、UI、测试、踩坑。**想理解「代码怎么写的、为什么这么写」优先看这篇** |
 | AI 自动分析集成 | `openspec/specs/ai-integration/spec.md` | Profiler 报告取出通道、AI 分析流程 |
 | Recomposition Profiler API | `openspec/specs/recomposition-profiler-api/spec.md` | 重组分析 API |
 | 环境配置 | `docs/QuickStart/env-setup.md` | 开发环境搭建 |
@@ -199,7 +200,7 @@
 - ❌ Module 方法里直接做 IO 阻塞 JS 线程 → 必须走 `asyncToNativeMethod`，原生侧在子线程执行。
 - ❌ 新增 `Kotlin/Native` 平台时改 `kotlin {}` 后忘了同步更新 `settings.<version>.gradle.kts`。
 - ❌ iOS `User Script Sandboxing = Yes` 导致 KMP 脚本权限错误 → 设为 `No`。
-- ❌ 在 Web/MiniApp 假设有 TCP/SSH 能力 → 浏览器沙箱限制，需要后端网关。
+- ❌ 在 Web/MiniApp 假设有 TCP/SSH 能力 → 浏览器沙箱限制，必须走后端网关（Web 端已实现 `sftp-gateway/`，见 §13.1.3）。
 
 ---
 
@@ -214,8 +215,9 @@
 |----|----------------|----------------|------|
 | **iOS / macOS** | NMSSH(libssh2 1.10.0，ridenui fork 2.7.2) `core-render-ios/Extension/Modules/KRSftp*.m` | GCDWebServer `KRLocalHttpProxy.m` | **可用**：两端各 74/74 集成自测（含字节级校验）；macOS 另做界面操控验证（流式播放/拖动 seek/暂停恢复） |
 | Android | JSch 0.1.55 `core-render-android/.../expand/module/KRSftp*.kt` | NanoHTTPD `LocalHttpProxyServer.kt` | **可用**：74/74 集成自测（模拟器 Pixel_8a_API_35 / Android 15）+ 经代理用 ExoPlayer 播放 SFTP 视频出画 |
-| HarmonyOS | 桩 `core-render-ohos/src/main/cpp/.../sftp/`（已有骨架，待接 libssh2/NAPI） | 桩 | **构建通过**（`./2.0_ohos_demo_build.sh` → `BUILD SUCCESSFUL`，产出并拷入 `libshared.so`），但 SFTP 原生实现仍是桩 → **功能不可用，待实现** |
-| Web / 小程序 | 浏览器无 TCP/SSH | 不启本地代理 | **需后端网关**（§5.6）；JS 产物本身可构建（`npm install` + `./gradlew :demo:packLocalJsBundleDebug -Pkuikly.useLocalKsp=false`），但 SFTP 能力在浏览器沙箱内无法实现（无原始 socket），属架构限制而非实现缺陷 |
+| HarmonyOS | libssh2（自 vendored mbedTLS）`core-render-ohos/src/main/cpp/.../sftp/` | 桩（未进 CMake）| **核心已实现**（连接/浏览/随机读/上传下载/文件管理/批量 + 收藏/历史/连接持久化）；本地代理与播放器未实现 → **暂不支持播放**；运行时未验证（本机无 OHOS 设备） |
+| **Web (H5)** | 浏览器无原始 socket → **Node 网关代持**（`sftp-gateway/`，ssh2）| 网关直接出 HTTP Range（`/<token>/<file>`）| **可用**（2026-09 实测）：浏览器内完成连接/浏览/文件操作；`<video>` 经网关 Range 播放 SFTP 视频，控制面板经 CDP 模拟拖动验证 seek 生效 |
+| 小程序 | 复用 Web 的 JS 模块 | 需网关 | **未验证**：同为浏览器沙箱，需网关网络可达 + 微信 request 域名白名单 |
 
 Android 构建 / 验证（模拟器 Pixel_8a_API_35 / Android 15，JDK 17）：
 
@@ -254,8 +256,8 @@ Android 侧的坑（都已修）：
 | **iOS** | ✅ `xcodebuild` BUILD SUCCEEDED | ✅ 模拟器 74/74 + AVPlayer 播放 | SFTP 全链路可用 |
 | **Android** | ✅ `./gradlew :androidApp:assembleDebug` | ✅ 模拟器 **74/74 × 连续 10 轮**（零失败）+ ExoPlayer 经代理播放 SFTP 视频出画 | SFTP 全链路可用 |
 | **HarmonyOS** | ✅ 渲染器 `libkuikly.so`（真实 CMake，含 SFTP）+ 业务 `libshared.so` 均构建通过 | ❌ 运行时未验证（本机无 OHOS 设备/模拟器镜像） | SFTP 核心已实现（连接/浏览/随机读/上传下载/文件管理等）+ 收藏/历史/连接持久化；视频本地代理与播放器未实现 |
-| **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | ➖ 架构受限 | 浏览器无原始 socket，SFTP 需后端网关 |
-| **MiniApp** | ✅ 同上（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | ➖ 架构受限 | 同 Web |
+| **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | ✅ 浏览器实测（headless+CDP）：真实远端目录渲染 + 视频播放 + 拖动 seek（`00:06→00:04`）+ 设置菜单展开 | 需先起 Node 网关 `sftp-gateway`（127.0.0.1:18090）；详见 §13.1.3 |
+| **MiniApp** | ✅ 同 Web（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | ❌ 未验证 | 复用 Web 的 JS 模块；需网关可达 + 微信域名白名单 |
 
 ### 13.1.2 六端「全部编译一遍」实测（2026-09，本机 Intel Mac，不运行）
 
@@ -362,12 +364,66 @@ Android SDK（Pixel_8a_API_35 / Android 15 模拟器）+ DevEco Studio（内置 
 - 原语桥接：Kuikly Module（**模块名 == 原生类名**，框架用 `NSClassFromString`/注册表解析；入参 JSON 字符串，出参 JSON）
 - 平台实现：见上表
 
-### 13.2 新增一个 SFTP 能力的四步（缺一不可）
+### 13.1.3 Web(H5)/JS 端实现：Node 网关 + 浏览器模块（2026-09 新增）
+
+浏览器无法建立原始 TCP/SSH，Web 版 SFTP 由**后端进程代持** SSH/SFTP，浏览器只做桥：
+
+```
+浏览器（Kuikly Web）                        Node 网关 sftp-gateway/
+ SftpModule 等 5 个 JS 模块  ──POST /rpc──▶   ssh2 会话（连接/浏览/随机读/文件操作/持久化）
+ KRLocalMediaProxyModule    ──registerToken─▶
+ <video>  ◀── HTTP Range  /<token>/<file> ──  直接以 Range 读远端文件
+```
+
+- 网关：`sftp-gateway/server.js`（Node + `ssh2`），默认监听 `127.0.0.1:18090`
+  - `POST /rpc {module,method,params}`：`sftp`（19 个方法，语义对齐原生）+ `mediaProxy`
+    + `connection`/`favorites`/`history`（JSON 文件持久化到 `sftp-gateway/data/`，**已 gitignore**）
+  - `GET /<token>/<fileName>`：HTTP Range（206/416 + `Content-Length`），URL 与
+    `SftpMediaUrlBuilder.buildPlayUrl` 完全一致（`http://127.0.0.1:<port>/<token>/<name>`）
+- 浏览器模块：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`（Kotlin/JS，5 个类转发到 `/rpc`），
+  在 `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt` 的 `registerExternalModule` 注册；
+  **commonMain 页面零改动**。网关地址默认 `http://127.0.0.1:18090`，可用
+  `window.__SFTP_GATEWAY_URL__` 覆盖
+- 宿主 → 页面事件（Web 专有，`h5App/src/jsMain/kotlin/Main.kt`）：
+  - `mousemove/touchstart` → `sftp_controls_activity`（全屏播放时移动鼠标唤醒控制条）
+  - `keydown` → `sftp_player_key`（空格/K、←/→、M、F；输入框内不拦截）
+  - `fullscreenchange` → `sftp_fullscreen_changed`（ESC 退出全屏时同步页面状态）
+  - 页面侧用 `addPagerEventObserver(IPagerEventObserver)` 接收（`SftpPlayerPage`）
+- `KRVideoView`（`core-render-web/base/.../expand/components/KRVideoView.kt`）新增：
+  - `setFullscreen`：对**含控件的根容器**（`#root`）请求全屏 —— 只全屏 `<video>` 会让
+    Kuikly 绘制的控件留在普通文档流，视频与控件不在同一层级、全屏看不到控件
+  - `buffered`：`progress` 事件经 `customEvent` 通道回传已缓冲进度
+- 播放控件（`demo/.../SftpPlayerPage.kt`，commonMain 六端共享，参考 Plyr）：覆盖式面板、
+  缓冲/已播/滑块三段进度条、拖动时间气泡、倍速设置菜单、中央大播放键、2s 自动隐藏
+
+运行（本机实测）：
+```bash
+# 1) Node 网关（本机 Node 可用 ~/.gradle/nodejs/node-v22.0.0-darwin-x64/bin 或 /usr/local/bin/node）
+cd sftp-gateway && npm install
+PATH="$HOME/.gradle/nodejs/node-v22.0.0-darwin-x64/bin:$PATH" node server.js
+# 2) 业务 bundle + 宿主（必须 JDK 17：默认 JDK 25 与 Gradle 7.6.3 不兼容）
+export JAVA_HOME=<corretto-17>
+./gradlew :demo:packLocalJsBundleDebug -Pkuikly.useLocalKsp=false
+./gradlew :h5App:jsBrowserDevelopmentWebpack
+# 3) 静态托管：8083 出 nativevue2.js、8080 出 index.html+h5App.js，浏览器开
+#    http://127.0.0.1:8080/?page_name=SftpHomePage
+```
+
+已知限制（Web）：
+- 网关会话在**内存**中，重启网关即失效：旧 `sessionId` 的播放页 seek 会失败，需从首页重进
+- 与原生端一致**未做 known_hosts 校验**（安全审计 P0）
+- 缓冲条目前仅 Web 有（其它端引擎未回传 buffered）；无音量滑杆（`VideoView` 无 volume 属性）
+- 小程序复用同一批 JS 模块，但需网关网络可达 + 微信 request 域名白名单，未验证
+
+### 13.2 新增一个 SFTP 能力的五步（缺一不可）
 
 1. `core/src/commonMain/.../module/sftp/XxxModule.kt` 用 `asyncToNativeMethod` 声明方法
 2. `ModuleConst.kt` 加模块名常量
 3. 各端实现**同名类**并分发 `hrv_callWithMethod`（iOS/macOS: `KRBaseModule` 子类）
 4. 页面 `acquireModule(XxxModule.MODULE_NAME)`，并在 `createExternalModules()` 注册
+5. **Web(H5)**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt` 加同名转发类并在
+   `KuiklyWebRenderViewDelegator.registerExternalModule` 注册；网关侧在 `sftp-gateway/server.js`
+   的对应 module 加方法（浏览器不能直连 SSH，必须由网关代持，见 §13.1.3）
 
 > 本地媒体代理**统一走 Module**，不要再用 `expect/actual`。历史上两套并存（`LocalMediaProxyApi` 已删除），
 > 详见 `docs/SFTP-Client.md` §23.2 的选型对比表。
@@ -607,6 +663,11 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 - 视频组件：`core/src/commonMain/.../views/VideoView.kt` + `core-render-ios/Extension/AdvancedComps/KRVideoView.{h,m}`
   - macOS 播放器实现：`macApp/.../Handlers/KRVideoViewHandler.{h,m}`（VLCKit）
   - iOS 播放器实现：`iosApp/iosApp/KuiklyRenderExpand/`（WMPlayer）
+- **Web(H5) 网关（Node）**：`sftp-gateway/server.js` + `package.json`
+- **Web(H5) 模块/宿主**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`、
+  `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
+- **Web 视频组件**：`core-render-web/base/src/jsMain/kotlin/.../expand/components/KRVideoView.kt`
+- SFTP 实现详解（学习向）：`docs/SFTP-实现详解.md`
 
 ---
 
@@ -615,5 +676,7 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 - 本文件由维护者随项目演进同步更新。新增 Module/View/平台支持/重大架构变更时必须更新第 2、6、7、9 节。
 - 新增专题方案文档时，在第 11 节登记。
 - **改动 SFTP 客户端 / 本地媒体代理 / Kuikly 页面响应式**时，必须同步更新第 13 节与 `docs/SFTP-Client.md`（尤其 §23）。
+- **改动 Web/JS 端 SFTP（`sftp-gateway/`、`h5App` 浏览器模块、Web 播放控件、`KRVideoView`）**时，
+  必须同步更新第 13.1.3 与 `docs/SFTP-实现详解.md`。
 - **生产环境**凭据、token 不得写入仓库；内网测试机凭据集中在第 13.6 节（低敏、已获授权）。
 - 详细开发规范、模块结构、代码模式以本文件 + `openspec/config.yaml` 为准；如有冲突以 `openspec/config.yaml` 为准。
