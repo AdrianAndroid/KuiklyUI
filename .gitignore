@@ -64,7 +64,7 @@ ohos_build.log
 **/oh-package-lock.json5
 
 ## SFTP Web gateway（Node 后端）
-# *.js 默认被忽略（见上），网关入口需要显式纳入
-!sftp-gateway/*.js
+# *.js 默认被忽略（见上），网关入口与测试需显式纳入
+!sftp-gateway/**/*.js
 # 运行期持久化数据（连接/收藏/历史），不入库
 sftp-gateway/data/
