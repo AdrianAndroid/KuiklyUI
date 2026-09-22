@@ -527,23 +527,26 @@ internal class SftpPlayerPage : SftpBasePager() {
                                 }
                             }
                         }
-                        // 拖动时在滑块上方显示目标时间（对齐 mpv tooltipF）
-                        if (ctx.draggingProgress) {
-                            View {
+                        // 拖动时在滑块上方显示目标时间（对齐 mpv tooltipF）。
+                        // 必须「常驻 + 切透明度」：不能在拖动中用 if 增删子节点——
+                        // 手势元素子树在拖动中变化会导致元素重建，pan 的 move/end 丢失
+                        // （症状：拖动只有按下位置生效）。
+                        View {
+                            attr {
+                                positionAbsolute()
+                                left((ctx.seekbarWidth() * ctx.dragRatio) - 26f)
+                                top(-26f)
+                                padding(6f, 2f, 6f, 2f)
+                                borderRadius(SftpPlayerTokens.TOOLTIP_RADIUS)
+                                backgroundColor(SftpPlayerTokens.timePosBg)
+                                opacity(if (ctx.draggingProgress) 1f else 0f)
+                                visibility(ctx.draggingProgress)
+                            }
+                            Text {
                                 attr {
-                                    positionAbsolute()
-                                    left((ctx.seekbarWidth() * ctx.dragRatio) - 26f)
-                                    top(-26f)
-                                    padding(6f, 2f, 6f, 2f)
-                                    borderRadius(SftpPlayerTokens.TOOLTIP_RADIUS)
-                                    backgroundColor(SftpPlayerTokens.timePosBg)
-                                }
-                                Text {
-                                    attr {
-                                        text(formatTime((ctx.duration * ctx.dragRatio).toLong()))
-                                        fontSize(SftpPlayerTokens.TOOLTIP_FONT_SIZE)
-                                        color(SftpPlayerTokens.timePos)
-                                    }
+                                    text(formatTime((ctx.duration * ctx.dragRatio).toLong()))
+                                    fontSize(SftpPlayerTokens.TOOLTIP_FONT_SIZE)
+                                    color(SftpPlayerTokens.timePos)
                                 }
                             }
                         }

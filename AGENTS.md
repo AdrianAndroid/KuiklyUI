@@ -183,6 +183,7 @@
 |------|------|------|
 | 跨平台 SFTP 客户端 + 流式视频播放 | `docs/SFTP-Client.md` | SftpModule + SftpFavoritesModule + 本地 HTTP 代理 + VideoView 复用；完整文件管理（CRUD/权限/批量）+ 文件与文件夹收藏 + 点击即流式播放；四端落地方案。**先看本文件第 13 节的压缩上下文，再按需深入** |
 | SFTP 实现详解（学习/实现向） | `docs/SFTP-实现详解.md` | 从架构到各端实现的完整走读：分层、Module 桥接、共享层、本地代理、三端原生实现、UI、测试、踩坑。**想理解「代码怎么写的、为什么这么写」优先看这篇** |
+| **跨端应用开发规划（含 Electron 桌面壳）** | `devDocs/kuikly-app-development-plan.md` | 完整交付规划：目标/不变量/差距/里程碑 M0-M8/Electron 边界契约与专项设计/测试与安全/发布/风险/排期/DoD。**做新功能或桌面打包前先看这篇** |
 | **SFTP 开发进度总览** | `devDocs/sftp-development-progress.md` | **当前进度快照**：六端现状矩阵、已交付能力清单、本轮 commit 详解、运行时验证步骤、已知限制与下一步。**想知道「现在做到哪了」优先看这篇** |
 | SFTP 全平台开发计划 | `devDocs/sftp-impl-plan.md` | Phase 0~6 落地清单（commonMain 共享层 → 各端原生 → 注册 + 入口 → 单测），按 Phase 顺序开发，每 Phase 完成即可独立验证 |
 | SFTP 播放页 mpv OSC 改造方案 | `devDocs/sftp-player-modernz-plan.md` | 精读 mpv `osc.lua` 362KB 源码后的改造方案：两行布局、10+ OSC 色彩、3 键 + 滚轮交互、可见性系统、60fps 节流、跨端降级策略 |
@@ -698,5 +699,7 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 - **改动 Web/JS 端 SFTP（`sftp-gateway/`、`h5App` 浏览器模块、Web 播放控件、`KRVideoView`）**时，
   必须同步更新第 13.1.3 与 `docs/SFTP-实现详解.md`。
 - **交付新的 SFTP 里程碑（commit / 验证 / 能力清单变化）**时，必须同步更新 `devDocs/sftp-development-progress.md`。
+- **新增功能 / 桌面（Electron）打包 / 安全加固 / 发布**时，先对齐 `devDocs/kuikly-app-development-plan.md` 的里程碑与
+  不变量（尤其 §1.3 红线与 §6.8 Electron 反模式清单），完成后回填该文档的现状与勾选。
 - **生产环境**凭据、token 不得写入仓库；内网测试机凭据集中在第 13.6 节（低敏、已获授权）。
 - 详细开发规范、模块结构、代码模式以本文件 + `openspec/config.yaml` 为准；如有冲突以 `openspec/config.yaml` 为准。
