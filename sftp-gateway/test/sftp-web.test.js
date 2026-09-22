@@ -122,6 +122,35 @@ async function partA() {
   await rpc('connection', 'remove', { id: cn.id });
   check('A12 连接持久化 add/list/remove', inList, 'id=' + cn.id);
 
+  // A13 主机指纹校验（TOFU 记录 + 不匹配阻断）
+  const kh = await rpc('knownHosts', 'list', {});
+  const entry = (kh.items || []).find((x) => x.host === HOST && x.port === PORT);
+  check('A13a 首次连接记录主机指纹(TOFU)', !!(entry && /^SHA256:/.test(entry.fingerprint)), entry ? entry.fingerprint : 'none');
+
+  const fs = require('fs');
+  const pathMod = require('path');
+  const khFile = pathMod.join(__dirname, '..', 'data', 'sftp_known_hosts.json');
+  let restored = null;
+  try {
+    const map = JSON.parse(fs.readFileSync(khFile, 'utf8'));
+    const key = HOST + ':' + PORT;
+    restored = map[key];
+    map[key] = { fingerprint: 'SHA256:WRONG', addedAt: Date.now() };
+    fs.writeFileSync(khFile, JSON.stringify(map));
+    const bad = await rpc('sftp', 'connect', { host: HOST, port: PORT, user: USER, password: PASS });
+    const code = bad.error ? JSON.parse(bad.error).code : 0;
+    check('A13b 指纹不匹配被阻断(1004)', code === 1004, bad.error ? ('code=' + code) : 'connect 竟然成功了');
+  } catch (e) {
+    check('A13b 指纹不匹配被阻断(1004)', false, String(e && e.message));
+  } finally {
+    try {
+      const map = JSON.parse(fs.readFileSync(khFile, 'utf8'));
+      const key = HOST + ':' + PORT;
+      if (restored) map[key] = restored; else delete map[key];
+      fs.writeFileSync(khFile, JSON.stringify(map));
+    } catch (e) { /* ignore */ }
+  }
+
   return { sid };
 }
 

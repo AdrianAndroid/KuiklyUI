@@ -38,6 +38,9 @@ function classifyError(err) {
   if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || code === 'EHOSTUNREACH') {
     return { code: 1001, msg, detail: String(code) };
   }
+  if (/HOSTKEY_MISMATCH|host key verification failed/i.test(msg)) {
+    return { code: 1004, msg: '主机指纹不匹配', detail: msg };
+  }
   if (/all configured authentication methods failed|authentication/i.test(msg)) {
     return { code: 1003, msg: '认证失败', detail: msg };
   }
@@ -222,7 +225,10 @@ const sftpModule = {
     const port = params.port || 22;
     const user = params.user;
     if (!host || !user) throw new Error('connect: host/user required');
+    const hostKeyPolicy = String(params.hostKeyPolicy || 'TOFU').toUpperCase();
     const conn = new Client();
+    let hostKeyInfo = null;
+    let hostKeyError = null;
     const privateKey = params.privateKey || undefined;
     const cfg = {
       host,
@@ -230,6 +236,16 @@ const sftpModule = {
       username: user,
       readyTimeout: params.connectTimeoutMs || READY_TIMEOUT_MS,
       keepaliveInterval: (params.keepAliveIntervalSec || 15) * 1000,
+      // 主机指纹校验（TOFU/STRICT/INSECURE），防中间人
+      hostVerifier: (key, cb) => {
+        try {
+          hostKeyInfo = verifyHostKey(host, port, key, hostKeyPolicy);
+          cb(true);
+        } catch (e) {
+          hostKeyError = e;
+          cb(false);
+        }
+      },
     };
     if (privateKey) {
       cfg.privateKey = privateKey;
@@ -239,14 +255,19 @@ const sftpModule = {
     }
     const sftp = await new Promise((resolve, reject) => {
       conn.on('ready', () => conn.sftp((err, s) => (err ? reject(err) : resolve(s))));
-      conn.on('error', reject);
+      // 指纹不匹配时，ssh2 也会报错；优先用我们更具体的错误
+      conn.on('error', (err) => reject(hostKeyError || err));
       conn.connect(cfg);
     });
     let home = '/';
     try { home = await call(sftp, 'realpath', '.'); } catch (e) { /* keep default */ }
     const sessionId = 'sftp-' + (++sessionSeq);
     sessions.set(sessionId, { conn, sftp, home });
-    return { sessionId };
+    return {
+      sessionId,
+      hostKeyFingerprint: hostKeyInfo ? hostKeyInfo.fingerprint : '',
+      hostKeyTrusted: !!(hostKeyInfo && hostKeyInfo.trusted),
+    };
   },
 
   async disconnect(params) {
@@ -502,6 +523,7 @@ const DATA_DIR = path.join(__dirname, 'data');
 const F_CONNECTIONS = path.join(DATA_DIR, 'sftp_connections.json');
 const F_FAVORITES = path.join(DATA_DIR, 'sftp_favorites.json');
 const F_HISTORY = path.join(DATA_DIR, 'sftp_playback_history.json');
+const F_KNOWN_HOSTS = path.join(DATA_DIR, 'sftp_known_hosts.json');
 const HISTORY_MAX = 2000;
 
 function loadArray(file) {
@@ -522,6 +544,70 @@ function saveArray(file, arr) {
 }
 
 const nowMs = () => Date.now();
+
+/* ---- known_hosts（TOFU）：防 MITM ---- */
+function loadObject(file) {
+  try {
+    const o = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveObject(file, obj) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+function fingerprintOf(key) {
+  return 'SHA256:' + crypto.createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
+}
+
+/**
+ * 校验主机公钥。策略：
+ *   TOFU(默认)：未见过的指纹记录并放行；已记录但不匹配 → 拒绝
+ *   STRICT   ：未记录也拒绝（必须先信任）
+ *   INSECURE ：不校验（仅用于本地调试，显式选择）
+ */
+function verifyHostKey(host, port, key, policy) {
+  const fp = fingerprintOf(key);
+  const k = host + ':' + port;
+  if (policy === 'INSECURE') return { ok: true, fingerprint: fp, trusted: false };
+  const map = loadObject(F_KNOWN_HOSTS);
+  const rec = map[k];
+  if (!rec) {
+    if (policy === 'STRICT') throw new Error('HOSTKEY_MISMATCH unknown host in STRICT mode: ' + k);
+    map[k] = { fingerprint: fp, addedAt: nowMs() };
+    saveObject(F_KNOWN_HOSTS, map);
+    return { ok: true, fingerprint: fp, trusted: false, added: true };
+  }
+  if (rec.fingerprint !== fp) {
+    throw new Error('HOSTKEY_MISMATCH for ' + k + ': known=' + rec.fingerprint + ' got=' + fp);
+  }
+  return { ok: true, fingerprint: fp, trusted: true };
+}
+
+const knownHostsModule = {
+  async list() {
+    const map = loadObject(F_KNOWN_HOSTS);
+    return {
+      items: Object.keys(map).map((k) => {
+        const idx = k.lastIndexOf(':');
+        return { id: k, host: k.slice(0, idx), port: Number(k.slice(idx + 1) || 22), fingerprint: map[k].fingerprint, addedAt: map[k].addedAt };
+      }),
+    };
+  },
+  async remove(params) {
+    const map = loadObject(F_KNOWN_HOSTS);
+    if (params.id) delete map[params.id];
+    else if (params.host) delete map[params.host + ':' + (params.port || 22)];
+    saveObject(F_KNOWN_HOSTS, map);
+    return { ok: true };
+  },
+};
 
 function sortByKey(arr, key, order) {
   const dir = order === 'ASC' ? 1 : -1;
@@ -686,6 +772,7 @@ const historyModule = {
  * ------------------------------------------------------------------ */
 const MODULES = {
   sftp: sftpModule,
+  knownHosts: knownHostsModule,
   mediaProxy: mediaProxyModule,
   connection: connectionModule,
   favorites: favoritesModule,
