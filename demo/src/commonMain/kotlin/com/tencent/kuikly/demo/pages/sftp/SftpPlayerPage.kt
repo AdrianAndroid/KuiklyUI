@@ -39,6 +39,8 @@ import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpAccessibility
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
+import com.tencent.kuikly.demo.pages.sftp.theme.SftpPlayerIcons
+import com.tencent.kuikly.demo.pages.sftp.theme.SftpPlayerTokens
 
 /**
  * SFTP 播放页（§19 / §21.6.3）
@@ -281,7 +283,7 @@ internal class SftpPlayerPage : SftpBasePager() {
                             attr {
                                 text(ctx.playError ?: "")
                                 fontSize(14f)
-                                color(Color(0xFFFF6B6B))
+                                color(SftpPlayerTokens.danger)
                             }
                         }
                     }
@@ -315,190 +317,277 @@ internal class SftpPlayerPage : SftpBasePager() {
                                 allCenter()
                                 backgroundColor(Color(0x88000000))
                             }
-                            Text { attr { text("▶"); fontSize(26f); color(Color.WHITE) } }
+                            Text { attr { text(SftpPlayerIcons.Classic.PLAY); fontSize(26f); color(SftpPlayerTokens.buttons) } }
                         }
                     }
                 }
             }
 
-            // 控制面板：始终覆盖在视频底部（对齐 Plyr 的控件层），全屏时自动隐藏。
+            // 控制面板：始终覆盖在视频底部（对齐 mpv bottombar 两行布局）
+            // ┌ 信息行（line1）：选集 | (flex) | 倍速 | 全屏
+            // └ 控制行（line2）：播放 | 快退 | 快进 | tc_left | ──●── seekbar | tc_right | 静音
             vif({ !ctx.isFullscreen || ctx.controlsVisible }) {
             View {
                 attr {
                     width(pagerData.pageViewWidth)
                     positionAbsolute()
                     bottom(0f)
-                    padding(12f, 8f, 12f, 10f)
+                    padding(SftpPlayerTokens.PAD_X, 8f, SftpPlayerTokens.PAD_X, 10f)
                     flexDirectionColumn()
-                    backgroundColor(Color(0xCC101010))
+                    backgroundColor(SftpPlayerTokens.oscBg)
                 }
-                // ── 进度条：已缓冲段 + 已播段 + 滑块 + 拖动时间预览 ──
+                // ── 信息行（line1）：选集 | (flex 占位) | 倍速 | 全屏 ──
                 View {
                     attr {
-                        width(pagerData.pageViewWidth - 24f)
-                        height(28f)          // 触摸区比视觉高度大，便于拖拽
-                        justifyContentCenter()
-                        backgroundColor(Color(0x00000000))
-                        touchEnable(true)    // 显式开启触摸，保证 pan 能收到
+                        width(pagerData.pageViewWidth - 2f * SftpPlayerTokens.PAD_X)
+                        height(SftpPlayerTokens.INFO_ROW_HEIGHT)
+                        flexDirectionRow()
+                        alignItemsCenter()
                     }
-                    // 轨道（子元素用绝对定位叠放；规格对齐 Plyr：track 5 / thumb 13）
+                    // 选集（对齐 mpv menu）
                     View {
                         attr {
-                            width(pagerData.pageViewWidth - 24f)
-                            height(5f)
-                            borderRadius(3f)
-                            backgroundColor(Color(0x55FFFFFF))
+                            size(SftpPlayerTokens.BUTTON_W, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                            accessibility(SftpAccessibility.BTN_EPISODE_LIST)
                         }
-                        // 已缓冲段
-                        View {
+                        event { click { ctx.showEpisodeDrawer = !ctx.showEpisodeDrawer } }
+                        Text {
                             attr {
-                                positionAbsolute()
-                                left(0f); top(0f)
-                                width((pagerData.pageViewWidth - 24f) * ctx.bufferedRatio())
-                                height(5f)
-                                borderRadius(3f)
-                                backgroundColor(Color(0x99FFFFFF))
-                            }
-                        }
-                        // 已播段
-                        View {
-                            attr {
-                                positionAbsolute()
-                                left(0f); top(0f)
-                                width((pagerData.pageViewWidth - 24f) * ctx.displayRatio())
-                                height(5f)
-                                borderRadius(3f)
-                                backgroundColor(Color(0xFF3D7EFF))
-                            }
-                        }
-                        // 滑块：拖动时变大并加外圈（Plyr thumb-active-shadow）
-                        View {
-                            attr {
-                                positionAbsolute()
-                                left(((pagerData.pageViewWidth - 24f) * ctx.displayRatio()) -
-                                    (if (ctx.draggingProgress) 10f else 7f))
-                                top(if (ctx.draggingProgress) -8f else -4f)
-                                size(if (ctx.draggingProgress) 20f else 14f,
-                                      if (ctx.draggingProgress) 20f else 14f)
-                                borderRadius(if (ctx.draggingProgress) 10f else 7f)
-                                backgroundColor(if (ctx.draggingProgress) Color(0x553D7EFF) else Color(0x00000000))
-                                allCenter()
-                            }
-                            View {
-                                attr {
-                                    size(13f, 13f)
-                                    borderRadius(7f)
-                                    backgroundColor(Color(0xFFFFFFFF))
-                                }
+                                text(SftpPlayerIcons.Classic.MENU)
+                                fontSize(SftpPlayerTokens.BUTTON_ICON_FONT_SIZE)
+                                color(SftpPlayerTokens.buttons)
                             }
                         }
                     }
-                    // 拖动时在滑块上方显示目标时间
-                    if (ctx.draggingProgress) {
-                        View {
+                    // flex 占位：把右侧按钮推到最右
+                    View { attr { flex(1f) } }
+                    // 倍速（对齐 mpv settings/speed）
+                    View {
+                        attr {
+                            size(44f, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                        }
+                        event { click { ctx.showSettingsMenu = !ctx.showSettingsMenu; ctx.showControls() } }
+                        Text {
                             attr {
-                                positionAbsolute()
-                                left(((pagerData.pageViewWidth - 24f) * ctx.dragRatio) - 26f)
-                                top(-26f)
-                                padding(6f, 2f, 6f, 2f)
-                                borderRadius(4f)
-                                backgroundColor(Color(0xCC000000))
-                            }
-                            Text {
-                                attr {
-                                    text(formatTime((ctx.duration * ctx.dragRatio).toLong()))
-                                    fontSize(11f)
-                                    color(Color.WHITE)
-                                }
+                                text(if (ctx.speed == 1f) "1.0×" else "${ctx.speed}×")
+                                fontSize(SftpPlayerTokens.SPEED_LABEL_FONT_SIZE)
+                                color(SftpPlayerTokens.buttons)
                             }
                         }
                     }
-                    event {
-                        // Kuikly 的拖拽手势是 `pan`（不是 touchDown/Move/Up：
-                        // 实测 macOS 上 touch* 不回调，pan 才带 start/move/end）
-                        pan { p ->
-                            when (p.state) {
-                                "start" -> ctx.beginDragProgress(p.x)
-                                "move" -> ctx.updateDragProgress(p.x)
-                                "end" -> {
-                                    ctx.updateDragProgress(p.x)
-                                    ctx.endDragProgress()
-                                }
+                    // 全屏（对齐 mpv fullscreen）
+                    View {
+                        attr {
+                            size(SftpPlayerTokens.BUTTON_W, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                            accessibility(SftpAccessibility.BTN_FULLSCREEN)
+                        }
+                        event { click { ctx.toggleFullscreen() } }
+                        Text {
+                            attr {
+                                text(if (ctx.isFullscreen) SftpPlayerIcons.Classic.EXIT_FULLSCREEN else SftpPlayerIcons.Classic.FULLSCREEN)
+                                fontSize(16f)
+                                color(SftpPlayerTokens.buttons)
                             }
                         }
                     }
                 }
-                // 按钮行：播放控制 + 时间 + 倍速/静音/选集/全屏
+                // ── 控制行（line2）：播放 | 快退 | 快进 | tc_left | seekbar (flex) | tc_right | 静音 ──
                 View {
-                    attr { flexDirectionRow(); alignItemsCenter(); marginTop(4f) }
-                    // 播放 / 暂停
+                    attr {
+                        width(pagerData.pageViewWidth - 2f * SftpPlayerTokens.PAD_X)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                    }
+                    // 播放 / 暂停（对齐 mpv play_pause）
                     View {
                         attr {
-                            size(44f, 44f); allCenter(); borderRadius(22f)
-                            backgroundColor(Color(0xFF2A2A2A))
+                            size(SftpPlayerTokens.PLAY_BUTTON_SIZE, SftpPlayerTokens.PLAY_BUTTON_SIZE)
+                            allCenter()
+                            borderRadius(SftpPlayerTokens.PLAY_BUTTON_RADIUS)
+                            backgroundColor(SftpPlayerTokens.playButtonBg)
                             accessibility(if (ctx.isPlaying) SftpAccessibility.BTN_PAUSE else SftpAccessibility.BTN_PLAY)
                         }
                         event { click { ctx.togglePlay() } }
                         Text {
                             attr {
-                                text(if (ctx.isPlaying) "❚❚" else "▶")
-                                fontSize(if (ctx.isPlaying) 15f else 18f)
-                                color(Color.WHITE)
+                                text(if (ctx.isPlaying) SftpPlayerIcons.Classic.PAUSE else SftpPlayerIcons.Classic.PLAY)
+                                fontSize(if (ctx.isPlaying) SftpPlayerTokens.BUTTON_ICON_FONT_SIZE else SftpPlayerTokens.PLAY_ICON_FONT_SIZE)
+                                color(SftpPlayerTokens.buttons)
                             }
                         }
                     }
-                    // 快退 10s
+                    // 快退 10s（对齐 mpv skip_backward）
                     View {
-                        attr { size(40f, 40f); allCenter(); marginLeft(6f); accessibility(SftpAccessibility.BTN_SEEK_BACKWARD) }
-                        event { click { ctx.seekBy(-10_000) } }
-                        Text { attr { text("◀◀"); fontSize(12f); color(Color.WHITE) } }
-                    }
-                    // 快进 10s
-                    View {
-                        attr { size(40f, 40f); allCenter(); marginLeft(6f); accessibility(SftpAccessibility.BTN_SEEK_FORWARD) }
-                        event { click { ctx.seekBy(10_000) } }
-                        Text { attr { text("▶▶"); fontSize(12f); color(Color.WHITE) } }
-                    }
-                    // 时间
-                    Text {
                         attr {
-                            text(formatTime(ctx.currentPosition.toLong()) + " / " + formatTime(ctx.duration.toLong()))
-                            fontSize(12f)
-                            color(Color(0xFFBBBBBB))
-                            marginLeft(10f)
+                            size(SftpPlayerTokens.BUTTON_W, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                            marginLeft(6f)
+                            accessibility(SftpAccessibility.BTN_SEEK_BACKWARD)
                         }
-                    }
-                    // 占位：把右侧按钮推到最右
-                    View { attr { flex(1f) } }
-                    // 设置（倍速菜单，对齐 Plyr 的 settings）
-                    View {
-                        attr { size(44f, 40f); allCenter() }
-                        event { click { ctx.showSettingsMenu = !ctx.showSettingsMenu; ctx.showControls() } }
+                        event { click { ctx.seekBy(-10_000) } }
                         Text {
                             attr {
-                                text(if (ctx.speed == 1f) "1.0×" else "${ctx.speed}×")
+                                text(SftpPlayerIcons.Classic.SKIP_BACKWARD)
                                 fontSize(12f)
-                                color(Color.WHITE)
+                                color(SftpPlayerTokens.buttons)
                             }
                         }
                     }
-                    // 静音
+                    // 快进 10s（对齐 mpv skip_forward）
                     View {
-                        attr { size(40f, 40f); allCenter() }
+                        attr {
+                            size(SftpPlayerTokens.BUTTON_W, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                            marginLeft(6f)
+                            accessibility(SftpAccessibility.BTN_SEEK_FORWARD)
+                        }
+                        event { click { ctx.seekBy(10_000) } }
+                        Text {
+                            attr {
+                                text(SftpPlayerIcons.Classic.SKIP_FORWARD)
+                                fontSize(12f)
+                                color(SftpPlayerTokens.buttons)
+                            }
+                        }
+                    }
+                    // 左时间码（当前进度，对齐 mpv tc_left）
+                    Text {
+                        attr {
+                            text(formatTime(ctx.currentPosition.toLong()))
+                            fontSize(SftpPlayerTokens.TIMECODE_FONT_SIZE)
+                            color(SftpPlayerTokens.timecode)
+                            marginLeft(10f)
+                            width(SftpPlayerTokens.TC_W)
+                            lines(1)
+                        }
+                    }
+                    // ── 进度条（seekbar，flex 填充中间区域，对齐 mpv seekbar 在 line2 中间） ──
+                    // 已缓冲段 + 已播段 + 滑块 + 拖动时间预览
+                    View {
+                        attr {
+                            width(ctx.seekbarWidth())
+                            height(SftpPlayerTokens.SEEKBAR_TOUCH_H)
+                            marginLeft(10f)
+                            justifyContentCenter()
+                            backgroundColor(Color(0x00000000))
+                            touchEnable(true)
+                        }
+                        // 轨道（子元素用绝对定位叠放；规格对齐 mpv/Plyr：track 5 / thumb 13）
+                        View {
+                            attr {
+                                width(ctx.seekbarWidth())
+                                height(SftpPlayerTokens.SEEKBAR_TRACK_H)
+                                borderRadius(SftpPlayerTokens.SEEKBAR_TRACK_RADIUS)
+                                backgroundColor(SftpPlayerTokens.seekbarTrack)
+                            }
+                            // 已缓冲段
+                            View {
+                                attr {
+                                    positionAbsolute()
+                                    left(0f); top(0f)
+                                    width(ctx.seekbarWidth() * ctx.bufferedRatio())
+                                    height(SftpPlayerTokens.SEEKBAR_TRACK_H)
+                                    borderRadius(SftpPlayerTokens.SEEKBAR_TRACK_RADIUS)
+                                    backgroundColor(SftpPlayerTokens.seekbarBuffered)
+                                }
+                            }
+                            // 已播段
+                            View {
+                                attr {
+                                    positionAbsolute()
+                                    left(0f); top(0f)
+                                    width(ctx.seekbarWidth() * ctx.displayRatio())
+                                    height(SftpPlayerTokens.SEEKBAR_TRACK_H)
+                                    borderRadius(SftpPlayerTokens.SEEKBAR_TRACK_RADIUS)
+                                    backgroundColor(SftpPlayerTokens.seekbarPlayed)
+                                }
+                            }
+                            // 滑块：拖动时变大并加外圈（Plyr thumb-active-shadow）
+                            View {
+                                attr {
+                                    positionAbsolute()
+                                    left((ctx.seekbarWidth() * ctx.displayRatio()) -
+                                        (if (ctx.draggingProgress) SftpPlayerTokens.SEEKBAR_THUMB_OFFSET_DRAG else SftpPlayerTokens.SEEKBAR_THUMB_OFFSET))
+                                    top(if (ctx.draggingProgress) SftpPlayerTokens.SEEKBAR_THUMB_TOP_DRAG else SftpPlayerTokens.SEEKBAR_THUMB_TOP)
+                                    size(if (ctx.draggingProgress) SftpPlayerTokens.SEEKBAR_THUMB_DRAG else SftpPlayerTokens.SEEKBAR_THUMB + 1f,
+                                          if (ctx.draggingProgress) SftpPlayerTokens.SEEKBAR_THUMB_DRAG else SftpPlayerTokens.SEEKBAR_THUMB + 1f)
+                                    borderRadius(if (ctx.draggingProgress) SftpPlayerTokens.SEEKBAR_THUMB_HALO_DRAG else SftpPlayerTokens.SEEKBAR_THUMB_OFFSET)
+                                    backgroundColor(if (ctx.draggingProgress) SftpPlayerTokens.seekbarThumbHalo else Color(0x00000000))
+                                    allCenter()
+                                }
+                                View {
+                                    attr {
+                                        size(SftpPlayerTokens.SEEKBAR_THUMB, SftpPlayerTokens.SEEKBAR_THUMB)
+                                        borderRadius(SftpPlayerTokens.SEEKBAR_THUMB / 2f + 0.5f)
+                                        backgroundColor(SftpPlayerTokens.seekbarThumb)
+                                    }
+                                }
+                            }
+                        }
+                        // 拖动时在滑块上方显示目标时间（对齐 mpv tooltipF）
+                        if (ctx.draggingProgress) {
+                            View {
+                                attr {
+                                    positionAbsolute()
+                                    left((ctx.seekbarWidth() * ctx.dragRatio) - 26f)
+                                    top(-26f)
+                                    padding(6f, 2f, 6f, 2f)
+                                    borderRadius(SftpPlayerTokens.TOOLTIP_RADIUS)
+                                    backgroundColor(SftpPlayerTokens.timePosBg)
+                                }
+                                Text {
+                                    attr {
+                                        text(formatTime((ctx.duration * ctx.dragRatio).toLong()))
+                                        fontSize(SftpPlayerTokens.TOOLTIP_FONT_SIZE)
+                                        color(SftpPlayerTokens.timePos)
+                                    }
+                                }
+                            }
+                        }
+                        event {
+                            // Kuikly 的拖拽手势是 `pan`（不是 touchDown/Move/Up：
+                            // 实测 macOS 上 touch* 不回调，pan 才带 start/move/end）
+                            pan { p ->
+                                when (p.state) {
+                                    "start" -> ctx.beginDragProgress(p.x)
+                                    "move" -> ctx.updateDragProgress(p.x)
+                                    "end" -> {
+                                        ctx.updateDragProgress(p.x)
+                                        ctx.endDragProgress()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // 右时间码（总时长，对齐 mpv tc_right）
+                    Text {
+                        attr {
+                            text(formatTime(ctx.duration.toLong()))
+                            fontSize(SftpPlayerTokens.TIMECODE_FONT_SIZE)
+                            color(SftpPlayerTokens.timecode)
+                            marginLeft(10f)
+                            width(SftpPlayerTokens.TC_W)
+                            lines(1)
+                        }
+                    }
+                    // 静音（对齐 mpv volume，SFTP 无音量只有 muted 二态）
+                    View {
+                        attr {
+                            size(SftpPlayerTokens.BUTTON_W, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                            marginLeft(6f)
+                        }
                         event { click { ctx.muted = !ctx.muted } }
-                        Text { attr { text(if (ctx.muted) "🔇" else "🔊"); fontSize(14f); color(Color.WHITE) } }
-                    }
-                    // 选集
-                    View {
-                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_EPISODE_LIST) }
-                        event { click { ctx.showEpisodeDrawer = !ctx.showEpisodeDrawer } }
-                        Text { attr { text("☰"); fontSize(15f); color(Color.WHITE) } }
-                    }
-                    // 全屏
-                    View {
-                        attr { size(40f, 40f); allCenter(); accessibility(SftpAccessibility.BTN_FULLSCREEN) }
-                        event { click { ctx.toggleFullscreen() } }
-                        Text { attr { text(if (ctx.isFullscreen) "⤡" else "⛶"); fontSize(16f); color(Color.WHITE) } }
+                        Text {
+                            attr {
+                                text(if (ctx.muted) SftpPlayerIcons.Classic.MUTE else SftpPlayerIcons.Classic.VOLUME)
+                                fontSize(14f)
+                                color(SftpPlayerTokens.buttons)
+                            }
+                        }
                     }
                 }
             }
@@ -576,8 +665,22 @@ internal class SftpPlayerPage : SftpBasePager() {
     /** 进度条显示用比例：拖动中显示拖动位置，否则显示真实进度 */
     private fun displayRatio(): Float = if (draggingProgress) dragRatio else progressRatio()
 
+    /**
+     * 进度条实际宽度（对齐 mpv seekbar 在 line2 中间，两侧有按钮/时间码）
+     *
+     * line2 布局：play(44) + 6 + seekBack(40) + 6 + seekFwd(40) + 10 + tcLeft(64) + 10 + [seekbar] + 10 + tcRight(64) + 6 + mute(40)
+     * 固定部分 = 44+6+40+6+40+10+64+10 + 10+64+6+40 = 220 + 120 = 340
+     * seekbar 宽度 = pageWidth - 2*PAD_X - 340
+     */
+    private fun seekbarWidth(): Float {
+        val fixedLeft = SftpPlayerTokens.PLAY_BUTTON_SIZE + 6f + SftpPlayerTokens.BUTTON_W + 6f +
+                        SftpPlayerTokens.BUTTON_W + 10f + SftpPlayerTokens.TC_W + 10f
+        val fixedRight = 10f + SftpPlayerTokens.TC_W + 6f + SftpPlayerTokens.BUTTON_W
+        return (pagerData.pageViewWidth - 2f * SftpPlayerTokens.PAD_X - fixedLeft - fixedRight).coerceAtLeast(0f)
+    }
+
     private fun ratioFromX(x: Float): Float {
-        val w = pagerData.pageViewWidth - 24f   // 与进度条轨道宽度一致（控制面板左右各留 12）
+        val w = seekbarWidth()   // 与进度条轨道实际宽度一致（line2 中间 flex 区域）
         if (w <= 0f) return 0f
         return (x / w).coerceIn(0f, 1f)
     }
@@ -641,7 +744,7 @@ internal class SftpPlayerPage : SftpBasePager() {
     /** 3 秒无操作后隐藏控制条（仅全屏且正在播放时） */
     private fun scheduleHideControls() {
         hideControlsTimer?.let { clearTimeout(it) }
-        hideControlsTimer = setTimeout(2000) {
+        hideControlsTimer = setTimeout(SftpPlayerTokens.HIDE_TIMEOUT_MS) {
             // 正在拖动进度 / 打开设置菜单时绝不隐藏：隐藏会移除手势元素，拖动会被中断
             if (isFullscreen && isPlaying && !draggingProgress && !showSettingsMenu) {
                 controlsVisible = false
@@ -941,7 +1044,7 @@ internal fun ViewContainer<*, *>.SftpEpisodeDrawer(
 }
 
 /**
- * 播放设置菜单（对齐 Plyr 的 settings）。
+ * 播放设置菜单（对齐 mpv/Plyr 的 settings）。
  * 当前只提供倍速；字幕 / 清晰度等需引擎能力，后续可在此扩展。
  */
 internal fun ViewContainer<*, *>.SftpPlayerSettingsMenu(
@@ -952,29 +1055,29 @@ internal fun ViewContainer<*, *>.SftpPlayerSettingsMenu(
     View {
         attr {
             positionAbsolute()
-            right(12f)
+            right(SftpPlayerTokens.PAD_X)
             bottom(60f)
-            width(132f)
+            width(SftpPlayerTokens.SETTINGS_MENU_W)
             padding(6f, 6f, 6f, 6f)
-            borderRadius(10f)
+            borderRadius(SftpPlayerTokens.SETTINGS_MENU_RADIUS)
             flexDirectionColumn()
-            backgroundColor(Color(0xF0222222))
+            backgroundColor(SftpPlayerTokens.settingsMenuBg)
         }
         options.forEach { opt ->
             View {
                 attr {
-                    width(120f)
-                    height(36f)
+                    width(SftpPlayerTokens.SETTINGS_MENU_W - 12f)
+                    height(SftpPlayerTokens.SETTINGS_MENU_ITEM_H)
                     allCenter()
-                    borderRadius(6f)
-                    backgroundColor(if (opt == currentSpeed) Color(0xFF3D7EFF) else Color(0x00000000))
+                    borderRadius(SftpPlayerTokens.SETTINGS_MENU_ITEM_RADIUS)
+                    backgroundColor(if (opt == currentSpeed) SftpPlayerTokens.settingsMenuSelected else Color(0x00000000))
                 }
                 event { click { onPick(opt) } }
                 Text {
                     attr {
                         text("${opt}×")
-                        fontSize(13f)
-                        color(Color.WHITE)
+                        fontSize(SftpPlayerTokens.SETTINGS_MENU_ITEM_FONT_SIZE)
+                        color(SftpPlayerTokens.buttons)
                     }
                 }
             }
