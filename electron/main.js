@@ -23,7 +23,16 @@ if (!app) {
 const path = require('path');
 
 const RES_DIR = path.join(__dirname, 'resources');
-const GATEWAY_ENTRY = path.join(__dirname, '..', 'sftp-gateway', 'server.js');
+
+/**
+ * 网关入口：开发态直接用仓库里的 sftp-gateway（同一份，不复制）；
+ * 打包态用 electron-builder extraResources 带进来的 resources/gateway。
+ */
+function gatewayEntry() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'gateway', 'server.js')
+    : path.join(__dirname, '..', 'sftp-gateway', 'server.js');
+}
 
 let mainWindow = null;
 let gatewayProc = null;
@@ -32,7 +41,8 @@ let gatewayUrl = 'http://127.0.0.1:18090';
 /** 启动网关并等待其回报实际端口 */
 function startGateway() {
   return new Promise((resolve, reject) => {
-    gatewayProc = utilityProcess.fork(GATEWAY_ENTRY, [], {
+    const entry = gatewayEntry();
+    gatewayProc = utilityProcess.fork(entry, [], {
       env: { ...process.env, SFTP_GATEWAY_PORT: '0' },
       stdio: 'inherit',
     });

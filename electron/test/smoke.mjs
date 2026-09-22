@@ -12,14 +12,19 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
+// 可用 ELECTRON_TEST_BIN 指向打包产物（.app 内的可执行文件）做「打包版」功能验证
+const binOverride = process.env.ELECTRON_TEST_BIN || '';
+
 let electronBin;
 try {
   electronBin = require('electron'); // electron 包导出二进制路径（Node 上下文）
 } catch (e) {
-  console.error('[smoke] electron 未安装：cd electron && npm install');
-  process.exit(2);
+  if (!binOverride) {
+    console.error('[smoke] electron 未安装：cd electron && npm install');
+    process.exit(2);
+  }
 }
-if (!fs.existsSync(path.join(electronDir, 'resources', 'index.html'))) {
+if (!binOverride && !fs.existsSync(path.join(electronDir, 'resources', 'index.html'))) {
   console.error('[smoke] resources 未同步：npm run sync');
   process.exit(2);
 }
@@ -41,7 +46,9 @@ async function waitCdp() {
   // 关键：宿主环境可能带 ELECTRON_RUN_AS_NODE=1（VS Code 等），会让 Electron 以纯 Node 运行
   const childEnv = { ...process.env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(electronBin, ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+  const child = binOverride
+    ? spawn(binOverride, [`--remote-debugging-port=${PORT}`], { stdio: 'inherit', env: childEnv })
+    : spawn(electronBin, ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'inherit', env: childEnv });
   try {
     check('S1 Electron 启动 + CDP 可用', await waitCdp());
     // 等待渲染进程页面出现（窗口创建/首帧可能晚于 CDP 就绪）

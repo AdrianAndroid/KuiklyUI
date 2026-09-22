@@ -690,6 +690,9 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   - macOS 播放器实现：`macApp/.../Handlers/KRVideoViewHandler.{h,m}`（VLCKit）
   - iOS 播放器实现：`iosApp/iosApp/KuiklyRenderExpand/`（WMPlayer）
 - **Web(H5) 网关（Node）**：`sftp-gateway/server.js` + `package.json`
+- **桌面壳（Electron，M4 已完成）**：`electron/`（`npm run build:web` → `npm run sync` → `npm run start`；
+  `npm run dist` 出 dmg）。复用同一份 `sftp-gateway`（打包进 `Resources/gateway`）与 H5 产物；
+  `npm test` 为端到端功能验证（S1-S10，含真实目录与播放）。启动需 `env -u ELECTRON_RUN_AS_NODE`（§12）。
 - **Web(H5) 模块/宿主**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`、
   `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
 - **Web 视频组件**：`core-render-web/base/src/jsMain/kotlin/.../expand/components/KRVideoView.kt`

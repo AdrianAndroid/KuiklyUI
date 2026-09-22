@@ -7,6 +7,14 @@ files:
   - preload.js
   - resources/**
   - package.json
+# 打包版必须内置网关（含 ssh2 依赖）：复制为 Resources/gateway，main.js 按 app.isPackaged 解析
+extraResources:
+  - from: ../sftp-gateway
+    to: gateway
+    filter:
+      - "**/*"
+      - "!data/**"
+      - "!**/*.log"
 mac:
   target:
     - dmg
