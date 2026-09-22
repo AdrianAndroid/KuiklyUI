@@ -30,6 +30,7 @@ import com.tencent.kuikly.core.module.sftp.SftpMediaUrlBuilder
 import com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord
 import com.tencent.kuikly.core.datetime.DateTime
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.PlayState
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.Video
@@ -321,9 +322,21 @@ internal class SftpPlayerPage : SftpBasePager() {
                         }
                     }
                 }
+                // 全屏时的返回入口：全屏会隐藏导航栏，这里补一个悬浮返回键（随控制条显隐）
+                vif({ ctx.isFullscreen && ctx.controlsVisible }) {
+                    View {
+                        attr {
+                            positionAbsolute()
+                            left(12f); top(12f)
+                            size(40f, 40f); allCenter(); borderRadius(20f)
+                            backgroundColor(Color(0x66000000))
+                            accessibility(SftpAccessibility.BTN_BACK)
+                        }
+                        event { click { ctx.closeSelf() } }
+                        Text { attr { text("<"); fontSize(20f); color(Color.WHITE) } }
+                    }
+                }
             }
-
-            // 控制面板：始终覆盖在视频底部（对齐 mpv bottombar 两行布局）
             // ┌ 信息行（line1）：选集 | (flex) | 倍速 | 全屏
             // └ 控制行（line2）：播放 | 快退 | 快进 | tc_left | ──●── seekbar | tc_right | 静音
             vif({ !ctx.isFullscreen || ctx.controlsVisible }) {
@@ -630,10 +643,10 @@ internal class SftpPlayerPage : SftpBasePager() {
 
             // 选集抽屉
             vif({ ctx.showEpisodeDrawer && ctx.episodes.isNotEmpty() }) {
-                SftpEpisodeDrawer(ctx.episodes, ctx.currentIndex) { index ->
+                SftpEpisodeDrawer(ctx.episodes, ctx.currentIndex, onSelect = { index ->
                     ctx.showEpisodeDrawer = false
                     ctx.switchToEpisode(index)
-                }
+                }, onDismiss = { ctx.showEpisodeDrawer = false })
             }
                     }
 }
@@ -998,46 +1011,72 @@ internal fun ViewContainer<*, *>.SftpNextEpisodeCountdownDialog(
 internal fun ViewContainer<*, *>.SftpEpisodeDrawer(
     episodes: List<String>,
     currentIndex: Int,
-    onSelect: (Int) -> Unit
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
 ) {
     View {
         attr {
             size(pagerData.pageViewWidth, pagerData.pageViewHeight)
             backgroundColor(Color(0x99000000.toInt()))
-            alignItemsFlexEnd()
+            // 抽屉贴底：父容器是 column，贴底要用 justifyContentFlexEnd（alignItemsFlexEnd 是"右对齐"）
+            justifyContentFlexEnd()
         }
+        // 点击遮罩即关闭：不能只有「选中某一集」才消失
+        event { click { onDismiss() } }
         View {
             attr {
                 width(pagerData.pageViewWidth)
-                height(pagerData.pageViewHeight * 0.6f)
+                // 不全屏：最多占一半屏，且不超过 360
+                height(if (pagerData.pageViewHeight * 0.5f > 360f) 360f else pagerData.pageViewHeight * 0.5f)
                 backgroundColor(SftpColorTokens.cardBg)
-                padding(16f, 16f, 16f, 16f)
+                padding(16f, 12f, 16f, 8f)
                 flexDirectionColumn()
+                borderRadius(12f)
             }
-            Text {
+            // 吞掉面板内点击，避免冒泡到遮罩把抽屉关掉
+            event { click { } }
+            // 标题行 + 关闭按钮
+            View {
                 attr {
-                    text(I18n.t("sftp.player.episodes_title"))
-                    fontSize(16f)
-                    fontWeightBold()
-                    color(SftpColorTokens.textPrimary)
-                    marginBottom(12f)
+                    width(pagerData.pageViewWidth - 32f)
+                    flexDirectionRow()
+                    alignItemsCenter()
+                    marginBottom(10f)
+                }
+                Text {
+                    attr {
+                        text(I18n.t("sftp.player.episodes_title"))
+                        fontSize(16f)
+                        fontWeightBold()
+                        color(SftpColorTokens.textPrimary)
+                        flex(1f)
+                    }
+                }
+                View {
+                    attr { size(32f, 32f); allCenter(); accessibility(SftpAccessibility.BTN_CLOSE) }
+                    event { click { onDismiss() } }
+                    Text { attr { text("✕"); fontSize(16f); color(SftpColorTokens.textSecondary) } }
                 }
             }
-            episodes.forEachIndexed { index, path ->
-                View {
-                    attr {
-                        width(pagerData.pageViewWidth - 32f)
-                        padding(12f, 10f, 12f, 10f)
-                        backgroundColor(if (index == currentIndex) SftpColorTokens.primary else Color.TRANSPARENT)
-                        borderRadius(8f)
-                        marginBottom(4f)
-                    }
-                    event { click { onSelect(index) } }
-                    Text {
+            // 列表（高度受限，条目多时可滚动）
+            Scroller {
+                attr { flex(1f); width(pagerData.pageViewWidth - 32f); flexDirectionColumn() }
+                episodes.forEachIndexed { index, path ->
+                    View {
                         attr {
-                            text(path.substringAfterLast('/'))
-                            fontSize(14f)
-                            color(if (index == currentIndex) Color.WHITE else SftpColorTokens.textPrimary)
+                            width(pagerData.pageViewWidth - 32f)
+                            padding(12f, 10f, 12f, 10f)
+                            backgroundColor(if (index == currentIndex) SftpColorTokens.primary else Color.TRANSPARENT)
+                            borderRadius(8f)
+                            marginBottom(4f)
+                        }
+                        event { click { onSelect(index) } }
+                        Text {
+                            attr {
+                                text(path.substringAfterLast('/'))
+                                fontSize(14f)
+                                color(if (index == currentIndex) Color.WHITE else SftpColorTokens.textPrimary)
+                            }
                         }
                     }
                 }

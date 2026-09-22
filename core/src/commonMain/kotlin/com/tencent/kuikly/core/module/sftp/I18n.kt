@@ -248,7 +248,147 @@ object I18n {
         "sftp.ui.codec_unsupported" to mapOf(
             "zh-CN" to "设备不支持此编码",
             "en-US" to "Codec not supported on this device"
-        )
+        ),
+        "sftp.ui.loading" to mapOf(
+            "zh-CN" to "加载中…",
+            "en-US" to "Loading…"
+        ),
+        "sftp.ui.error" to mapOf(
+            "zh-CN" to "出错了",
+            "en-US" to "Error"
+        ),
+        "sftp.ui.retry" to mapOf(
+            "zh-CN" to "重试",
+            "en-US" to "Retry"
+        ),
+        "sftp.ui.cancel" to mapOf(
+            "zh-CN" to "取消",
+            "en-US" to "Cancel"
+        ),
+        "sftp.ui.save" to mapOf(
+            "zh-CN" to "保存",
+            "en-US" to "Save"
+        ),
+        "sftp.connect.saved" to mapOf(
+            "zh-CN" to "连接已保存",
+            "en-US" to "Connection saved"
+        ),
+        "sftp.favorites.title" to mapOf(
+            "zh-CN" to "收藏",
+            "en-US" to "Favorites"
+        ),
+        "sftp.favorites.empty" to mapOf(
+            "zh-CN" to "暂无收藏",
+            "en-US" to "No favorites"
+        ),
+        "sftp.favorites.stale_warning" to mapOf(
+            "zh-CN" to "部分收藏对应的连接已被删除",
+            "en-US" to "Some favorited connections were removed"
+        ),
+        "sftp.history.title" to mapOf(
+            "zh-CN" to "播放历史",
+            "en-US" to "Playback history"
+        ),
+        "sftp.history.empty" to mapOf(
+            "zh-CN" to "暂无播放历史",
+            "en-US" to "No playback history"
+        ),
+        "sftp.history.clear_all" to mapOf(
+            "zh-CN" to "清空",
+            "en-US" to "Clear all"
+        ),
+        "sftp.history.completed" to mapOf(
+            "zh-CN" to "已看完",
+            "en-US" to "Watched"
+        ),
+        "sftp.player.episodes_title" to mapOf(
+            "zh-CN" to "选集",
+            "en-US" to "Episodes"
+        ),
+        "sftp.player.resume_title" to mapOf(
+            "zh-CN" to "继续播放？",
+            "en-US" to "Resume playback?"
+        ),
+        "sftp.player.resume_prompt" to mapOf(
+            "zh-CN" to "上次看到 %s，是否继续播放？",
+            "en-US" to "Last position %s. Continue?"
+        ),
+        "sftp.player.continue_play" to mapOf(
+            "zh-CN" to "继续播放",
+            "en-US" to "Continue"
+        ),
+        "sftp.player.restart" to mapOf(
+            "zh-CN" to "从头播放",
+            "en-US" to "Start over"
+        ),
+        "sftp.player.next_episode_countdown" to mapOf(
+            "zh-CN" to "%d 秒后播放下一集",
+            "en-US" to "Next episode in %d s"
+        ),
+        "sftp.player.play_now" to mapOf(
+            "zh-CN" to "立即播放",
+            "en-US" to "Play now"
+        ),
+        "sftp.props.title" to mapOf(
+            "zh-CN" to "属性",
+            "en-US" to "Properties"
+        ),
+        "sftp.batch.title" to mapOf(
+            "zh-CN" to "批量操作",
+            "en-US" to "Batch"
+        ),
+        "sftp.batch.failed" to mapOf(
+            "zh-CN" to "批量操作失败",
+            "en-US" to "Batch failed"
+        ),
+        "sftp.error.proxy_start_failed" to mapOf(
+            "zh-CN" to "本地代理启动失败",
+            "en-US" to "Local proxy failed to start"
+        ),
+        "sftp.error.proxy_read_failed" to mapOf(
+            "zh-CN" to "本地代理读取失败",
+            "en-US" to "Local proxy read failed"
+        ),
+        "sftp.viewer.unsupported" to mapOf(
+            "zh-CN" to "暂不支持预览该类型",
+            "en-US" to "Preview not supported for this type"
+        ),
+        "sftp.viewer.text_too_large" to mapOf(
+            "zh-CN" to "文件过大，已截断显示",
+            "en-US" to "File too large, truncated"
+        ),
+        "sftp.viewer.text_encoding" to mapOf(
+            "zh-CN" to "编码",
+            "en-US" to "Encoding"
+        ),
+        "sftp.viewer.text_size" to mapOf(
+            "zh-CN" to "字号",
+            "en-US" to "Font size"
+        ),
+        "sftp.viewer.pdf_too_large" to mapOf(
+            "zh-CN" to "PDF 过大，无法预览",
+            "en-US" to "PDF too large to preview"
+        ),
+        "sftp.viewer.image_phase_hint" to mapOf(
+            "zh-CN" to "图片预览（Phase 0.4）",
+            "en-US" to "Image preview (Phase 0.4)"
+        ),
+        "sftp.viewer.audio_phase_hint" to mapOf(
+            "zh-CN" to "音频预览（Phase 0.4）",
+            "en-US" to "Audio preview (Phase 0.4)"
+        ),
+        "sftp.viewer.markdown_phase_hint" to mapOf(
+            "zh-CN" to "Markdown 预览（Phase 0.4）",
+            "en-US" to "Markdown preview (Phase 0.4)"
+        ),
+        "sftp.viewer.html_phase_hint" to mapOf(
+            "zh-CN" to "HTML 预览（Phase 0.4）",
+            "en-US" to "HTML preview (Phase 0.4)"
+        ),
+        "sftp.viewer.pdf_phase_hint" to mapOf(
+            "zh-CN" to "PDF 预览（Phase 0.4）",
+            "en-US" to "PDF preview (Phase 0.4)"
+        ),
     )
 
     /** 按 key + 当前语言取文案；找不到返回 key 本身 */

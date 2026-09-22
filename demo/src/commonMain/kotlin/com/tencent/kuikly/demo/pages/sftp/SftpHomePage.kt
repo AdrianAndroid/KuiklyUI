@@ -155,7 +155,7 @@ internal class SftpHomePage : SftpBasePager() {
                     SftpEmptyView("暂无收藏")
                 }
                 velseif({ ctx.currentTab == 1 }) {
-                    SftpFavoritesList({ ctx.favorites })
+                    SftpFavoritesList({ ctx.favorites }) { fav -> ctx.openFavorite(fav) }
                 }
 
                 // —— 历史 Tab ——
@@ -166,7 +166,7 @@ internal class SftpHomePage : SftpBasePager() {
                     SftpEmptyView("暂无播放历史")
                 }
                 velse {
-                    SftpHistoryList({ ctx.history })
+                    SftpHistoryList({ ctx.history }) { rec -> ctx.openHistory(rec) }
                 }
             }
                     }
@@ -202,6 +202,35 @@ internal class SftpHomePage : SftpBasePager() {
         params.put("connectionLabel", conn.label.ifEmpty { conn.user + "@" + conn.host })
         acquireModule<RouterModule>(RouterModule.MODULE_NAME)
             .openPage(SftpBrowserPage.PAGE_NAME, params)
+    }
+
+    /** 首页收藏 Tab 点击进入：目录→浏览页；文件→播放页（与收藏详情页一致，只传 connectionId，目标页自行解析凭据） */
+    private fun openFavorite(favorite: com.tencent.kuikly.core.module.sftp.SftpFavorite) {
+        val params = com.tencent.kuikly.core.nvi.serialization.json.JSONObject()
+        params.put("connectionId", favorite.connectionId)
+        params.put("connectionLabel", favorite.connectionLabel)
+        params.put("remotePath", favorite.remotePath)
+        if (favorite.isDir) {
+            acquireModule<RouterModule>(RouterModule.MODULE_NAME)
+                .openPage(SftpBrowserPage.PAGE_NAME, params)
+        } else {
+            params.put("name", favorite.name)
+            params.put("size", favorite.size)
+            acquireModule<RouterModule>(RouterModule.MODULE_NAME)
+                .openPage(SftpPlayerPage.PAGE_NAME, params)
+        }
+    }
+
+    /** 首页历史 Tab 点击进入播放页（与历史详情页一致） */
+    private fun openHistory(record: com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) {
+        val params = com.tencent.kuikly.core.nvi.serialization.json.JSONObject()
+        params.put("connectionId", record.connectionId)
+        params.put("connectionLabel", record.connectionLabel)
+        params.put("remotePath", record.remotePath)
+        params.put("name", record.name)
+        params.put("size", record.size)
+        acquireModule<RouterModule>(RouterModule.MODULE_NAME)
+            .openPage(SftpPlayerPage.PAGE_NAME, params)
     }
 
     private fun onTabChange(newTab: Int) {
@@ -395,8 +424,11 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
     }
 }
 
-/** 收藏列表渲染 */
-internal fun ViewContainer<*, *>.SftpFavoritesList(itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>) {
+/** 收藏列表渲染（可点击进入：目录→浏览，文件→播放） */
+internal fun ViewContainer<*, *>.SftpFavoritesList(
+    itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>,
+    onClick: (com.tencent.kuikly.core.module.sftp.SftpFavorite) -> Unit
+) {
     Scroller {
         attr {
             flex(1f)
@@ -414,6 +446,7 @@ internal fun ViewContainer<*, *>.SftpFavoritesList(itemsProvider: () -> Observab
                     flexDirectionRow()
                     alignItemsCenter()
                 }
+                event { click { onClick(fav) } }
                 Text {
                     attr {
                         text((if (fav.isDir) "📁 " else "📄 ") + fav.name)
@@ -434,8 +467,11 @@ internal fun ViewContainer<*, *>.SftpFavoritesList(itemsProvider: () -> Observab
     }
 }
 
-/** 历史列表渲染 */
-internal fun ViewContainer<*, *>.SftpHistoryList(itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>) {
+/** 历史列表渲染（可点击进入播放页） */
+internal fun ViewContainer<*, *>.SftpHistoryList(
+    itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>,
+    onClick: (com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) -> Unit
+) {
     Scroller {
         attr {
             flex(1f)
@@ -453,6 +489,7 @@ internal fun ViewContainer<*, *>.SftpHistoryList(itemsProvider: () -> Observable
                     flexDirectionRow()
                     alignItemsCenter()
                 }
+                event { click { onClick(rec) } }
                 Text {
                     attr {
                         text("🎬 " + rec.name)

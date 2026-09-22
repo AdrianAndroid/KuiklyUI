@@ -97,11 +97,39 @@ internal class SftpBrowserPage : SftpBasePager() {
                 loading = false
             } else {
                 entries.clear()
-                entries.addAll(items)
+                // 按名称从小到大排序（不区分大小写；同名再按原串，保证稳定）
+                entries.addAll(items.sortedWith(compareBy({ it.name.lowercase() }, { it.name })))
                 loading = false
                 errorMsg = null
             }
         }
+    }
+
+    /** 返回：**优先回到上一级目录**；已在根目录时才断开并关闭页面。 */
+    private fun onBackPressed() {
+        val parent = parentOf(currentPath)
+        if (parent != currentPath) {
+            currentPath = parent
+            doList()
+            return
+        }
+        // 已到顶层
+        val sid = sessionId
+        if (sid != null) {
+            sftpModule().disconnect(sid) {
+                acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+            }
+        } else {
+            acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+        }
+    }
+
+    /** 取上一级目录；"/" 或空串返回自身（表示已是顶层）。 */
+    private fun parentOf(path: String): String {
+        val p = path.trimEnd('/')
+        if (p.isEmpty()) return "/"
+        val idx = p.lastIndexOf('/')
+        return if (idx <= 0) "/" else p.substring(0, idx)
     }
 
     override fun body(): ViewBuilder {
@@ -129,15 +157,7 @@ internal class SftpBrowserPage : SftpBasePager() {
                 }
                 View {
                     attr { size(36f, 36f); allCenter(); accessibility(SftpAccessibility.BTN_BACK) }
-                    event {
-                        click {
-                            ctx.sessionId?.let { sid ->
-                                ctx.sftpModule().disconnect(sid) {
-                                    ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
-                                }
-                            } ?: ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
-                        }
-                    }
+                    event { click { ctx.onBackPressed() } }
                     Text { attr { text("<"); fontSize(22f); color(SftpColorTokens.textPrimary) } }
                 }
                 Text {

@@ -40,6 +40,7 @@ object SftpAccessibility {
     const val BTN_NEXT_EPISODE = "下一集"
     const val BTN_PREV_EPISODE = "上一集"
     const val BTN_EPISODE_LIST = "选集列表"
+    const val BTN_CLOSE = "关闭"
 
     /** 列表项朗读模板 */
     fun listItemLabel(name: String, isDir: Boolean, sizeStr: String, progress: Int? = null, completed: Boolean = false): String {
