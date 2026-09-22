@@ -1,0 +1,19 @@
+appId: com.tencent.kuikly.sftp.desktop
+productName: Kuikly SFTP
+directories:
+  output: dist
+files:
+  - main.js
+  - preload.js
+  - resources/**
+  - package.json
+mac:
+  target:
+    - dmg
+  category: public.app-category.utilities
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage

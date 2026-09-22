@@ -68,3 +68,6 @@ ohos_build.log
 !sftp-gateway/**/*.js
 # 运行期持久化数据（连接/收藏/历史），不入库
 sftp-gateway/data/
+
+## Electron 桌面壳（*.js 默认被忽略，此处放行宿主脚本）
+!electron/**/*.js

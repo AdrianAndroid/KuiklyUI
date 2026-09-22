@@ -1,0 +1,18 @@
+{
+  "name": "kuikly-sftp-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kuikly SFTP 桌面壳（Electron）：托管 Node 网关 + 复用 H5 产物；不含业务逻辑（规划 §3.3 / §6.8）",
+  "main": "main.js",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "sync": "node scripts/sync-resources.mjs",
+    "start": "npm run sync && electron .",
+    "dist": "npm run sync && electron-builder",
+    "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

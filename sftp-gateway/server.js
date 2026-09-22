@@ -25,7 +25,8 @@ const crypto = require('crypto');
 const { URL } = require('url');
 const { Client } = require('ssh2');
 
-const PORT = parseInt(process.env.SFTP_GATEWAY_PORT || '18090', 10);
+const PORT = parseInt(process.env.SFTP_GATEWAY_PORT || '18090', 10); // 0 = 由 OS 分配（Electron 用）
+let actualPort = PORT; // 实际监听端口（PORT=0 时由 OS 决定）
 const READY_TIMEOUT_MS = 20000;
 
 /* ------------------------------------------------------------------ *
@@ -440,7 +441,7 @@ const sftpModule = {
     const token = crypto.randomBytes(16).toString('hex');
     mediaTokens.set(token, { sessionId: params.sessionId, remotePath: params.remotePath, size: Number(st.size || 0), handle: null });
     const name = params.localName || baseName(params.remotePath);
-    return { progress: 1, path: 'http://127.0.0.1:' + PORT + '/' + token + '/' + encodeURIComponent(name), success: true };
+    return { progress: 1, path: 'http://127.0.0.1:' + actualPort + '/' + token + '/' + encodeURIComponent(name), success: true };
   },
 
   async batchTask(params) {
@@ -487,7 +488,7 @@ const sftpModule = {
  *   URL 与 common SftpMediaUrlBuilder.buildPlayUrl 一致：http://127.0.0.1:<port>/<token>/<name>
  * ------------------------------------------------------------------ */
 const mediaProxyModule = {
-  async startOrGetPort() { return { port: PORT }; },
+  async startOrGetPort() { return { port: actualPort }; },
   async registerToken(params) {
     const { sessionId, remotePath, totalSize } = params;
     if (!sessionId || !remotePath) throw new Error('registerToken: sessionId/remotePath required');
@@ -917,7 +918,7 @@ async function handleMedia(req, res, token, name) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end(); }
-  if (u.pathname === '/health') return sendJson(res, 200, { ok: true, port: PORT });
+  if (u.pathname === '/health') return sendJson(res, 200, { ok: true, port: actualPort });
   if (u.pathname === '/rpc' && req.method === 'POST') return handleRpc(req, res);
   // 媒体：/<token>/<fileName>
   const segs = u.pathname.replace(/^\//, '').split('/');
@@ -929,5 +930,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log('[sftp-gateway] listening on http://127.0.0.1:' + PORT);
+  actualPort = server.address().port;
+  console.log('[sftp-gateway] listening on http://127.0.0.1:' + actualPort);
+  // Electron(utilityProcess) 场景：把实际端口回传主进程（SFTP_GATEWAY_PORT=0 时必需）
+  try {
+    if (process.parentPort && typeof process.parentPort.postMessage === 'function') {
+      process.parentPort.postMessage({ type: 'listening', port: actualPort });
+    }
+  } catch (e) { /* 非 Electron 环境忽略 */ }
 });
