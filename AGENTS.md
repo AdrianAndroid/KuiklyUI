@@ -419,11 +419,14 @@ npm run test:rpc   # 只测网关 RPC / 媒体 Range / 文件操作（不需要�
 npm test           # 全量：再跑浏览器 UI（首页 / 浏览真实目录 / 视频播放 / 拖动 seek / 设置菜单）
 npm run e2e        # 全自动：自动探测 JDK17/Node、按需构建、自启网关+页面、跑测试、清理
                    #   E2E_BUILD=1 强制重建；E2E_KEEP=1 保留服务；E2E_TEST_TIMEOUT=300
+HEADLESS=0 SLOWMO=200 npm test   # 有头（可见浏览器，能直接看到自动化操作）并放慢
 ```
 - 用例：`sftp-gateway/test/sftp-web.test.js`；编排：`sftp-gateway/scripts/e2e.sh`
 - 可用 `GATEWAY_URL` / `WEB_URL` / `CHROME_PATH` / `SFTP_HOST|PORT|USER|PASSWORD|HOME|MEDIA` 覆盖默认值
 - 前置：`npm test` 需网关与页面 8080/8083 已起；`npm run e2e` 会自己起（未监听才起，结束时关掉自己起的）
 - 校验强度：随机读与媒体 Range 均做**字节级**比对（`ftyp` 头 + offset 50000 中段）
+- 已知测试差异：**CDP 合成的 pan move 在 headless 下不稳定**，故「拖动 seek」只在 `HEADLESS=0` 断言；
+  无头下 seek 能力由「键盘 seek（←/→）」用例覆盖。每次运行使用独立 Chrome profile，避免实例复用导致白屏
 
 已知限制（Web）：
 - 网关会话在**内存**中，重启网关即失效：旧 `sessionId` 的播放页 seek 会失败，需从首页重进
