@@ -45,4 +45,7 @@ project(":miniApp").buildFileName = buildFileName
 include(":compose")
 project(":compose").buildFileName = buildFileName
 
+// 新模块用标准 build.gradle.kts（插件版本由根构建文件提供，避免每个 Kotlin 版本复制一份）
+include(":core:file-manager")
+
 rootProject.buildFileName = buildFileName

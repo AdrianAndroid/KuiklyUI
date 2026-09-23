@@ -85,6 +85,10 @@ kotlin {
 
     val jsMain by sourceSets.getting {
         dependsOn(commonMain)
+        dependencies {
+            // 双栏文件管理器核心（纯状态机，KMP 公共层；当前仅 js 端页面使用）
+            implementation(project(":core:file-manager"))
+        }
 //        kotlin.srcDir(
 //            "build/generated/ksp/js/jsMain/kotlin"
 //        )
