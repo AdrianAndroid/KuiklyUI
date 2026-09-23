@@ -45,6 +45,9 @@ function classifyError(err) {
   if (/all configured authentication methods failed|authentication/i.test(msg)) {
     return { code: 1003, msg: '认证失败', detail: msg };
   }
+  if (/LOCAL_PATH_DENIED/.test(msg)) {
+    return { code: 2001, msg: '本地路径越界，已拒绝', detail: msg };
+  }
   if (/no such file|ENOENT|not exist/i.test(msg)) {
     return { code: 2003, msg: '文件/目录不存在', detail: msg };
   }
@@ -423,14 +426,22 @@ const sftpModule = {
 
   async upload(params) {
     const s = findSession(params.sessionId);
-    if (params.content == null) return notImplemented('upload without inline content (browser has no local path)');
+    let buf = null;
+    let src = null;
+    if (params.content != null) {
+      buf = Buffer.from(params.content, 'base64');
+    } else if (params.localPath) {
+      // localPath 必须落在 LOCAL_ROOT 之下（realpath 校验），并流式上传避免整体入内存
+      src = fs.createReadStream(await assertWithinLocalRoot(params.localPath));
+    } else {
+      return notImplemented('upload requires content or localPath');
+    }
     await ensureRemoteDir(s.sftp, parentDir(params.remotePath));
-    const buf = Buffer.from(params.content, 'base64');
     await new Promise((resolve, reject) => {
       const ws = s.sftp.createWriteStream(params.remotePath, { flags: 'w', mode: 0o644 });
       ws.on('error', reject);
       ws.on('close', resolve);
-      ws.end(buf);
+      if (src) { src.on('error', reject); src.pipe(ws); } else { ws.end(buf); }
     });
     return { progress: 1, success: true };
   },
@@ -438,9 +449,22 @@ const sftpModule = {
   async download(params) {
     const s = findSession(params.sessionId);
     const st = await call(s.sftp, 'stat', params.remotePath);
+    const name = params.localName || baseName(params.remotePath);
+    if (name.startsWith('/')) {
+      // 绝对路径：直接落盘（双栏「下载到本地栏」用）；必须落在 LOCAL_ROOT 之下
+      const dest = await assertWithinLocalRoot(name);
+      await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+      await new Promise((resolve, reject) => {
+        const rs = s.sftp.createReadStream(params.remotePath);
+        const ws = fs.createWriteStream(dest);
+        rs.on('error', reject); ws.on('error', reject); ws.on('close', resolve);
+        rs.pipe(ws);
+      });
+      return { progress: 1, path: dest, success: true };
+    }
+    // 媒体 URL 分支才需要 token（此前无条件注册，会在绝对路径分支留下无用 token）
     const token = crypto.randomBytes(16).toString('hex');
     mediaTokens.set(token, { sessionId: params.sessionId, remotePath: params.remotePath, size: Number(st.size || 0), handle: null });
-    const name = params.localName || baseName(params.remotePath);
     return { progress: 1, path: 'http://127.0.0.1:' + actualPort + '/' + token + '/' + encodeURIComponent(name), success: true };
   },
 
@@ -519,6 +543,33 @@ const mediaProxyModule = {
  * ------------------------------------------------------------------ */
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+
+// 本地文件访问根（网关与调用方同机）：upload 读 localPath / download 写绝对路径都限制在此根之下。
+// 默认用户主目录，Electron 侧用 SFTP_GATEWAY_LOCAL_ROOT 显式传入（app.getPath('home')）。
+// 校验走 realpath，防止主目录内的符号链接指向外部（越界拒绝，错误码 2001）。
+const LOCAL_ROOT = path.resolve(process.env.SFTP_GATEWAY_LOCAL_ROOT || os.homedir());
+let localRootReal = null;
+async function assertWithinLocalRoot(p) {
+  if (!p) throw new Error('LOCAL_PATH_DENIED: empty path');
+  if (localRootReal === null) {
+    try { localRootReal = await fs.promises.realpath(LOCAL_ROOT); } catch (e) { localRootReal = LOCAL_ROOT; }
+  }
+  const resolved = path.resolve(String(p));
+  let real = null;
+  try {
+    real = await fs.promises.realpath(resolved);
+  } catch (e) {
+    // 目标尚不存在（下载新建文件）：解析父目录真实路径后拼接文件名
+    const parent = await fs.promises.realpath(path.dirname(resolved)).catch(() => null);
+    if (parent) real = path.join(parent, path.basename(resolved));
+  }
+  if (real === null) throw new Error('LOCAL_PATH_DENIED: cannot resolve ' + resolved);
+  if (real !== localRootReal && !real.startsWith(localRootReal + path.sep)) {
+    throw new Error('LOCAL_PATH_DENIED: ' + real + ' outside root ' + localRootReal);
+  }
+  return real;
+}
 
 // 数据目录：默认在网关目录下；Electron 安装后由 SFTP_GATEWAY_DATA_DIR 指向可写的 userData
 const DATA_DIR = process.env.SFTP_GATEWAY_DATA_DIR || path.join(__dirname, 'data');

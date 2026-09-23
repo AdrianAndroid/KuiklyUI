@@ -29,6 +29,7 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.utils.PlatformUtils
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
@@ -97,6 +98,34 @@ internal class SftpHomePage : SftpBasePager() {
                         flex(1f)
                     }
                 }
+                // 双栏文件管理器入口（仅 Web/桌面：依赖宿主 window.localFs 提供本地栏）
+                vif({ ctx.isWebLike }) {
+                    View {
+                        attr {
+                            size(36f, 36f)
+                            allCenter()
+                            accessibility("dual_pane_entry")
+                        }
+                        event {
+                            click {
+                                val c = ctx.connections.maxByOrNull { it.lastUsedAt }
+                                if (c == null) {
+                                    ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME)
+                                        .openPage(SftpConnectEditPage.PAGE_NAME)
+                                } else {
+                                    ctx.openDualPane(c)
+                                }
+                            }
+                        }
+                        Text {
+                            attr {
+                                text("⇄")
+                                fontSize(20f)
+                                color(SftpColorTokens.primary)
+                            }
+                        }
+                    }
+                }
                 View {
                     attr {
                         size(36f, 36f)
@@ -140,11 +169,24 @@ internal class SftpHomePage : SftpBasePager() {
                 }
 
                 // —— 连接 Tab ——
-                velseif({ ctx.currentTab == 0 && ctx.connections.isEmpty() }) {
-                    SftpEmptyView("暂无连接，点 + 新建")
-                }
                 velseif({ ctx.currentTab == 0 }) {
-                    SftpConnectionListView({ ctx.connections }) { conn -> ctx.openBrowser(conn) }
+                    View {
+                        attr { flex(1f); flexDirectionColumn(); width(pagerData.pageViewWidth) }
+                        // 默认入口：本地文件管理（双栏；远端栏可随时选主机）—— 仅 Web/桌面
+                        if (ctx.isWebLike) {
+                            SftpLocalFileManagerEntry { ctx.openLocalFileManager() }
+                        }
+                        vif({ ctx.connections.isEmpty() }) {
+                            SftpEmptyView("暂无连接，点 + 新建")
+                        }
+                        velse {
+                            SftpConnectionListView(
+                                { ctx.connections },
+                                { conn -> ctx.openBrowser(conn) },
+                                if (ctx.isWebLike) { { conn -> ctx.openDualPane(conn) } } else null
+                            )
+                        }
+                    }
                 }
 
                 // —— 收藏 Tab ——
@@ -202,6 +244,16 @@ internal class SftpHomePage : SftpBasePager() {
         params.put("connectionLabel", conn.label.ifEmpty { conn.user + "@" + conn.host })
         acquireModule<RouterModule>(RouterModule.MODULE_NAME)
             .openPage(SftpBrowserPage.PAGE_NAME, params)
+    }
+
+    /** 默认入口：只开本地栏（远端栏由用户在页内选择主机）。 */
+    internal fun openLocalFileManager() {
+        SftpPageNames.openDualPane(acquireModule(RouterModule.MODULE_NAME), connectionId = "", label = "")
+    }
+
+    /** 以指定连接打开双栏文件管理器（仅 Web/桌面可用；只传 id，凭据由目标页从连接库取）。 */
+    internal fun openDualPane(conn: com.tencent.kuikly.core.module.sftp.SftpConnection) {
+        SftpPageNames.openDualPane(acquireModule(RouterModule.MODULE_NAME), conn.id, conn.label)
     }
 
     /** 首页收藏 Tab 点击进入：目录→浏览页；文件→播放页（与收藏详情页一致，只传 connectionId，目标页自行解析凭据） */
@@ -383,7 +435,8 @@ internal fun ViewContainer<*, *>.SftpErrorView(message: String, onRetry: () -> U
 /** 连接列表项视图（§17.3.1 线框） */
 internal fun ViewContainer<*, *>.SftpConnectionListView(
     connectionsProvider: () -> ObservableList<SftpConnection>,
-    onClick: (SftpConnection) -> Unit
+    onClick: (SftpConnection) -> Unit,
+    onDualPane: ((SftpConnection) -> Unit)? = null
 ) {
     Scroller {
         attr {
@@ -417,6 +470,18 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
                         text("${conn.user}@${conn.host}:${conn.port}")
                         fontSize(13f)
                         color(SftpColorTokens.textSecondary)
+                    }
+                }
+                if (onDualPane != null) {
+                    // 桌面双栏入口：以该连接作为远端栏打开（先有远端，再有双栏）
+                    Text {
+                        attr {
+                            text("⇄")
+                            fontSize(18f)
+                            color(SftpColorTokens.primary)
+                            marginLeft(10f)
+                        }
+                        event { click { onDualPane(conn) } }
                     }
                 }
             }
@@ -518,4 +583,30 @@ internal fun formatDuration(ms: Long): String {
     val s = totalSec % 60
     return if (h > 0) "${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
     else "${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
+}
+
+/** 首页默认入口：本地文件管理（双栏）；仅 Web/桌面注入。 */
+internal fun ViewContainer<*, *>.SftpLocalFileManagerEntry(onClick: () -> Unit) {
+    View {
+        attr {
+            width(pagerData.pageViewWidth - 8f)
+            padding(16f, 14f, 16f, 14f)
+            backgroundColor(SftpColorTokens.cardBg)
+            flexDirectionRow()
+            alignItemsCenter()
+        }
+        event { click { onClick() } }
+        Text { attr { text("\uD83D\uDCBB"); fontSize(20f) } }
+        View {
+            attr { flex(1f); flexDirectionColumn(); marginLeft(12f) }
+            Text { attr { text("本地文件管理"); fontSize(16f); color(SftpColorTokens.textPrimary) } }
+            Text {
+                attr {
+                    text("浏览本机文件；右侧可切换远端主机并双向传输")
+                    fontSize(12f); color(SftpColorTokens.textSecondary); marginTop(2f)
+                }
+            }
+        }
+        Text { attr { text("›"); fontSize(20f); color(SftpColorTokens.textSecondary) } }
+    }
 }

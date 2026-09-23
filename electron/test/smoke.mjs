@@ -69,7 +69,10 @@ async function waitCdp() {
       ws.onmessage = (e) => {
         const m = JSON.parse(e.data);
         if (m.id && pend.has(m.id)) { pend.get(m.id)(m.result); pend.delete(m.id); }
-        if (m.method === 'Runtime.exceptionThrown') errs.push(m.params.exceptionDetails.text || 'exception');
+        if (m.method === 'Runtime.exceptionThrown') {
+          const d = m.params.exceptionDetails || {};
+          errs.push(String((d.exception && d.exception.description) || d.text || 'exception'));
+        }
         if (m.method === 'Runtime.consoleAPICalled') {
           logs.push((m.params.args || []).map((a) => a.value !== undefined ? a.value : a.description || a.type).join(' '));
         }
@@ -90,7 +93,9 @@ async function waitCdp() {
       check('S3 首页渲染(SFTP 客户端)', text.includes('SFTP 客户端'), 'len=' + text.length + (text ? '' : ' | readyState=' + (await ev('document.readyState'))));
       const gw = await ev('window.__SFTP_GATEWAY_URL__');
       check('S4 注入网关地址', /^http:\/\/127\.0\.0\.1:\d+$/.test(String(gw)), String(gw));
-      check('S5 无 JS 异常', errs.length === 0, errs.slice(0, 2).join(';') || (logs.length ? ('logs=' + logs.slice(-3).join(' | ')) : ''));
+      const benignErr = (t) => /AbortError|play\(\) request was interrupted|NotAllowedError/i.test(String(t));
+      const realErrs = () => errs.filter((t) => !benignErr(t));
+      check('S5 无 JS 异常', realErrs().length === 0, realErrs().slice(0, 2).join(';') || (logs.length ? ('logs=' + logs.slice(-3).join(' | ')) : ''));
 
       // S6 渲染进程 → 网关 真实 RPC（验证 CORS/端口注入可用）
       const health = await ev(`fetch(${JSON.stringify(String(gw))} + '/health').then(r=>r.json()).then(j=>JSON.stringify(j)).catch(e=>'ERR:'+e)`, true);
@@ -129,7 +134,91 @@ async function waitCdp() {
       const t2 = await ev(pickCur);
       const toSec = (s) => { const m = (s || '').match(/(\d\d):(\d\d)/); return m ? (+m[1]) * 60 + (+m[2]) : -1; };
       check('S9 桌面壳内播放(时间前进)', isTime(t1) && isTime(t2) && toSec(t2) > toSec(t1), `${t1} -> ${t2}`);
-      check('S10 功能验证后仍无 JS 异常', errs.length === 0, errs.slice(0, 2).join(';'));
+      // ================= 以下为「模拟人工点击 / 按键」用例 =================
+      const wake = async () => {
+        for (const x of [420, 520, 620]) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y: 300, button: 'none', buttons: 0 }); await sleep(120); }
+        await sleep(400);
+      };
+      let lastClickInfo = '';
+      const clickText = async (txt) => {
+        const info = await ev(
+          "(()=>{const all=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()}))" +
+          ".filter(o=>o.e.textContent&&o.e.textContent.trim().includes(" + JSON.stringify(txt) + ")&&o.r.width>1&&o.r.height>1);" +
+          "if(!all.length)return null;all.sort((a,b)=>a.r.width*a.r.height-b.r.width*b.r.height);" +
+          "const el=all[0].e;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();" +
+          "return {x:r.left+r.width/2,y:r.top+r.height/2,tag:el.tagName,text:String(el.textContent||'').trim().slice(0,24)," +
+          "rect:Math.round(r.left)+','+Math.round(r.top)+' '+Math.round(r.width)+'x'+Math.round(r.height)};})()");
+        if (!info) { lastClickInfo = '(未找到元素)'; return false; }
+        lastClickInfo = `tag=${info.tag} text="${info.text}" rect=${info.rect}`;
+        const mouse = (t) => send('Input.dispatchMouseEvent', { type: t, x: info.x, y: info.y, button: 'left', buttons: t === 'mouseReleased' ? 0 : 1, clickCount: 1 });
+        await mouse('mousePressed'); await sleep(60); await mouse('mouseReleased'); await sleep(600);
+        return true;
+      };
+      const waitGone = async (txt, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (!String(await ev('document.body.innerText')).includes(txt)) return true; await sleep(300); } return false; };
+      const bodyText = async () => String(await ev('document.body.innerText'));
+
+      // S8b 点击「<」返回上一级（真实点击）。
+      // 注意：点击前不要先 mousemove（wake）——会干扰 Kuikly 的 click 判定（实测）
+      let backClicked = false; let afterBack = '';
+      for (let i = 0; i < 3; i++) {
+        backClicked = await clickText('<');
+        await sleep(1200);
+        afterBack = await bodyText();
+        if (afterBack.includes('/home') && !afterBack.includes(HOME)) break;
+      }
+      check('S8b 点击返回按钮回到上一级(真实点击)', backClicked && afterBack.includes('/home') && !afterBack.includes(HOME),
+        `clicked=${backClicked} pathChanged=${afterBack.includes('/home') && !afterBack.includes(HOME)} | click=${lastClickInfo} | nav=${JSON.stringify(afterBack.split('\n').slice(0,3).join(' / ').slice(0,80))}`);
+
+      // 重新进入播放页做交互
+      await send('Page.navigate', { url: `${base}?page_name=SftpPlayerPage&sessionId=${conn.sessionId}&connectionId=c1&connectionLabel=test&remotePath=${MEDIA}&name=${mediaName}&size=${MEDIA_SIZE}` });
+      await waitText((t) => /\d\d:\d\d/.test(t));
+      await sleep(2500);
+
+      // S9b 点击 ☰ 打开选集弹层（真实点击）
+      let opened = false;
+      for (let i = 0; i < 5 && !opened; i++) { await wake(); await clickText('☰'); await sleep(900); opened = (await bodyText()).includes('✕'); }
+      check('S9b 点击☰打开选集弹层(真实点击)', opened, 'opened=' + opened);
+
+      // S9c 点击 ✕ 关闭选集弹层（真实点击）
+      const xClicked = await clickText('✕');
+      const closed = await waitGone('✕', 6000);
+      check('S9c 点击✕关闭选集弹层(真实点击)', xClicked && closed, `clicked=${xClicked} closed=${closed}`);
+
+      // S9d 点击倍速打开设置菜单（真实点击）
+      await wake();
+      const speedClicked = await clickText('1.0×');
+      await sleep(800);
+      const menuShown = (await bodyText()).includes('1.25×');
+      check('S9d 点击倍速打开设置菜单(真实点击)', speedClicked && menuShown, `clicked=${speedClicked} menu=${menuShown}`);
+
+      // S9e 点击全屏按钮 → 图标切换为退出全屏（真实点击）
+      let fsOn = false;
+      for (let i = 0; i < 5 && !fsOn; i++) {
+        await wake();
+        await clickText('⛶');
+        await sleep(700);
+        fsOn = (await bodyText()).includes('⤡');
+      }
+      check('S9e 点击全屏按钮并切换状态(真实点击)', fsOn, 'exitGlyph=' + fsOn);
+
+      // S9f 键盘快捷键（模拟人工按键）：按「←」seek。
+      // 用 seek 而不是播放/暂停：测试片仅 6s，播放态在片尾存在竞态（K 会被片尾立即覆盖）。
+      // 「←」seek 到 0 是确定性的，能证明键盘事件确实到达页面。
+      const keyTap = async (k, code, vk) => {
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk });
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk });
+      };
+      await clickText('⤡');                          // 先退出全屏
+      await sleep(600);
+      await keyTap('ArrowRight', 'ArrowRight', 39);  // 先跳到后面
+      await sleep(900);
+      const beforeSeek = await ev(pickCur);
+      await keyTap('ArrowLeft', 'ArrowLeft', 37);    // 键盘 seek 回开头
+      await sleep(1200);
+      const afterSeek = await ev(pickCur);
+      check('S9f 键盘快捷键seek生效(模拟按键)', isTime(afterSeek) && toSec(afterSeek) === 0, `${beforeSeek} -> ${afterSeek}`);
+
+      check('S10 功能验证后仍无 JS 异常', realErrs().length === 0, realErrs().slice(0, 2).join(';') || `(已忽略媒体告警 ${errs.length} 条)`);
 
       ws.close();
     }

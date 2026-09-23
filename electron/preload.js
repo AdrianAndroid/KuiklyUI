@@ -21,3 +21,15 @@ contextBridge.exposeInMainWorld('kuiklyHost', {
   // 只读信息：{ version, platform, gatewayUrl }
   getInfo: () => ipcRenderer.invoke('host:getInfo'),
 });
+
+// 本地文件系统（双栏「本地栏」用；仅限用户主目录之下）
+contextBridge.exposeInMainWorld('localFs', {
+  home: () => ipcRenderer.invoke('localfs:home'),
+  list: (dir) => ipcRenderer.invoke('localfs:list', dir),
+  stat: (p) => ipcRenderer.invoke('localfs:stat', p),
+  mkdir: (p) => ipcRenderer.invoke('localfs:mkdir', p),
+  rename: (from, to) => ipcRenderer.invoke('localfs:rename', from, to),
+  remove: (p, recursive) => ipcRenderer.invoke('localfs:remove', p, recursive),
+  readFile: (p) => ipcRenderer.invoke('localfs:readFile', p),
+  writeFile: (p, base64) => ipcRenderer.invoke('localfs:writeFile', p, base64),
+});

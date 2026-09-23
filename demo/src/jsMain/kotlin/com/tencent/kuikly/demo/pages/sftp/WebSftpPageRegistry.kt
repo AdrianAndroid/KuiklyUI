@@ -53,6 +53,8 @@ internal fun registerSftpWebPages() {
         registerWebPage("SftpViewerDispatcherPage") { SftpViewerDispatcherPage() }
         registerWebPage("SftpIntegrationTestPage") { SftpIntegrationTestPage() }
         registerWebPage("SftpBatchProgressDialog") { SftpBatchProgressDialog() }
+        // 双栏文件管理器（桌面版：Electron / H5）
+        registerWebPage(FilesDualPanePage.PAGE_NAME) { FilesDualPanePage() }
         // demo 入口页（?page_name 缺省时的默认路由目标）
         registerWebPage("router") { RouterPage() }
         diag("registered; after=${BridgeManager.isPageExist("SftpHomePage")}")

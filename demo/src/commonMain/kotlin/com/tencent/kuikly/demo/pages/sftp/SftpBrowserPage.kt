@@ -27,6 +27,7 @@ import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.module.sftp.SftpConnectParam
+import com.tencent.kuikly.core.module.sftp.SftpConnection
 import com.tencent.kuikly.core.module.sftp.SftpEntry
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.views.Scroller
@@ -169,6 +170,14 @@ internal class SftpBrowserPage : SftpBasePager() {
                         marginLeft(8f)
                     }
                 }
+                // 右上角：切到双栏（本地 ↔ 当前远端目录）—— 仅 Web/桌面
+                vif({ ctx.isWebLike }) {
+                    View {
+                        attr { size(36f, 36f); allCenter(); accessibility("dual_pane_entry") }
+                        event { click { ctx.openDualPane() } }
+                        Text { attr { text("⇄"); fontSize(20f); color(SftpColorTokens.primary) } }
+                    }
+                }
             }
 
             // 内容区三态
@@ -191,6 +200,40 @@ internal class SftpBrowserPage : SftpBasePager() {
             }
                     }
 }
+    }
+
+    /** 切到双栏：只传 connectionId（凭据不出现在 URL/history），远端栏定位当前目录。 */
+    internal fun openDualPane() {
+        val router = acquireModule<RouterModule>(RouterModule.MODULE_NAME)
+        if (connectionId.isNotEmpty()) {
+            SftpPageNames.openDualPane(router, connectionId, connectionLabel, remoteHome = "/", remotePath = currentPath)
+            return
+        }
+        // 内联凭据入口（深链/测试）：先把连接落到连接库（加密存储），再用 id 打开，避免密钥进 URL
+        val c = connectParam?.takeIf { it.host.isNotEmpty() } ?: run {
+            SftpPageNames.openDualPane(router, "", "", remoteHome = "/", remotePath = currentPath)
+            return
+        }
+        val conn = SftpConnection(
+            id = SftpConnection.buildId(c.host, c.port, c.user),
+            label = "${c.user}@${c.host}",
+            host = c.host,
+            port = c.port,
+            user = c.user,
+            authMethod = c.authMethod,
+            password = c.password,
+            privateKey = c.privateKey,
+            passphrase = c.passphrase,
+        )
+        sftpConnectionModule().get(conn.id) { existing, _ ->
+            if (existing != null) {
+                SftpPageNames.openDualPane(router, conn.id, existing.label, remoteHome = "/", remotePath = currentPath)
+            } else {
+                sftpConnectionModule().add(conn) { id, _ ->
+                    SftpPageNames.openDualPane(router, id ?: conn.id, conn.label, remoteHome = "/", remotePath = currentPath)
+                }
+            }
+        }
     }
 
     private fun onEntryClick(entry: SftpEntry) {

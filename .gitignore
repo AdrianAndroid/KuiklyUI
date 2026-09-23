@@ -5,6 +5,9 @@
 .DS_Store
 /build
 */build
+# 嵌套模块的构建产物（如 core/file-manager/build）；两层规则不会误伤
+# miniApp/example/.../dist/build 这类已跟踪的示例产物（层数更深）
+*/*/build
 /captures
 .externalNativeBuild
 .cxx
@@ -71,3 +74,6 @@ sftp-gateway/data/
 
 ## Electron 桌面壳（*.js 默认被忽略，此处放行宿主脚本）
 !electron/**/*.js
+
+# Electron 自动化测试截图产物（不入库）
+electron/test/artifacts/

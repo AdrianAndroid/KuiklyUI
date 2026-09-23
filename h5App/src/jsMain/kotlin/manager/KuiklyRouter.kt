@@ -57,6 +57,22 @@ object KuiklyRouter {
         var isDestroyed: Boolean = false
     )
 
+    /** 非 SPA 模式下由 main() 注册的 delegator（SPA 模式下由 pageCache 提供）。 */
+    var fallbackDelegator: KuiklyWebRenderViewDelegator? = null
+
+    /**
+     * 向「当前活动页面」派发宿主事件（mousemove / keydown / fullscreenchange 等）。
+     * SPA 模式取 pageCache[currentKey]；非 SPA 取 fallbackDelegator。
+     */
+    fun sendEventToCurrentPage(event: String, data: Map<String, Any>) {
+        val page = pageCache[currentKey]
+        if (page != null && !page.isDestroyed) {
+            page.delegator.sendEvent(event, data)
+        } else {
+            fallbackDelegator?.sendEvent(event, data)
+        }
+    }
+
     /**
      * Try to hijack the entry point.
      * Returns true if Router took over (SPA mode active), false otherwise.

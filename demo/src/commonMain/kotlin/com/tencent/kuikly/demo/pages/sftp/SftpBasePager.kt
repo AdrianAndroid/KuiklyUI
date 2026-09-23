@@ -50,6 +50,16 @@ internal abstract class SftpBasePager : BasePager() {
     }
 
     /** SFTP 主 Module（绑定本 Page 生命周期） */
+    /**
+     * 是否 Web/桌面（有宿主 `window.localFs` 提供本地栏）。
+     * 双栏入口只在这些端提供；纯浏览器 H5 虽同属「非原生」，但页面会降级提示。
+     */
+    protected val isWebLike: Boolean
+        get() = !com.tencent.kuikly.core.utils.PlatformUtils.isAndroid() &&
+            !com.tencent.kuikly.core.utils.PlatformUtils.isIOS() &&
+            !com.tencent.kuikly.core.utils.PlatformUtils.isMacOS() &&
+            !com.tencent.kuikly.core.utils.PlatformUtils.isOhOs()
+
     protected fun sftpModule(): SftpModule = acquireModule(SftpModule.MODULE_NAME)
 
     /** 收藏 Module（全局单例） */

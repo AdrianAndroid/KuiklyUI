@@ -49,6 +49,7 @@ function startGateway() {
         ...process.env,
         SFTP_GATEWAY_PORT: '0',
         SFTP_GATEWAY_DATA_DIR: dataDir,
+        SFTP_GATEWAY_LOCAL_ROOT: LOCAL_ROOT,
       },
       stdio: 'inherit',
     });
@@ -89,6 +90,7 @@ async function createWindow() {
     if (!url.startsWith('file://')) { e.preventDefault(); shell.openExternal(url); }
   });
 
+
   await mainWindow.loadFile(path.join(RES_DIR, 'index.html'), {
     query: { page_name: 'SftpHomePage' },
   });
@@ -112,6 +114,71 @@ ipcMain.handle('host:getInfo', async () => ({
   platform: process.platform,
   gatewayUrl,
 }));
+
+/* ---- 本地文件系统（双栏「本地栏」）：只允许访问 root（用户主目录）之下 ---- */
+const LOCAL_ROOT = app.getPath('home');
+let localRootReal = null;
+/** 校验并返回真实路径：realpath 解析（拒绝主目录内指向外部的符号链接）。 */
+async function assertWithinRoot(p) {
+  if (localRootReal === null) {
+    try { localRootReal = await require('fs').promises.realpath(LOCAL_ROOT); } catch (e) { localRootReal = LOCAL_ROOT; }
+  }
+  const r = path.resolve(p || LOCAL_ROOT);
+  let real = null;
+  try {
+    real = await require('fs').promises.realpath(r);
+  } catch (e) {
+    // 目标可能尚不存在（新建目录/文件/重命名目标）：解析父目录真实路径后拼接
+    const parent = await require('fs').promises.realpath(path.dirname(r)).catch(() => null);
+    if (parent) real = path.join(parent, path.basename(r));
+  }
+  if (real === null) throw new Error('path outside root: ' + r);
+  if (real !== localRootReal && !real.startsWith(localRootReal + path.sep)) {
+    throw new Error('path outside root: ' + real);
+  }
+  return { target: r, real };
+}
+function entryOf(name, abs) {
+  const st = require('fs').lstatSync(abs);
+  const type = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : st.isSymbolicLink() ? 'symlink' : 'other';
+  return { name, path: abs, type, size: st.size, mtime: st.mtimeMs, mode: st.mode };
+}
+
+ipcMain.handle('localfs:home', async () => LOCAL_ROOT);
+ipcMain.handle('localfs:list', async (_e, dir) => {
+  const { target: d } = await assertWithinRoot(dir || LOCAL_ROOT);
+  const ents = await require('fs').promises.readdir(d, { withFileTypes: true });
+  const entries = [];
+  for (const e of ents) {
+    try { entries.push(entryOf(e.name, path.join(d, e.name))); } catch (err) { /* skip unreadable */ }
+  }
+  return { cwd: d, entries };
+});
+ipcMain.handle('localfs:stat', async (_e, p) => {
+  try { const { real } = await assertWithinRoot(p); return entryOf(path.basename(real), real); } catch (err) { return null; }
+});
+ipcMain.handle('localfs:mkdir', async (_e, p) => { const { target } = await assertWithinRoot(p); await require('fs').promises.mkdir(target, { recursive: true }); return true; });
+ipcMain.handle('localfs:rename', async (_e, from, to) => {
+  const { target: f } = await assertWithinRoot(from);
+  const { target: t } = await assertWithinRoot(to);
+  await require('fs').promises.rename(f, t); return true;
+});
+ipcMain.handle('localfs:remove', async (_e, p, recursive) => { const { target } = await assertWithinRoot(p); await require('fs').promises.rm(target, { recursive: !!recursive, force: true }); return true; });
+// 读写文件（下载落盘 / 远程编辑用；base64 传二进制）
+ipcMain.handle('localfs:readFile', async (_e, p) => {
+  const { real } = await assertWithinRoot(p);
+  const buf = await require('fs').promises.readFile(real);
+  return buf.toString('base64');
+});
+ipcMain.handle('localfs:writeFile', async (_e, p, base64) => {
+  // 写入不跟随符号链接：用 resolve 后的路径，且要求父目录已通过 realpath 校验
+  const { target, real } = await assertWithinRoot(p);
+  const st = await require('fs').promises.lstat(target).catch(() => null);
+  if (st && st.isSymbolicLink()) throw new Error('refuse to write through symlink: ' + target);
+  await require('fs').promises.mkdir(path.dirname(real), { recursive: true });
+  await require('fs').promises.writeFile(target, Buffer.from(base64 || '', 'base64'));
+  return true;
+});
 
 /* ---- 生命周期 ---- */
 app.whenReady().then(async () => {

@@ -16,6 +16,10 @@ fun main() {
     // Set to false to allow text selection and image dragging.
     // KuiklyProcessor.preventDefaultDragAndSelect = false
 
+    // ⚠️ 必须在 handleEntry() 之前安装：SPA 模式下 handleEntry() 会 return true 提前退出，
+    //    否则事件桥（含下列监听与 __kuiklySendEvent__）永远不会生效。
+    installHostEventBridges()
+
     // Takes over control if "use_spa=1" is present in URL or ENABLE_BY_DEFAULT is true
     if (KuiklyRouter.handleEntry()) {
         return
@@ -42,6 +46,8 @@ fun main() {
     // Create and initialize the page delegator using shared logic
     val delegator = KuiklyRouter.createDelegator(window.location.href)
 
+    KuiklyRouter.fallbackDelegator = delegator
+
     // 窗口尺寸变化时更新根视图尺寸。只在尺寸真的变化时下发，避免与拖动手势互相干扰。
     // （不用 Kuikly 的 autoUpdateRootViewSizeOnResize：它基于 ResizeObserver，
     //   会在手势/内容变化时也可能触发重排。）
@@ -54,38 +60,6 @@ fun main() {
             lastW = w
             lastH = h
             delegator.updateRootViewSize(w, h)
-        }
-    })
-
-    // 把宿主「活动」转成页面事件：桌面 Web 用于全屏播放时「动一下鼠标就显示控制条」。
-    // 移动端没有鼠标移动，由页面靠触摸/点击处理，逻辑一致。
-    var lastActivity = 0.0
-    val onActivity = {
-        val now = js("Date.now()") as Double
-        if (now - lastActivity > 250) {   // 节流，避免 mousemove 高频发包
-            lastActivity = now
-            delegator.sendEvent("sftp_controls_activity", emptyMap<String, Any>())
-        }
-    }
-    document.addEventListener("mousemove", { onActivity() })
-    document.addEventListener("touchstart", { onActivity() })
-
-    // 用户按 ESC 退出全屏时，把状态回传页面，避免页面 isFullscreen 与实际不一致。
-    document.addEventListener("fullscreenchange", {
-        val fs = js("document.fullscreenElement != null") as Boolean
-        delegator.sendEvent("sftp_fullscreen_changed", mapOf<String, Any>("fullscreen" to fs))
-    })
-
-    // 键盘快捷键（桌面 Web）：空格/K 播放暂停、←/→ 快退快进、M 静音、F 全屏。
-    // 输入框中不拦截。对齐 Plyr 的常用键位。
-    document.addEventListener("keydown", { e ->
-        val ev = e.asDynamic()
-        val tag = js("(document.activeElement && document.activeElement.tagName) || ''") as String
-        if (tag != "INPUT" && tag != "TEXTAREA") {
-            val key = (ev.key as? String) ?: ""
-            if (key.isNotEmpty()) {
-                delegator.sendEvent("sftp_player_key", mapOf<String, Any>("key" to key))
-            }
         }
     })
 
@@ -135,3 +109,50 @@ private fun registerKuiklyEventListener() {
     })
     console.log("[Web Host] Kuikly event listener registered")
 }
+
+/**
+ * 安装「宿主 → 页面」事件桥。Web 与 Electron 桌面壳可共用同一套页面事件。
+ * 通过 window.__kuiklySendEvent__(event, json) 对外暴露发送口。
+ */
+private fun installHostEventBridges() {
+    window.asDynamic().__kuiklySendEvent__ = { ev: String, dataJson: String ->
+        val data: Map<String, Any> = if (dataJson.isNullOrBlank()) {
+            emptyMap()
+        } else {
+            com.tencent.kuikly.core.render.web.nvi.serialization.json.JSONObject(dataJson).toMap()
+        }
+        KuiklyRouter.sendEventToCurrentPage(ev, data)
+        Unit
+    }
+
+    // 宿主活动 → 唤醒控制条（桌面：鼠标移动；移动端：触摸）
+    var lastActivity = 0.0
+    val onActivity = {
+        val now = js("Date.now()") as Double
+        if (now - lastActivity > 250) {
+            lastActivity = now
+            KuiklyRouter.sendEventToCurrentPage("sftp_controls_activity", emptyMap())
+        }
+    }
+    document.addEventListener("mousemove", { onActivity() })
+    document.addEventListener("touchstart", { onActivity() })
+
+    // ESC 退出全屏时同步状态
+    document.addEventListener("fullscreenchange", {
+        val fs = js("document.fullscreenElement != null") as Boolean
+        KuiklyRouter.sendEventToCurrentPage("sftp_fullscreen_changed", mapOf("fullscreen" to fs))
+    })
+
+    // 键盘快捷键：空格/K、←/→、M、F（输入框内不拦截）
+    document.addEventListener("keydown", { e ->
+        val ev = e.asDynamic()
+        val tag = js("(document.activeElement && document.activeElement.tagName) || ''") as String
+        if (tag != "INPUT" && tag != "TEXTAREA") {
+            val key = (ev.key as? String) ?: ""
+            if (key.isNotEmpty()) {
+                KuiklyRouter.sendEventToCurrentPage("sftp_player_key", mapOf("key" to key))
+            }
+        }
+    })
+}
+

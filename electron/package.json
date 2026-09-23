@@ -10,7 +10,8 @@
     "start": "npm run sync && env -u ELECTRON_RUN_AS_NODE electron .",
     "start:noenv": "npm run sync && electron .",
     "dist": "npm run sync && env -u ELECTRON_RUN_AS_NODE electron-builder",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs",
+    "test:dual": "node test/dual-pane.mjs"
   },
   "devDependencies": {
     "electron": "33.4.11",
