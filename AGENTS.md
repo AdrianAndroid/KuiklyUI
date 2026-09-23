@@ -185,6 +185,8 @@
 | SFTP 实现详解（学习/实现向） | `docs/SFTP-实现详解.md` | 从架构到各端实现的完整走读：分层、Module 桥接、共享层、本地代理、三端原生实现、UI、测试、踩坑。**想理解「代码怎么写的、为什么这么写」优先看这篇** |
 | **跨端应用开发规划（含 Electron 桌面壳）** | `devDocs/kuikly-app-development-plan.md` | 完整交付规划：目标/不变量/差距/里程碑 M0-M8/Electron 边界契约与专项设计/测试与安全/发布/风险/排期/DoD。**做新功能或桌面打包前先看这篇** |
 | **自动化测试用例与执行规程** | `devDocs/sftp-test-plan.md` | 分层 L0-L5 用例（ID 稳定）、固定执行步骤、通过标准、失败排查、结果模板。**每次改动后照此跑**（一键：`bash scripts/run-all-tests.sh`）|
+| **双栏文件管理器：测试用例与执行规程** | `devDocs/kuikly-dual-pane-test-plan.md` | 双栏（本地↔远端）验收用例 D0–D19、真实点击技法、踩坑清单；运行 `cd electron && npm run test:dual` |
+| **文件双向传输模块：抽离与开发计划** | `devDocs/kuikly-file-transfer-module.md` | `core/file-manager` 纯状态机 + 双栏落地现状（§6）+ 未落地项（§6.5） |
 | **SFTP 开发进度总览** | `devDocs/sftp-development-progress.md` | **当前进度快照**：六端现状矩阵、已交付能力清单、本轮 commit 详解、运行时验证步骤、已知限制与下一步。**想知道「现在做到哪了」优先看这篇** |
 | SFTP 全平台开发计划 | `devDocs/sftp-impl-plan.md` | Phase 0~6 落地清单（commonMain 共享层 → 各端原生 → 注册 + 入口 → 单测），按 Phase 顺序开发，每 Phase 完成即可独立验证 |
 | SFTP 播放页 mpv OSC 改造方案 | `devDocs/sftp-player-modernz-plan.md` | 精读 mpv `osc.lua` 362KB 源码后的改造方案：两行布局、10+ OSC 色彩、3 键 + 滚轮交互、可见性系统、60fps 节流、跨端降级策略 |
@@ -698,6 +700,25 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
 - **Web 视频组件**：`core-render-web/base/src/jsMain/kotlin/.../expand/components/KRVideoView.kt`
 - SFTP 实现详解（学习向）：`docs/SFTP-实现详解.md`
+
+### 13.1.4 双栏文件管理器（Web / 桌面，2026-09 新增）
+
+`core/file-manager/`（纯状态机，jvm+js，76/76 单测）+ `demo/src/jsMain/.../FilesDualPanePage.kt`（双栏 UI）
++ Electron `localfs:*` IPC（`window.localFs`，根 = 用户主目录，越界拒绝）+ 浏览器模块（网关代持远端）。
+
+- **入口（先有远端，再有双栏）**：首页默认「本地文件管理」（只开本地栏，远端栏待选主机）；首页连接行「⇄」；
+  浏览页右上角「⇄」（带当前远端目录）；页内远端栏标题「⇄」= 主机会话切换器（多远端靠它切换）。
+- **语义**：**活动栏**（工具条作用于它，标题 `●`/`○`）；**行点击=选中**（目录也可选）；**目录行 `▶`=进入**；
+  **目录优先**排序；弹层（新建/重命名/删除确认）。
+- **传输**：`SftpModule.upload`（网关支持无 `content` 时读 `localPath`）/ `SftpModule.download`
+  （`localName` 传绝对路径 → 网关直写该路径）；仅网关**绑回环**时可用。
+- **验证**：`cd electron && npm run sync && npm run test:dual` → **D0–D19 共 22/22 通过**，真实 CDP 鼠标点击 +
+  截图（`electron/test/artifacts/`）；夹具自建自清，不留残余。用例与技法见 `devDocs/kuikly-dual-pane-test-plan.md` §7。
+- **勿回退的 5 个坑**（详见测试规程 §7.2）：依赖必须用 provider 在 `attr{}`/`vif` 内读；分隔线不能吃 `flex`；
+  栏内 `Scroller` 必须限宽；工具条必须绑活动栏（默认活动栏=本地）；目录须可选中（`▶` 才进入）。
+- **本地路径三道闸门 + 凭据不进 URL**（详见测试规程 §8）：Electron `localfs:*` 与网关 `localPath`/绝对路径下载
+  都必须 **realpath 后**落在根内（越界 → 2001）；**宿主事件桥只允许一份**（页内 `h5App/Main.kt` 已安装，
+  Electron **不要**再注入 `HOST_BRIDGE_JS`，否则按键双发、空格/K/M/F 这类 toggle 会互相抵消）。
 
 ---
 

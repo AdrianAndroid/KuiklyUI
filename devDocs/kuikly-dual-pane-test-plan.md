@@ -153,27 +153,51 @@ interface TransferGateway {                 // 调 packages/file-transfer 的薄
     val conflict: Flow<TransferConflictEvent>
 }
 
-class FileManagerModule(
-    val cfg: FileManagerConfig,
-    val localPaneId: String,                 // 本地账户 / 路径
-    val remotePaneId: String,                // 远端 serverId
-    val sftp: SftpBackend,
-    val local: LocalFsBackend,
-    val transfer: TransferGateway,
+class FileManagerModule(          // 纯状态机：不做 IO
+    val config: FileManagerConfig = FileManagerConfig(),
+    val localRoot: String,
+    val remotePane: PaneSpec,      // serverId + 初始 cwd
+    val pathPolicy: PathPolicy = PathPolicy(localRoot),
     val conflictResolver: ConflictResolver = DefaultConflictResolver,
-    val pathPolicy: PathPolicy = PathPolicy.Default,
 ) {
-    val state: StateFlow<ManagerState>        // 含 LocalState + RemoteState + TransferQueue
-    fun listLocal(); fun listRemote(); fun enter(pane, name); fun up(pane); fun refresh()
-    fun setSelection(pane, names: Set<String>); fun toggleSelection(pane, name)
-    fun requestTransfer(items: List<FileItem>, direction: TransferDirection): String   // 调 transfer.start
-    fun resolve(taskId, action, newName?); fun cancel(taskId); fun resume(taskId)
-    fun openEditor(pane, name): EditorSession?  // 返回 null 表示 >2MB 或不支持
-    fun saveEditor(session, content: ByteArray)
-    fun mkdir(pane, name); fun rename(pane, from, to); fun remove(pane, names, recursive)
-    fun rememberAction(direction, action, forMs: Long = 60_000)  // 记忆冲突选择
+    val state: StateFlow<FileManagerState>
+
+    // 宿主喂数据（宿主异步 list / 传输后回填）
+    fun setLoading(pane, loading); fun setEntries(pane, cwd, entries); fun setError(pane, msg)
+
+    // 导航（纯）
+    fun paneCwd(pane); fun childPath(pane, name); fun upPath(pane): String?
+    fun navigateTo(pane, cwd); fun enter(pane, name): String?      // ".." 已到 root 返回 null
+
+    // 选择 / 视图（纯）
+    fun setSelection(pane, names); fun toggleSelection(pane, name)
+    fun setFilter(pane, text); fun setSort(pane, key, order)
+
+    // 操作计划（宿主执行）
+    fun planMkdir(pane, name): String
+    fun planRename(pane, from, to): Pair<String, String>
+    fun planRemove(pane, names, recursive): List<String>           // 根目录保护
+    fun planTransfer(items, direction): List<TransferRequest>      // 含记忆 overwrite
+    fun planEditorSave(session, localTempPath): TransferRequest
+    fun validateEditor(path, content): EditorSession?              // 禁用/超限/二进制 → null
+
+    // 传输状态（宿主把引擎事件喂进来）
+    fun onTransferStarted(taskId, req, bytesTotal)
+    fun onTransferProgress(taskId, bytesSent, bytesTotal, currentFile)
+    fun onTransferStatus(taskId, status, error?)
+    fun clearTransfers()
+
+    fun rememberAction(direction, action, forMs = 60_000)          // 记忆冲突选择
+    fun shutdown()                                                  // 仅清核心状态；引擎/会话由宿主管
 }
 ```
+
+> **核心定位（2026-09 定稿）：纯状态机，不做 IO。**
+> 本地列表（Electron `localfs:*` / 平台 API）、远端列表（`SftpModule`）、传输（传输引擎）
+> **全部由宿主异步完成**，再把结果喂给核心（`setEntries` / `apply*` / `onTransfer*`）。
+> 这样核心与「同步/异步」「哪个平台」彻底解耦；各端只换宿主实现。
+> 后端接口（`LocalFsBackend` / `SftpBackend` / `TransferGateway`）属**宿主侧契约**，不在核心内。
+
 
 ### 2.4 跨平台设计（**开发以 Electron 为准，核心跨端复用**）
 
@@ -201,13 +225,16 @@ class FileManagerModule(
 ```
 
 #### 2.4.2 各端适配（双栏的「本地 FS」与「远端 SFTP」与「传输引擎」三件事）
-| 端 | 本地 FS 怎么来 | 远端 SFTP 怎么来 | 传输引擎 |
+| 端 | 本地 FS 入口（"home"）| 远端 SFTP 入口 | 传输引擎 |
 |---|---|---|---|
-| Android | `LocalFsModule`（`Environment.getExternalStorageDirectory` 等）| `SftpModule`（已存在）| `TransferGateway(TransferEngine, SftpBackend)` 调 `packages/file-transfer` 的语义（该包在 Electron 端落地；原生端可移植为 Kotlin/JS 实现，**核心契约一致**即可）|
-| iOS / macOS | `LocalFsModule`（`FileManager` 等）| `SftpModule` | 同上（macOS 与 Electron 共用 `packages/file-transfer` 引擎）|
-| HarmonyOS | `LocalFsModule`（ohos.file.fs）| `SftpModule`（已接 libssh2）| 同上 |
-| Web(H5) | `localfs:*` IPC → electron 端 `LocalFsModule` | `__SFTP_GATEWAY_URL__` → `sftp-gateway` | `transfer:*` IPC → `packages/file-transfer`（Electron 主进程）|
-| **Electron（基线）** | `LocalFsModule`（`fs` 包装）| `SftpModule`（调 `sftp-gateway`）| `TransferEngine`（`packages/file-transfer`，Node/TS）|
+| Android | `context.getExternalFilesDir(null)?.absolutePath ?: context.filesDir.absolutePath`（app 私有外部存储，与 `KRSftpModule` 一致）| `SftpModule`（已接 `jsch`）| `TransferGateway(TransferEngine, SftpBackend)` 调 `packages/file-transfer` 语义 |
+| iOS | sandbox `Documents/`（`NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first`）| `SftpModule`（已接 NMSSH）| 同上 |
+| macOS | `os.homedir()`（与 Janus 一致）| `SftpModule`（已接 NMSSH）| 同上（macOS 与 Electron 共用 `packages/file-transfer` 引擎）|
+| HarmonyOS | `getContext().filesDir.path` | `SftpModule`（已接 libssh2）| 同上 |
+| Web(H5) | **不提供左栏**：H5 无真实本地 FS；双栏变"远端单栏"（等同 `SftpBrowserPage`）| `__SFTP_GATEWAY_URL__` → `sftp-gateway` | `transfer:*` IPC → `packages/file-transfer`（Electron 主进程）|
+| **Electron（基线）** | `app.getPath('home')`（推荐；比 `os.homedir()` 更尊重沙箱）| `SftpModule`（调 `sftp-gateway`）| `TransferEngine`（`packages/file-transfer`，Node/TS）|
+
+> **Web 的"本地栏"决策**：默认不提供（双栏在 H5 退化为远端单栏）。若后续要补，候选方案是 **File System Access API 目录选择器**（用户选目录 → 浏览器授权持久读写；Chrome/Edge 支持，Safari/Firefox 不支持故需回退到"拖拽"或"无左栏"）。
 
 #### 2.4.3 UI 层（KMP Compose DSL）
 - `FilesDualPanePage.kt`（`demo/.../pages/sftp/`）是渲染层薄壳
@@ -224,7 +251,7 @@ class FileManagerModule(
 | Android | commonTest | `androidTest`（Compose UI 自动化）| 真机 / 模拟器 |
 | iOS | commonTest | `iosTest`（同上）| 真机 / 模拟器 |
 | HarmonyOS | commonTest | `ohtTest`（ArkUI）| 真机 |
-| Web(H5) | commonTest | `sftp-web.test.js`（已有）| 浏览器 |
+| Web(H5) | commonTest | `sftp-web.test.js`（已有，仅单栏链路）| 浏览器 |
 
 > **基线判断**：Electron L2 PASS ⇒ 契约成立；其他端跑 L1 + 该端 L2 即可视为跨端等价。
 
@@ -457,3 +484,74 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
 3. 是否有特殊平台限制（iOS / Android 双栏 vs KuiklyUI 已有 SftpBrowserPage 范式）需额外用例？
 
 确认后 → 按 §2/§3 落地 M1（核心模块 + L1），M2（渲染层 + L2），M3（回归 + L3 签字）。
+
+
+---
+
+## 7. 实测用例（D0–D25，已 28/28 通过）
+
+> 运行：`cd electron && npm run build:web`（或先跑 Gradle 打包）→ `npm run sync` → `npm run test:dual`
+> 脚本：`electron/test/dual-pane.mjs`；截图：`electron/test/artifacts/*.png`（关键步骤自动存图）
+> 前置：`sftp-gateway` 已起（脚本会连网关做断言/清理；Electron 主进程另起自带网关供页面使用）
+> **夹具自建自清**：脚本运行开始时创建 `~/000_kuikly_dual_*.{txt,bin}` 与远端同名文件，结束时全部删除（不留残余）。
+
+| ID | 用例 | 断言方式 |
+|----|------|----------|
+| D0 | 网关连接真实服务器 | RPC `connect` 返回 sessionId |
+| D1 | Electron 可见窗口 + CDP | `/json/version` |
+| D2–D4 | 双栏渲染；本地栏列出真实主目录；远端栏列出真实远端目录 | 页面文本包含真实条目 |
+| D5 | **真实点击**本地文件 → 选中 1 项 | 状态行「本地已选 1 项」 |
+| D6–D7 | 点击「上传 →」；**字节级**校验远端内容 | 远端 `stat` + `openRead/read` 与本地文件 `equals` |
+| D8 | 256KB 随机二进制上传**字节级**一致 | 同上 |
+| D9–D10 | 点击「← 下载」；**字节级**校验本地文件 | `fs.readFileSync` 与远端内容 `equals` |
+| D11–D12 | 远端栏「+」→ 弹层 → 键入名称 → 确定 → 远端真实建目录 | 真实点击 + `Input` 键入 + RPC `stat` |
+| D13 | 点击目录行「▶」→ 进入下一级 | 远端栏路径变为 `<home>/<new>` |
+| D14a/b/c | 「↑」返回上级 → 行点击选中 → 点「删除」出确认弹层 | 路径回退 + 状态行「远端已选 1 项」+ 弹层文案 |
+| D15 | 确认删除 → 远端目录消失 | RPC `stat` 失败 |
+| D17 | 首页出现默认「本地文件管理」入口 | 页面文本 |
+| D18 | 点击后进入双栏（本地可用、远端待选主机） | 文本含「未连接远端」 |
+| D19 | 浏览页右上角「⇄」→ 双栏且远端栏定位当前目录 | 路径出现 |
+| D16 | 无 JS 未捕获异常 | `Runtime.exceptionThrown` 计数为 0 |
+| D20 | **网关拒绝越界 `localPath` 上传** | RPC 返回 `code=2001`（`LOCAL_PATH_DENIED`）|
+| D21 | **网关拒绝越界绝对路径下载，且未落盘** | `code=2001` 且 `/etc/...` 不存在 |
+| D22 | 根内 `localPath` 上传不被误拒 | 上传成功 |
+| D23 | 本地栏「+」新建目录（活动栏默认本地）| 本地真实出现目录 |
+| D24 | 本地栏删除目录 | 本地目录真实消失 |
+| D25 | **双栏 URL 不含凭据** | `location.href` 无 `password=`/`privateKey=`/`passphrase=` |
+
+### 7.1 真实点击技法（CDP，已验证可用）
+
+- **`clickText(txt)`**：取「文本包含 txt 且可见」的**最小**元素，派发 `Input.dispatchMouseEvent`（mousePressed → 60ms → mouseReleased）。
+  早期结论「CDP 点不动 Kuikly Scroller 列表项」**不成立**：列表行内的文件/目录名点击均可命中（D5/D13/D14b）。
+- **`clickIn(txt, anc)`**：在「第一个包含 `anc` 的祖先」范围内点 `txt`，用于区分左右两栏同名按钮（`+`/`↑`/`删除`）。
+  ⚠️ 祖先必须限制层级并校验**文本长度**：否则会命中整个滚动容器/页面根，把「远端栏的 +」误判成「本地栏的 +」。
+- **`clickRow(name)`**：按「`▶` 的父元素包含 name」定位行，点行左侧名称区。
+  用于避免 `clickText(name)` 误命中**状态栏文字**（例如状态行「已新建 <name>」比行内名称更短、更小 → 被优先选中）。
+- **`typeInto(text)`**：先真实点击输入框（Kuikly Web `Input` 就是真实 `<input>`，监听 `input`），
+  优先真实按键（`Input.dispatchKeyEvent` keyDown/keyUp 逐字符），兜底写 `value` 并派发 `input` 事件（等价输入法插入）。
+
+### 7.2 本轮踩到并修掉的问题（勿回退）
+
+1. **依赖收集**：`loading`/`cwd` 等**不能当普通参数**传进子渲染函数，必须用 provider 并在 `attr {}` / `vif` 条件内读取；否则数据回来了也不重渲染（页面永远「加载中」/路径为空）。参见 AGENTS §13.4 第 1 条。
+2. **分隔线用了 `flex(1f)`** → 在 Row 里吃掉 1 份宽度，界面变「三栏」。分隔线只能 `width(1f)`，父 Row 用 `alignItemsStretch()`。
+3. **栏内 `Scroller` 未限宽** → 行按整页宽渲染、右侧大小列与 `▶` 被分隔线裁掉（「列表显示不全」）。每栏必须 `width((pageViewWidth - 1)/2)`，行再减 8px 预留滚动条。
+4. **工具条未绑定活动栏** → 在远端选中却删了本地同名文件。已加活动栏（`●`）语义。
+5. **目录不可选中**（行点击即进入）→ 无法删除/重命名目录。已拆为「行点击=选中，`▶`=进入」。
+
+
+---
+
+## 8. 安全模型（本轮修复后，勿回退）
+
+双栏要读写**本机文件**，因此本地路径访问有三道闸门：
+
+1. **页面/宿主（Electron IPC）**：`window.localFs.*` 只接受 `LOCAL_ROOT = app.getPath('home')` 之下、
+   且 **realpath 解析后**仍在根内的路径（防主目录内的符号链接指向外部）；`writeFile` 额外拒绝目标本身是符号链接。
+2. **网关（`sftp-gateway`，浏览器/桌面共用）**：`upload` 的 `localPath` 与 `download` 的绝对路径目标
+   同样限制在 `SFTP_GATEWAY_LOCAL_ROOT`（默认 `os.homedir()`，Electron 显式传入 `app.getPath('home')`）之下，
+   越界抛 `LOCAL_PATH_DENIED` → 错误码 **2001**；上传改为**流式**（不再整份读入内存）。
+3. **凭据不进 URL**：路由只用 `connectionId`（SPA 会把 pageData 拼进 query → `history.pushState`）。
+   浏览页的「⇄」在只有内联凭据时，先把连接写入连接库（加密存储）再用 id 打开。
+
+> 注意：网关仍**无鉴权且 `Access-Control-Allow-Origin: *`**（仅绑回环）。上述闸门把可利用面收敛为
+> 「根内的本地文件读写」，但**给 `/rpc` 加一次性 token** 仍待做（记为后续项）。

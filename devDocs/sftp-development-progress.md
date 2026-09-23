@@ -243,3 +243,36 @@ be71901c  feat(web): 新增 Web 端 SFTP（Node 网关 + 浏览器模块）并�
 - **实现详解**：`docs/SFTP-实现详解.md`
 - **落地计划**：`devDocs/sftp-impl-plan.md`
 - **播放页改造方案**：`devDocs/sftp-player-modernz-plan.md`
+
+
+---
+
+## 本轮新增：双栏文件管理器（Web / 桌面）
+
+**已交付并自动化验证（22/22）**：
+
+- `core/file-manager/`：纯状态机共享核心（路径越界拦截、排序过滤、选中、操作与传输计划），jvm+js **76/76** 单测；
+  目录优先排序。
+- `demo/src/jsMain/.../FilesDualPanePage.kt`：双栏 UI（活动栏、行选中/`▶` 进入、新建/重命名/删除弹层、
+  主机会话切换器、未连远端提示）。
+- 入口：首页默认「本地文件管理」；首页连接行「⇄」；浏览页右上「⇄」（带当前目录）。
+- Electron 宿主：`localfs:*` IPC（含 `readFile/writeFile`），根=用户主目录，越界拒绝。
+- 网关扩展：`upload` 支持 `localPath`（无 `content` 时直读本地）；`download` 支持绝对路径直写。
+- 验证：`electron/test/dual-pane.mjs`（D0–D19，真实 CDP 鼠标点击 + 关键步骤截图 + 字节级校验 + 夹具自建自清）。
+
+**未落地**：目录递归传输、断点续传/重试（`packages/file-transfer` 引擎）、拖拽、远程编辑器、多远端同屏、
+H5（非 Electron）本地栏。
+
+
+### 审查修复轮（同轮完成）
+
+代码审查（16 项）已全部处理并通过回归：
+
+- **安全（CRITICAL）**：网关 `localPath` 上传 / 绝对路径下载加 `realpath` 根校验（越界 → 2001）、上传改流式；
+  Electron `assertWithinRoot` 改 realpath（防符号链接越界）、`writeFile` 拒写符号链接；浏览页「⇄」改为只传
+  `connectionId`（凭据不再进 URL/history，必要时先落加密连接库）。
+- **功能/WARNING**：移除与页内桥重复的 Electron 宿主事件注入（按键双发 → toggle 失效）；列表陈旧响应加请求校验；
+  删除失败不再伪报成功；活动栏默认本地、未连远端给可见提示；计划里的 `overwrite` 真正下发；无本地宿主时降级提示。
+- **清理**：`sync` 拆分（选中不再重建整栏行）、共享 `isWebLike` 与 `paramFactory` 去重、`planRemove` 去死参、
+  去掉死 `mediaTokens.set` 与无效三元/未用 import。
+- **新增回归用例**：D20–D25（越界拒绝、根内可用、本地栏增删、URL 无凭据），双栏套件 **28/28**。
