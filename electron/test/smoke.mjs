@@ -218,6 +218,70 @@ async function waitCdp() {
       const afterSeek = await ev(pickCur);
       check('S9f 键盘快捷键seek生效(模拟按键)', isTime(afterSeek) && toSec(afterSeek) === 0, `${beforeSeek} -> ${afterSeek}`);
 
+      // ── 播放器 seek 能力补全（此前 Web 端 KRVideoView 未实现 seekTo：
+      //    拖动看起来在动（tooltip 跟着走）但视频不跳；键盘 seek 也只是片尾归零的假通过）──
+      const videoState = async () => {
+        const raw = await ev("(()=>{const v=document.querySelector('video');return v?JSON.stringify({t:+v.currentTime.toFixed(2),d:+(v.duration||0).toFixed(2),rs:v.readyState,err:v.error?v.error.code:0,paused:v.paused}):'none';})()");
+        try { return JSON.parse(raw); } catch (e) { return null; }
+      };
+      const wakeBar = async () => {
+        const w = await ev('innerWidth'), h = await ev('innerHeight');
+        return ev("(()=>{const w=innerWidth,h=innerHeight;const c=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>o.r.width>w*0.4&&o.r.height>1&&o.r.height<26&&o.r.top>h*0.55&&o.r.top<h-25);if(!c.length)return null;c.sort((a,b)=>a.r.height-b.r.height);const r=c[0].r;return JSON.stringify({x1:r.left+6,x2:r.right-6,y:Math.round(r.top+r.height/2)});})()").then((j) => { try { return JSON.parse(j); } catch (e) { return null; } });
+      };
+      const mouseAt = (type, x, y, buttons) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
+
+      // S9g 拖动进度条 seek：真实「按下 → 连续移动 → 松手」，断言视频真的跳转
+      for (let i = 0; i < 4; i++) { const st = await videoState(); if (!st || st.paused) break; await wake(); await clickText('❚❚'); await sleep(700); }
+      await wake(); await sleep(300);
+      const stBefore = await videoState();
+      const bar = await wakeBar();
+      let dragTime = -1;
+      if (bar && stBefore && stBefore.d > 0) {
+        await mouseAt('mousePressed', bar.x1 + 8, bar.y, 1); await sleep(250);
+        const targetX = bar.x1 + (bar.x2 - bar.x1) * 0.8;
+        for (let i = 1; i <= 6; i++) { await mouseAt('mouseMoved', bar.x1 + 8 + (targetX - bar.x1 - 8) * i / 6, bar.y, 1); await sleep(90); }
+        await mouseAt('mouseReleased', targetX, bar.y, 0);
+        await sleep(1500);
+        const stAfter = await videoState();
+        dragTime = stAfter ? stAfter.t : -1;
+      }
+      const target = stBefore && stBefore.d > 0 ? stBefore.d * 0.8 : -1;
+      check('S9g 拖动进度条 seek 生效(真实按下-移动-松手)', !!bar && dragTime >= 0 && target > 0 && Math.abs(dragTime - target) < Math.max(1.5, target * 0.3),
+        `bar=${!!bar} ${stBefore && stBefore.t}s -> ${dragTime}s（目标≈${target.toFixed(1)}s，时长=${stBefore && stBefore.d}s）`);
+
+      // S9h 切换选集后仍能正常播放：真实点 ☰ → 点列表里的另一个视频 → 断言元数据与外层一致且时间在推进
+      await wake();
+      await clickText('☰');
+      await sleep(1000);
+      const other = await ev("(()=>{const cur=" + JSON.stringify(mediaName) + ";const all=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return /\\.mp4$/.test(t)&&t!==cur&&o.r.width>1&&o.r.height>1;});if(!all.length)return null;all.sort((a,b)=>a.r.width*a.r.height-b.r.width*b.r.height);const el=all[0].e;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return JSON.stringify({name:el.textContent.trim(),x:r.left+r.width/2,y:r.top+r.height/2});})()");
+      let swap = null, swapOk = false, swapPlayed = false;
+      try { swap = other ? JSON.parse(other) : null; } catch (e) { swap = null; }
+      if (swap) {
+        await mouseAt('mousePressed', swap.x, swap.y, 1); await sleep(80); await mouseAt('mouseReleased', swap.x, swap.y, 0);
+        const s2 = Date.now();
+        while (Date.now() - s2 < 20000) { const st = await videoState(); if (st && st.d > 0 && (await bodyText()).includes(swap.name)) break; await sleep(700); }
+        swapOk = (await bodyText()).includes(swap.name);
+        // 确保处于播放态：仅在 paused 时按空格（' ' = togglePlay，正在播时按会暂停）
+        for (let i = 0; i < 3; i++) { const st = await videoState(); if (!st || !st.paused) break; await wake(); await keyTap(' ', 'Space', 32); await sleep(900); }
+        const a = await videoState();
+        await sleep(4000);
+        const b = await videoState();
+        swapPlayed = !!(a && b && a.d > 0 && b.d > 0 && (b.t > a.t || b.t >= b.d - 0.3));
+      }
+      check('S9h 切换选集后可正常播放(真实点击)', !!swap && swapOk && swapPlayed,
+        swap ? `切到 ${swap.name} 标题命中=${swapOk} 播放推进=${swapPlayed}` : '未找到第二个视频（测试目录需≥2个 .mp4）');
+
+      // S9i 打开选集抽屉时视频区不得塌陷（video 高度 > 0）
+      //     曾因浮层未绝对定位，作为列布局子节点吃掉视频区 flex 高度 → video 高度=0 → 上半屏纯黑
+      await wake();
+      await clickText('☰');
+      await sleep(1200);
+      const drawerShown = (await bodyText()).includes('选集');
+      const videoH = await ev("(()=>{const v=document.querySelector('video');return v?Math.round(v.getBoundingClientRect().height):-1;})()");
+      check('S9i 选集抽屉打开后视频区不塌陷(不黑屏)', drawerShown && Number(videoH) > 100, `drawer=${drawerShown} videoH=${videoH}`);
+      await clickText('✕');
+      await sleep(600);
+
       check('S10 功能验证后仍无 JS 异常', realErrs().length === 0, realErrs().slice(0, 2).join(';') || `(已忽略媒体告警 ${errs.length} 条)`);
 
       ws.close();
