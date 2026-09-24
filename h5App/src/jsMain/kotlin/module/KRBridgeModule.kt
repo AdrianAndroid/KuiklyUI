@@ -43,6 +43,12 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 Unit
             }
 
+            // 终端：Web/桌面由宿主 xterm + 本地网关提供
+            "supportsTerminal" -> {
+                val ok = js("(typeof window !== 'undefined' && typeof window.__krTerm !== 'undefined')") as Boolean
+                if (ok) "{\"supported\":true}" else "{\"supported\":true}"   // 网关可用即可（网格渲染不依赖 xterm）
+            }
+
             "openPlayerWindow" -> {
                 val q = js("JSON").parse(params ?: "{}")
                 js("window.kuiklyHost.openPlayerWindow(q)")

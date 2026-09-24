@@ -105,6 +105,8 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             // 独立窗口播放仅桌面壳（Electron）支持；其它端返回 supported=false，业务侧回退页内路由
             "supportsPlayerWindow" -> "{\"supported\":false}"
             "openPlayerWindow" -> Unit
+            // 终端：待接入 libssh2 pty（当前返回 false，页面隐藏入口并提示）
+            "supportsTerminal" -> "{\"supported\":false}"
 
             else -> callback?.invoke(mapOf(
                 "code" to -1,

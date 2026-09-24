@@ -25,6 +25,8 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
  */
 internal object SftpPageNames {
     const val FILES_DUAL_PANE = "FilesDualPanePage"
+    /** 终端页（本地/远程 shell，独立窗口） */
+    const val TERMINAL = "SftpTerminalPage"
 
     /**
      * 双栏路由参数**唯一构造入口**：三处入口（首页默认/首页连接行/浏览页右上角）都用它，

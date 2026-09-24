@@ -46,6 +46,9 @@ internal abstract class SftpBasePager : BasePager() {
         map[SftpPlaybackHistoryModule.MODULE_NAME] = SftpPlaybackHistoryModule()
         map[SftpConnectionModule.MODULE_NAME] = SftpConnectionModule()
         map[SftpMediaProxyModule.MODULE_NAME] = SftpMediaProxyModule()
+        // 终端（shell 通道；web 转发到本地网关，native 待接入 libssh2 pty）
+        map[com.tencent.kuikly.demo.pages.sftp.terminal.TerminalModule.MODULE_NAME] =
+            com.tencent.kuikly.demo.pages.sftp.terminal.TerminalModule()
         return map
     }
 

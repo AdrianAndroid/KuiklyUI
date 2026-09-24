@@ -9,6 +9,7 @@ import com.tencent.kuikly.core.render.web.runtime.web.expand.KuiklyRenderViewDel
 import com.tencent.kuikly.h5app.components.KRMyView
 import com.tencent.kuikly.h5app.components.KRWebView
 import com.tencent.kuikly.h5app.components.KuiklyPageView
+import com.tencent.kuikly.h5app.module.KRTerminalModule
 import com.tencent.kuikly.h5app.module.KRBridgeModule
 import com.tencent.kuikly.h5app.module.KRCacheModule
 import com.tencent.kuikly.h5app.module.KRLocalMediaProxyModule
@@ -140,6 +141,8 @@ class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
         // Web SFTP 模块：转发到本地 Node 网关（sftp-gateway），由网关代持真实 SSH/SFTP。
         // 页面（commonMain）无需改动，模块名与 ModuleConst 一致。
         kuiklyRenderExport.moduleExport(KRSftpModule.MODULE_NAME) { KRSftpModule() }
+        // 终端（shell）：转发到网关 shell 模块（远程 ssh pty / 本地宿主 pty）
+        kuiklyRenderExport.moduleExport("KRTerminalModule") { KRTerminalModule() }
         kuiklyRenderExport.moduleExport(KRSftpConnectionModule.MODULE_NAME) { KRSftpConnectionModule() }
         kuiklyRenderExport.moduleExport(KRSftpFavoritesModule.MODULE_NAME) { KRSftpFavoritesModule() }
         kuiklyRenderExport.moduleExport(KRSftpPlaybackHistoryModule.MODULE_NAME) { KRSftpPlaybackHistoryModule() }

@@ -29,6 +29,7 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.core.utils.PlatformUtils
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
@@ -172,9 +173,33 @@ internal class SftpHomePage : SftpBasePager() {
                 velseif({ ctx.currentTab == 0 }) {
                     View {
                         attr { flex(1f); flexDirectionColumn(); width(pagerData.pageViewWidth) }
-                        // 默认入口：本地文件管理（双栏；远端栏可随时选主机）—— 仅 Web/桌面
+                        // 本地文件管理（双栏；远端栏可随时选主机）—— 仅 Web/桌面
                         if (ctx.isWebLike) {
-                            SftpLocalFileManagerEntry { ctx.openLocalFileManager() }
+                            // 本地那一栏：本地文件管理 + 右侧「终端」格（各自独立点击，避免冒泡）
+                            View {
+                                attr {
+                                    width(pagerData.pageViewWidth - 8f)
+                                    flexDirectionRow()
+                                    alignItemsCenter()
+                                }
+                                SftpLocalFileManagerEntry(
+                                    onClick = { ctx.openLocalFileManager() },
+                                    fillWidth = false,
+                                )
+                                if (ctx.terminalSupported()) {
+                                    View {
+                                        attr {
+                                            width(56f)
+                                            height(64f)
+                                            allCenter()
+                                            backgroundColor(SftpColorTokens.cardBg)
+                                            accessibility("local_terminal_entry")
+                                        }
+                                        event { click { ctx.openTerminal(null) } }
+                                        Text { attr { text(">_"); fontSize(16f); color(SftpColorTokens.primary) } }
+                                    }
+                                }
+                            }
                         }
                         vif({ ctx.connections.isEmpty() }) {
                             SftpEmptyView("暂无连接，点 + 新建")
@@ -183,7 +208,8 @@ internal class SftpHomePage : SftpBasePager() {
                             SftpConnectionListView(
                                 { ctx.connections },
                                 { conn -> ctx.openBrowser(conn) },
-                                if (ctx.isWebLike) { { conn -> ctx.openDualPane(conn) } } else null
+                                if (ctx.isWebLike) { { conn -> ctx.openDualPane(conn) } } else null,
+                                if (ctx.isWebLike && ctx.terminalSupported()) { { conn -> ctx.openTerminal(conn) } } else null
                             )
                         }
                     }
@@ -245,6 +271,35 @@ internal class SftpHomePage : SftpBasePager() {
         acquireModule<RouterModule>(RouterModule.MODULE_NAME)
             .openPage(SftpBrowserPage.PAGE_NAME, params)
     }
+
+    /**
+     * 打开终端（独立窗口；本地终端 [conn]==null，远程终端传连接）。
+     * 跨端：web/桌面走独立窗口，其它端回退页内；未实现端由入口处的能力探测隐藏。
+     */
+    internal fun openTerminal(conn: com.tencent.kuikly.core.module.sftp.SftpConnection?) {
+        val p = JSONObject()
+        p.put("renderer", "grid")   // 跨端统一走共享网格渲染（web 可用 xterm 加速，后续可切）
+        if (conn == null) {
+            p.put("local", true)
+        } else {
+            p.put("connectionId", conn.id)
+            p.put("connectionLabel", conn.label)
+            p.put("host", conn.host)
+        }
+        val bridge = acquireModule<BridgeModule>(BridgeModule.MODULE_NAME)
+        val standalone = runCatching { bridge.supportsPlayerWindow() }.getOrDefault(false)
+        if (standalone) {
+            val hp = JSONObject(p.toString())
+            hp.put("page_name", SftpPageNames.TERMINAL)
+            bridge.openPlayerWindow(hp)
+        } else {
+            acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPageNames.TERMINAL, p)
+        }
+    }
+
+    /** 本端是否支持终端（决定是否显示入口；未实现端不显示、也不调用其原生方法） */
+    private fun terminalSupported(): Boolean =
+        runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsTerminal() }.getOrDefault(false)
 
     /** 默认入口：只开本地栏（远端栏由用户在页内选择主机）。 */
     internal fun openLocalFileManager() {
@@ -434,7 +489,8 @@ internal fun ViewContainer<*, *>.SftpErrorView(message: String, onRetry: () -> U
 internal fun ViewContainer<*, *>.SftpConnectionListView(
     connectionsProvider: () -> ObservableList<SftpConnection>,
     onClick: (SftpConnection) -> Unit,
-    onDualPane: ((SftpConnection) -> Unit)? = null
+    onDualPane: ((SftpConnection) -> Unit)? = null,
+    onTerminal: ((SftpConnection) -> Unit)? = null
 ) {
     Scroller {
         attr {
@@ -480,6 +536,18 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
                             marginLeft(10f)
                         }
                         event { click { onDualPane(conn) } }
+                    }
+                }
+                if (onTerminal != null) {
+                    // 终端入口：以该连接开远程终端（独立窗口）
+                    Text {
+                        attr {
+                            text(">_")
+                            fontSize(14f)
+                            color(SftpColorTokens.primary)
+                            marginLeft(10f)
+                        }
+                        event { click { onTerminal(conn) } }
                     }
                 }
             }
@@ -584,10 +652,14 @@ internal fun formatDuration(ms: Long): String {
 }
 
 /** 首页默认入口：本地文件管理（双栏）；仅 Web/桌面注入。 */
-internal fun ViewContainer<*, *>.SftpLocalFileManagerEntry(onClick: () -> Unit) {
+internal fun ViewContainer<*, *>.SftpLocalFileManagerEntry(
+    onClick: () -> Unit,
+    onTerminal: (() -> Unit)? = null,
+    fillWidth: Boolean = true,
+) {
     View {
         attr {
-            width(pagerData.pageViewWidth - 8f)
+            if (fillWidth) width(pagerData.pageViewWidth - 8f) else flex(1f)
             padding(16f, 14f, 16f, 14f)
             backgroundColor(SftpColorTokens.cardBg)
             flexDirectionRow()

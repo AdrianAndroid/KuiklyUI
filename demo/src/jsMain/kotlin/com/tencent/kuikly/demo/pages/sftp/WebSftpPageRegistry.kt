@@ -55,6 +55,10 @@ internal fun registerSftpWebPages() {
         registerWebPage("SftpBatchProgressDialog") { SftpBatchProgressDialog() }
         // 双栏文件管理器（桌面版：Electron / H5）
         registerWebPage(FilesDualPanePage.PAGE_NAME) { FilesDualPanePage() }
+        // 终端页（本地/远程 shell，独立窗口）
+        registerWebPage(com.tencent.kuikly.demo.pages.sftp.SftpPageNames.TERMINAL) {
+            com.tencent.kuikly.demo.pages.sftp.terminal.SftpTerminalPage()
+        }
         // demo 入口页（?page_name 缺省时的默认路由目标）
         registerWebPage("router") { RouterPage() }
         diag("registered; after=${BridgeManager.isPageExist("SftpHomePage")}")

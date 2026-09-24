@@ -183,6 +183,26 @@ internal object SftpTextLoader {
         return sb.toString()
     }
 
+    /** base64 解码（终端字节流用；纯 Kotlin，全端一致） */
+    fun base64Decode(text: String): ByteArray {
+        if (text.isEmpty()) return ByteArray(0)
+        val out = ArrayList<Byte>(text.length * 3 / 4 + 3)
+        var buf = 0
+        var bits = 0
+        for (ch in text) {
+            if (ch == '=' || ch == '\n' || ch == '\r') continue
+            val v = B64.indexOf(ch)
+            if (v < 0) continue
+            buf = (buf shl 6) or v
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                out.add(((buf shr bits) and 0xFF).toByte())
+            }
+        }
+        return ByteArray(out.size) { out[it] }
+    }
+
     private fun decodeUtf16(bytes: ByteArray, littleEndian: Boolean): String {
         val sb = StringBuilder(bytes.size / 2)
         var i = 2

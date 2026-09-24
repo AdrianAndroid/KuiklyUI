@@ -55,6 +55,17 @@ internal class BridgeModule : Module() {
         }
     }
 
+    /**
+     * 本端是否支持终端（远程/本地 shell）。
+     * Web/桌面：由宿主 xterm 与本地网关提供 → true；
+     * 原生端：需实现 `KRTerminalModule`（libssh2 pty）后再返回 true（当前 false → 页面隐藏入口并给出提示）。
+     */
+    fun supportsTerminal(): Boolean {
+        val res = syncToNativeMethod(SUPPORTS_TERMINAL, JSONObject(), null)
+        return runCatching { JSONObject(res).optBoolean("supported", false) }
+            .getOrDefault(res.trim() == "true")
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -208,6 +219,7 @@ internal class BridgeModule : Module() {
         const val SUPPORTS_PLAYER_WINDOW = "supportsPlayerWindow"
         const val OPEN_PLAYER_WINDOW = "openPlayerWindow"
         const val SAVE_TEMP_FILE = "saveTempFile"
+        const val SUPPORTS_TERMINAL = "supportsTerminal"
 
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"

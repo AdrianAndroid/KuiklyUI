@@ -334,4 +334,12 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
     // 原生端不提供独立窗口播放（业务侧不会走到这里）
 }
 
+
+#pragma mark - 终端能力（待接入 libssh2 pty）
+
+/// 原生端终端能力：接入 libssh2 channel + pty 后改为返回 YES，页面即显示终端入口。
+- (NSDictionary *)supportsTerminal:(NSDictionary *)args {
+    return @{@"supported": @NO};
+}
+
 @end

@@ -848,8 +848,143 @@ const historyModule = {
 /* ------------------------------------------------------------------ *
  * HTTP 层
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * 终端（SSH shell / pty）
+ *   - 只做 SSH 远程终端（不含本地 shell）
+ *   - 输出用「绝对偏移 + 轮询」拉取（无需 WebSocket，零新依赖）
+ *   - 环形缓冲：只保留最近 SHELL_KEEP_BYTES，避免大输出吃内存
+ * ------------------------------------------------------------------ */
+const SHELL_KEEP_BYTES = 512 * 1024;
+const SHELL_READ_MAX = 64 * 1024;
+const shellSessions = new Map();
+let shellSeq = 0;
+const { spawn: spawnChild } = require('child_process');
+
+/**
+ * 本地终端：用宿主系统的 `script` 提供伪终端（macOS: script -q /dev/null sh -i；
+ * Linux: script -qfc "sh -i" /dev/null），把 stdin/stdout 适配成与 SSH shell 一致的接口。
+ */
+function openLocalPty(cols, rows) {
+  const shell = process.env.SHELL || '/bin/bash';
+  // 用 python3 的 pty.spawn 提供真正的伪终端（macOS 的 script 在管道里无法建 pty；
+  // python3 随 Xcode CLT 自带，跨 macOS/Linux 都可用）。
+  const env = Object.assign({}, process.env, {
+    TERM: 'xterm-256color',
+    COLUMNS: String(cols),
+    LINES: String(rows),
+    KR_SHELL: shell,
+  });
+  const child = spawnChild('python3', ['-c', 'import os,pty; pty.spawn([os.environ.get("KR_SHELL","/bin/bash")])'], { env });
+  return {
+    __child: child,
+    on(ev, cb) {
+      if (ev === 'data') { child.stdout.on('data', cb); child.stderr.on('data', cb); }
+      else if (ev === 'close') { child.on('close', cb); child.on('error', cb); }
+    },
+    write(b) { try { child.stdin.write(b); } catch (e) { /* ignore */ } },
+    end() { try { child.kill(); } catch (e) { /* ignore */ } },
+    setWindow() { /* 本地 pty 尺寸跟随，暂不支持动态改窗 */ },
+  };
+}
+
+function shellAppend(st, d) {
+  st.chunks.push({ off: st.total, buf: d });
+  st.total += d.length;
+  const keepFrom = Math.max(0, st.total - SHELL_KEEP_BYTES);
+  while (st.chunks.length > 1 && st.chunks[0].off + st.chunks[0].buf.length <= keepFrom) {
+    st.chunks.shift();
+  }
+  if (st.chunks.length) st.baseOff = st.chunks[0].off;
+}
+
+const shellModule = {
+  async open(params) {
+    const term = params.term || 'xterm-256color';
+    const cols = Math.max(2, Number(params.cols || 80));
+    const rows = Math.max(2, Number(params.rows || 24));
+    const shellId = 'sh-' + (++shellSeq);
+    const st = { stream: null, chunks: [], total: 0, baseOff: 0, closed: false, local: !!params.local };
+    shellSessions.set(shellId, st);
+    if (params.local) {
+      // 本地终端（无需 SSH 会话）
+      st.stream = openLocalPty(cols, rows);
+    } else {
+      const s = findSession(params.sessionId);
+      await new Promise((resolve, reject) => {
+        s.conn.shell({ term, cols, rows }, (err, stream) => {
+          if (err) return reject(err);
+          st.stream = stream;
+          resolve();
+        });
+      });
+    }
+    st.stream.on('data', (d) => shellAppend(st, d));
+    if (st.stream.stderr) st.stream.stderr.on('data', (d) => shellAppend(st, d));
+    st.stream.on('close', () => { st.closed = true; });
+    return { shellId, offset: st.total, cols, rows };
+  },
+
+  async read(params) {
+    const st = shellSessions.get(params.shellId);
+    if (!st) return { error: 'shell not found', closed: true };
+    let from = Number(params.offset || 0);
+    if (from < st.baseOff) from = st.baseOff;   // 已被环形缓冲丢弃，从最旧可用位置开始
+    const parts = [];
+    let out = 0;
+    for (const c of st.chunks) {
+      const end = c.off + c.buf.length;
+      if (end <= from) continue;
+      const s0 = Math.max(0, from - c.off);
+      const slice = c.buf.subarray(s0);
+      if (out + slice.length > SHELL_READ_MAX) {
+        const take = SHELL_READ_MAX - out;
+        parts.push(slice.subarray(0, take));
+        out += take;
+        break;
+      }
+      parts.push(slice);
+      out += slice.length;
+      if (out >= SHELL_READ_MAX) break;
+    }
+    const data = parts.length ? Buffer.concat(parts) : Buffer.alloc(0);
+    return {
+      data: data.toString('base64'),
+      offset: from + data.length,
+      closed: !!st.closed,
+      reset: Number(params.offset || 0) < st.baseOff,
+    };
+  },
+
+  async write(params) {
+    const st = shellSessions.get(params.shellId);
+    if (!st || !st.stream) return { error: 'shell not found' };
+    st.stream.write(Buffer.from(params.data || '', 'base64'));
+    return { ok: true };
+  },
+
+  async resize(params) {
+    const st = shellSessions.get(params.shellId);
+    if (!st || !st.stream) return { error: 'shell not found' };
+    const cols = Math.max(2, Number(params.cols || 80));
+    const rows = Math.max(2, Number(params.rows || 24));
+    st.stream.setWindow(rows, cols, 0, 0);
+    return { ok: true };
+  },
+
+  async close(params) {
+    const st = shellSessions.get(params.shellId);
+    if (st) {
+      try { st.stream && st.stream.end(); } catch (e) { /* ignore */ }
+      shellSessions.delete(params.shellId);
+    }
+    return { ok: true };
+  },
+};
+
 const MODULES = {
   sftp: sftpModule,
+  shell: shellModule,
   knownHosts: knownHostsModule,
   mediaProxy: mediaProxyModule,
   connection: connectionModule,

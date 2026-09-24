@@ -16,7 +16,8 @@
     "sync:release": "KUIKLY_WEB_MODE=release node scripts/sync-resources.mjs",
     "dist:release": "KUIKLY_WEB_MODE=release npm run dist",
     "test:player": "node test/player-window.mjs",
-    "test:text": "node test/text-viewer.mjs"
+    "test:text": "node test/text-viewer.mjs",
+    "test:term": "node test/terminal.mjs"
   },
   "devDependencies": {
     "electron": "33.4.11",

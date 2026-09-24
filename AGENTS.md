@@ -62,6 +62,22 @@
 
 ---
 
+## 3.1 功能跨平台规则（固定要求，每个功能都要遵守）
+
+**任何新功能都必须按「六端共用」设计，不允许只做 Electron/Web。**
+
+1. **能力声明放 commonMain**（Module 契约 + 数据模型 + 纯 Kotlin 逻辑），各端只实现「宿主能力」；
+   平台相关一律走 Module / `expect-actual`，禁止在 commonMain 直接 `import android.*` / `UIKit`。
+2. **重型 UI 要有共享降级实现**：能用 Web 宿主能力（xterm.js / DOM）加速，但必须有一份 **commonMain 的纯 Kotlin 实现**
+   保证其它端可用（实例：终端 = xterm.js（web，可选）+ `TerminalBuffer`/`TerminalGridView`（六端共用））。
+3. **未实现端必须显式不可用**：能力探测（`BridgeModule.supportsXxx()`，各端都有实现）返回 false → 入口隐藏/给出提示，
+   **绝不调用未实现的原生方法**（iOS DEBUG 下会 NSAssert 崩溃），也**绝不伪报成功**。
+4. **验证至少一端 + 覆盖共享路径**：本轮允许只跑 Electron 用例，但用例要覆盖「native 会走的那条共享代码路径」
+   （实例：终端用例走网格渲染，而不是只测 xterm.js）。
+5. 交付时在对应文档（`AGENTS.md` / `devDocs/*`）写明：哪些端已实现/已验证、哪些端待接入及接入点。
+
+---
+
 ## 4. 关键入口文件（先读这些）
 
 | 主题 | 文件 |
@@ -755,6 +771,34 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   自动化：`electron/test/smoke.mjs` **S9g**（拖动 seek）/ **S9h**（切换选集后标题更新且播放推进）/ **S9i**（抽屉打开 video 高度 > 100，不塌陷）。
 - **Web 视频组件**：`core-render-web/base/src/jsMain/kotlin/.../expand/components/KRVideoView.kt`
 - SFTP 实现详解（学习向）：`docs/SFTP-实现详解.md`
+
+### 13.1.5 终端（本地/远程 shell，独立窗口，2026-09 新增）
+
+**跨平台设计（见 §3.1）**：能力声明在 commonMain，重型 UI 有共享降级实现，未实现端显式不可用。
+
+| 层 | 实现 | 说明 |
+|---|---|---|
+| shell 通道（契约） | `demo/.../sftp/terminal/TerminalModule.kt`（`KRTerminalModule`） | `open/read/write/resize/close`；输出用**绝对偏移 + 轮询**（无需 WebSocket）|
+| Web/桌面 | `h5App` 的 `KRTerminalModule`（一行转发 `shell` 到网关）+ `sftp-gateway` 的 `shell` 模块 | 远程 = ssh2 `conn.shell()`（pty）；本地 = SSH 连本机（127.0.0.1，见下）|
+| 共享渲染（六端） | `TerminalBuffer`（纯 Kotlin ANSI-lite：光标移动/清屏/清行/宽字符）+ `TerminalGridView`（Kuikly 等宽网格）| **native 端只需实现 shell 模块 + 打开 `supportsTerminal`，UI 即可用**（无需平台 UI 代码）|
+| Web 加速（可选） | `h5App/src/jsMain/resources/lib/xterm.js`（MIT，本地 vendor）+ `kr-terminal.js` | `window.__krTerm`；网格与 xterm 共用同一 shell 通道 |
+
+- **入口**：首页「本地文件管理」那一栏**右侧的 `>_`**（本地终端）+ **每个连接行右侧的 `>_`**（远程终端）；都开**独立窗口**（`standalone=1`，返回键关窗）。
+- **本地终端 = SSH 本机**：首次弹**账号密码弹窗**（绝对定位模态，不占终端区域），勾选「记住账号密码」后写入连接库（label 「本机」、host `127.0.0.1`），下次直接连接。
+- **能力探测**：`BridgeModule.supportsTerminal()`（web=true；Android/iOS/macOS 目前 false → 入口隐藏并提示），
+  **绝不调用未实现的原生方法**（iOS DEBUG 会 NSAssert）。
+- **native 接入点**：在 `core-render-*` 实现 `KRTerminalModule`（libssh2 `libssh2_channel_open_session` +
+  `libssh2_channel_request_pty`；本地 shell 用各端 pty），并把 `supportsTerminal` 改为 true —— UI 无需改动。
+- **用例**：`cd electron && npm run test:term` → **T1–T7 7/7**（本地行入口/独立窗口/本地 SSH 终端/输入回显/
+  每连接行入口/远程 whoami 回显/无异常）。
+- ⚠️ 踩过的坑（勿回退）：
+  1. **新 Module 必须注册在 `Pager.createExternalModules()`**（只在 web delegator 注册不够，否则
+     `acquireModule 失败：未注册`，页面直接空白）；且要用 `acquireModule` 取实例（直接 `new` 回调不会回来）。
+  2. **浮层必须放在内容区之后**（Web 上同级后渲染者在上，放前面会被正文/终端盖住）。
+  3. **嵌套点击会冒泡到父行**：行内嵌小按钮会同时触发行点击 → 改成**行旁边的独立格**。
+  4. 解析宿主回调 JSON 用 `optString/optLong/optBoolean`（`JSONObject.str` 不存在）。
+  5. macOS 上 `script -q /dev/null <shell>` 在管道里建不了 pty（`Operation not supported on socket`），
+     本地 pty 需用 `python3 -c "import pty; pty.spawn([...])"`（网关已如此实现，作兜底）。
 
 ### 13.1.4 双栏文件管理器（Web / 桌面，2026-09 新增）
 

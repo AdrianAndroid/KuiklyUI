@@ -373,3 +373,23 @@ release dmg 实测：拖动 `1.55s → 49.42s`（目标≈48s）、抽屉打开 
 ② 浮层按钮与工具条同名（完成）→ 自动化点到开关 → 改名「应用」。
 
 **测试**：`npm run test:text` **16/16**；全量 文本 16/16、播放窗口 8/8、双栏 28/28、smoke 20/20(+1 SKIP)、core 76/76。
+
+
+---
+
+## 本轮：终端（本地/远程 shell，独立窗口）
+
+**方案选型**（按「每个功能都要考虑跨平台」）：不做 Rust FFI；**shell 通道走 Module 契约**（web → 本地 Node 网关 ssh2；
+native → libssh2 pty 待接），**渲染有共享降级实现**（commonMain `TerminalBuffer` + `TerminalGridView`，六端共用），
+web 可选 **xterm.js**（MIT，本地 vendor）加速。参考意见中的 ①②③ 均不采用（Rust FFI / 纯 Kotlin 无降级 / AGPL）。
+
+| 能力 | 结果 |
+|---|---|
+| 入口 | 首页「本地文件管理」栏右侧 `>_`（本地终端）+ 每个连接行右侧 `>_`（远程终端），均**独立窗口** |
+| 本地终端 | **SSH 本机**（127.0.0.1）：首次弹**账号密码弹窗**，「记住」后写入连接库（label「本机」）下次直连 |
+| 远程终端 | 复用连接库凭据 → ssh2 `conn.shell()` pty；实测 `whoami` 回显 `zhaojian` |
+| 共享渲染 | `TerminalBuffer`（ANSI-lite：CSI 光标/清屏/宽字符）+ `TerminalGridView`；**native 接入只需实现 shell 模块** |
+| 输入 | Kuikly 输入行 + 宿主事件通道（`terminal_input`，xterm `onData` 同一条）|
+| 用例 | `npm run test:term` **7/7**（入口/独立窗口/本地终端/输入回显/每行入口/远程 whoami/无异常）|
+
+全量回归：终端 7/7、文本 16/16、播放窗口 8/8、双栏 28/28、smoke 20/20(+1 SKIP)、core 76/76。

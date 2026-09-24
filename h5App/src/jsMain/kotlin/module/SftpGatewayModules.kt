@@ -103,3 +103,9 @@ class KRSftpPlaybackHistoryModule : SftpGatewayProxyModule("history") {
 class KRLocalMediaProxyModule : SftpGatewayProxyModule("mediaProxy") {
     companion object { const val MODULE_NAME = "KRLocalMediaProxyModule" }
 }
+
+/**
+ * 终端（shell）模块：转发到网关的 `shell` 模块。
+ * 远程走 ssh2 `conn.shell()`（pty），本地走宿主 pty；输出用「偏移轮询」，无需 WebSocket。
+ */
+class KRTerminalModule : SftpGatewayProxyModule("shell")

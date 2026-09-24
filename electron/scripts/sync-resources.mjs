@@ -35,6 +35,11 @@ fs.mkdirSync(res, { recursive: true });
 execFileSync('unzip', ['-oq', zip, '-d', res], { stdio: 'inherit' });
 fs.copyFileSync(h5js, path.join(res, 'h5App.js'));
 fs.copyFileSync(html, path.join(res, 'index.html'));
+// 静态资源目录（xterm.js 等本地 vendor 的库；index.html 以 lib/ 相对路径引用）
+const libSrc = path.join(root, 'h5App/src/jsMain/resources/lib');
+if (fs.existsSync(libSrc)) {
+  fs.cpSync(libSrc, path.join(res, 'lib'), { recursive: true });
+}
 
 console.log(`[sync] mode=${MODE} 已同步到 electron/resources：`);
 for (const f of fs.readdirSync(res)) console.log('  -', f);
