@@ -254,13 +254,20 @@ internal class SftpBrowserPage : SftpBasePager() {
         params.put("size", entry.size)
 
         val router = acquireModule<RouterModule>(RouterModule.MODULE_NAME)
-        if (MimeExtMap.isVideo(mime) || MimeExtMap.isAudio(mime)) {
-            // 视频或音频 → 播放页（§17.3.3 / §20）
-            // 桌面壳会开独立窗口（可同时播多个），其它端页内路由
-            openPlayerPage(params)
-        } else {
-            // 其他类型 → 预览分发页（§4.1 / §17.3.3.3）
-            router.openPage(SftpViewerDispatcherPage.PAGE_NAME, params)
+        when {
+            MimeExtMap.isVideo(mime) || MimeExtMap.isAudio(mime) -> {
+                // 视频或音频 → 播放页（§17.3.3 / §20）
+                // 桌面壳会开独立窗口（可同时播多个），其它端页内路由
+                openPlayerPage(params)
+            }
+            MimeExtMap.isMarkdown(entry.path) || MimeExtMap.isHtml(entry.path) || MimeExtMap.isText(mime) -> {
+                // 文本类（Markdown / HTML / 纯文本 / 代码）→ 查看器；桌面壳另开独立窗口
+                openViewerPage(params)
+            }
+            else -> {
+                // 图片 / PDF 等 → 预览分发页（§4.1 / §17.3.3.3）
+                router.openPage(SftpViewerDispatcherPage.PAGE_NAME, params)
+            }
         }
     }
 

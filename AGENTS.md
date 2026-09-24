@@ -698,6 +698,26 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   `npm test` 为端到端功能验证（S1-S10，含真实目录与播放）。启动需 `env -u ELECTRON_RUN_AS_NODE`（§12）。
 - **Web(H5) 模块/宿主**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`、
   `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
+- **文本文件查看器（含 Markdown，桌面壳独立窗口，2026-09）**：参考 **MarkText**（MIT，Electron 富功能 Markdown 阅读/编辑器）
+  的渲染范围 + **VS Code/Monaco** 的只读查看（行号/换行/字号/字数），实现子集：
+  标题(左侧色条) / 段落行内(粗体·斜体·删除线·行内代码·链接，用 `RichText + Span` 单文本流保证跨行折行) /
+  围栏代码块 / 引用 / 有序无序列表 / 任务列表 / 表格 / 分隔线；**目录(TOC)** 抽屉（近似跳转）、
+  **源码⇄预览**、**换行开关**、**A−/A+ 字号**、状态栏（编码·大小·行数·字数）、大文件截断提示（>2MB 只读前 2MB）。
+  纯文本：行号槽 + 等宽字体 + 换行/字号（渲染上限 1500 行）。
+  - 入口：浏览页点文本类（md/html/txt/代码）→ `SftpViewerLauncher.openViewerPage()`，桌面壳**另开独立窗口**
+    （`standalone=1`，返回键关窗）；其它端自动回退页内路由。
+  - 装载：`SftpTextLoader` 分块流式读（96KB/块）+ 跨端解码（UTF-8 含 4 字节 emoji / UTF-16 BOM）。
+  - 服务端不受限：Markdown 解析器在 **commonMain**（纯 Kotlin），六端共用，无平台依赖。
+  ⚠️ 三个踩过的坑（勿回退）：
+  1. **`MimeExtMap.isMarkdown/isHtml` 期望 mime，不是路径**：`decideViewer` 曾传 `remotePath` → 恒 false →
+     `.md` 被当纯文本渲染（Markdown 渲染一直未生效）。**必须传 `mimeOfPath()` 的结果**。
+  2. **Markdown 解析器禁止用正则**：Kotlin/JS 会把正则编译成 unicode 模式，`[([ xX])]` 这类字符类抛
+     `Lone quantifier brackets` → 解析中断、正文空白。任务/有序/无序列表项一律用字符串解析。
+  3. **查看器状态必须 provider + 在 `attr{}`/`vif` 内读**：加载完成后正文/工具条标签/字号/目录数若不这样写，
+     依赖不被收集 → 永远停在「加载中…」或空态/开关不生效（含 `vif({ mdSourceView })` 切换源码⇄预览）。
+  用例：`cd electron && npm run test:text` → **T0–T6 11/11**（真实点击：独立窗口/Markdown 渲染+目录 46 项/
+  换行/源码⇄预览/字号 26→33.8px/纯文本行号/多窗口关闭），测试目录 `/home/zhaojian/ks-cr-doc`。
+
 - **独立窗口播放（桌面壳，2026-09）**：视频在 Electron 下开**独立窗口**（可同时播多个、互不影响）。
   能力经 `BridgeModule.supportsPlayerWindow()/openPlayerWindow()`（Web 端读 preload 暴露的 `window.kuiklyHost`），
   其它端返回 supported=false 自动回退页内路由；统一入口 `SftpPlayerLauncher.openPlayerPage()`。

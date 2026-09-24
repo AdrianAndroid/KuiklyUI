@@ -14,100 +14,103 @@
  */
 package com.tencent.kuikly.demo.pages.sftp.viewer
 
-import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.module.sftp.I18n
-import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.directives.velse
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
 
 /**
- * 文本预览（§4.2）
+ * 纯文本渲染（阅读器形态，参考 VS Code / Monaco 的只读查看）：
+ * 行号槽 + 等宽正文 + 换行开关 + 字号缩放。
  *
- * - 已通过 [com.tencent.kuikly.demo.pages.sftp.viewer.SftpViewerDispatcherPage] 拉头部 8KB 检测编码
- * - Phase 0.4 简化：只渲染已拉的头部 8KB；Phase 1 流式渲染全文（分块 read）
- * - 编码检测：UTF-8 / UTF-16 / GBK / Latin-1
- * - 大于 1MB 显示警告
+ * 响应式约定：字号/换行等可变状态均以 provider 传入并在 `attr {}` 内读取
+ * （结构层读取不会被依赖收集 → 缩放/切换不生效）。
  */
 internal fun ViewContainer<*, *>.SftpTextViewer(
-    sessionId: String,
-    remotePath: String,
-    size: Long,
-    encoding: String,
-    headBytes: ByteArray?
+    linesProvider: () -> List<String>,
+    fontScaleProvider: () -> Float,
+    wrapProvider: () -> Boolean,
+    truncatedProvider: () -> Boolean,
+    maxRenderLines: Int = 1500,
 ) {
-    View {
-        attr { flex(1f); backgroundColor(SftpColorTokens.bg); padding(16f, 16f, 16f, 16f) }
-        // 文件元信息
+    vif({ linesProvider().isNotEmpty() }) {
+        SftpTextBody(linesProvider(), fontScaleProvider, wrapProvider, truncatedProvider, maxRenderLines)
+    }
+    velse {
         View {
-            attr { flexDirectionRow(); marginBottom(12f) }
+            attr { flex(1f); allCenter() }
+            Text { attr { text("(空文件)"); fontSize(13f); color(SftpColorTokens.textSecondary) } }
+        }
+    }
+}
+
+private fun ViewContainer<*, *>.SftpTextBody(
+    lines: List<String>,
+    fontScaleProvider: () -> Float,
+    wrapProvider: () -> Boolean,
+    truncatedProvider: () -> Boolean,
+    maxRenderLines: Int,
+) {
+    // 渲染上限：超大文件只渲染前 N 行（否则一次创建上万视图会卡死）
+    val renderLines = if (lines.size > maxRenderLines) lines.subList(0, maxRenderLines) else lines
+    val clipped = lines.size > maxRenderLines
+    View {
+        attr {
+            flex(1f)
+            flexDirectionColumn()
+            backgroundColor(SftpColorTokens.cardBg)
+            borderRadius(8f)
+            padding(10f, 8f, 10f, 8f)
+        }
+        vif({ truncatedProvider() }) {
             Text {
                 attr {
-                    text(I18n.t("sftp.viewer.text_encoding") + ": " + encoding + " · " + I18n.t("sftp.viewer.text_size") + ": " + size + "B")
-                    fontSize(12f)
+                    text("⚠ 文件较大，仅显示前一部分内容")
+                    fontSize(11f * fontScaleProvider())
+                    color(SftpColorTokens.danger)
+                    marginBottom(6f)
+                }
+            }
+        }
+        if (clipped) {
+            Text {
+                attr {
+                    text("… 仅渲染前 $maxRenderLines 行（共 ${lines.size} 行）")
+                    fontSize(11f * fontScaleProvider())
                     color(SftpColorTokens.textSecondary)
+                    marginBottom(6f)
                 }
             }
         }
-        // 文本内容（Phase 0.4 简化：只渲染 head）
-        val content = decodeUtf8(headBytes)
-        Scroller {
-            attr { flex(1f); backgroundColor(SftpColorTokens.cardBg); borderRadius(8f); padding(12f, 12f, 12f, 12f) }
-            Text {
-                attr {
-                    text(content)
-                    fontSize(13f)
-                    color(SftpColorTokens.textPrimary)
-                    // 单倍行距
-                    lineHeight(18f)
-                }
-            }
-        }
-        // 超大文件警告
-        if (size > 1_048_576L) {
+        renderLines.forEachIndexed { index, line ->
             View {
-                attr { marginTop(8f); allCenter() }
+                attr { flexDirectionRow(); alignItemsFlexStart() }
                 Text {
                     attr {
-                        text(I18n.t("sftp.viewer.text_too_large"))
-                        fontSize(12f)
-                        color(SftpColorTokens.danger)
+                        text("${index + 1}")
+                        fontSize(11.5f * fontScaleProvider())
+                        color(SftpColorTokens.textSecondary)
+                        width(46f)
+                        textAlignRight()
+                        marginRight(8f)
+                        lineHeight(19f * fontScaleProvider())
+                        fontFamily("monospace")
+                    }
+                }
+                Text {
+                    attr {
+                        text(line)
+                        fontSize(12.5f * fontScaleProvider())
+                        color(SftpColorTokens.textPrimary)
+                        lineHeight(19f * fontScaleProvider())
+                        flex(1f)
+                        fontFamily("monospace")
+                        if (!wrapProvider()) lines(1)
                     }
                 }
             }
         }
     }
-}
-
-/**
- * 简化版 UTF-8 解码（commonMain 无 `String(bytes, Charsets.UTF_8)`）。
- * 仅支持基本 ASCII + 双字节 UTF-8；复杂场景 Phase 1 改用 kotlinx-io。
- */
-internal fun decodeUtf8(bytes: ByteArray?): String {
-    if (bytes == null) return ""
-    val sb = StringBuilder(bytes.size)
-    var i = 0
-    while (i < bytes.size) {
-        val b = bytes[i].toInt() and 0xFF
-        if (b < 0x80) {
-            sb.append(b.toChar())
-            i++
-        } else if (b and 0xE0 == 0xC0 && i + 1 < bytes.size) {
-            val b2 = bytes[i + 1].toInt() and 0xFF
-            val cp = ((b and 0x1F) shl 6) or (b2 and 0x3F)
-            sb.append(cp.toChar())
-            i += 2
-        } else if (b and 0xF0 == 0xE0 && i + 2 < bytes.size) {
-            val b2 = bytes[i + 1].toInt() and 0xFF
-            val b3 = bytes[i + 2].toInt() and 0xFF
-            val cp = ((b and 0x0F) shl 12) or ((b2 and 0x3F) shl 6) or (b3 and 0x3F)
-            sb.append(cp.toChar())
-            i += 3
-        } else {
-            sb.append('?')
-            i++
-        }
-    }
-    return sb.toString()
 }

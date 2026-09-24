@@ -195,7 +195,7 @@ function createPlayerWindow(playerQuery) {
     height: 640,
     minWidth: 420,
     minHeight: 260,
-    title: 'Kuikly SFTP - 播放',
+    title: 'Kuikly SFTP',
     backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -214,6 +214,7 @@ function createPlayerWindow(playerQuery) {
   Object.keys(playerQuery || {}).forEach((k) => {
     if (playerQuery[k] != null) query[k] = String(playerQuery[k]);
   });
+  if (query.name) win.setTitle('Kuikly SFTP - ' + query.name);
   win.loadFile(path.join(RES_DIR, 'index.html'), { query });
   return true;
 }
