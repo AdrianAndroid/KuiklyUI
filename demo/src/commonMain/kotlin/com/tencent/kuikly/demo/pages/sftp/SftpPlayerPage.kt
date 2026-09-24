@@ -616,10 +616,12 @@ internal class SftpPlayerPage : SftpBasePager() {
                     resumeMs = ctx.resumePosition,
                     onContinue = {
                         ctx.hasResumePromptShown = false
+                        ctx.isPlaying = true                        // 选择继续＝播放意图
                         ctx.applySeek(ctx.resumePosition.toInt())   // 真正跳到上次位置
                     },
                     onRestart = {
                         ctx.hasResumePromptShown = false
+                        ctx.isPlaying = true                        // 选择从头播＝播放意图
                         ctx.applySeek(0)                            // 从头播
                     }
                 )
@@ -884,7 +886,15 @@ internal class SftpPlayerPage : SftpBasePager() {
         remotePath = episodes[index]
         name = remotePath.substringAfterLast('/')
         firstFrameShown = false
-        startPlayback()
+        // 切集等同于用户意图「播放」：isPlaying 在上一集播完/暂停时已被复位为 false，
+        // 不置回 true 会导致新一集只加载不播放（用户反馈「切换了视频不能播放」）
+        isPlaying = true
+        // 先刷新本集 size：媒体代理用它限制 HTTP Range。沿用上一集的 size 会让 Range 被截断，
+        // 播放器解码中断（实测 MEDIA_ERR_DECODE，约 2.3s 处冻结）。stat 失败也照常起播。
+        sftpModule().stat(sessionId.ifEmpty { connectionId }, remotePath) { entry, _ ->
+            if (entry != null && entry.size > 0) size = entry.size
+            startPlayback()
+        }
     }
 
     override fun pageWillDestroy() {

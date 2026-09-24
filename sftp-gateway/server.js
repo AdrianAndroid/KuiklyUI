@@ -516,11 +516,14 @@ const mediaProxyModule = {
   async registerToken(params) {
     const { sessionId, remotePath, totalSize } = params;
     if (!sessionId || !remotePath) throw new Error('registerToken: sessionId/remotePath required');
-    findSession(sessionId);
-    let size = Number(totalSize || 0);
+    const s = findSession(sessionId);
+    // 一律以服务端 stat 为准：客户端可能传来「上一集」的 size（切换选集时页面参数未更新），
+    // 若按错误长度限制 Range，播放器会在中途 MEDIA_ERR_DECODE（实测切换后 ~2.3s 必现）。
+    let size = 0;
+    try { const st = await call(s.sftp, 'stat', remotePath); size = Number(st.size || 0); } catch (e) { /* ignore */ }
     if (!size) {
-      const s = findSession(sessionId);
-      try { const st = await call(s.sftp, 'stat', remotePath); size = Number(st.size || 0); } catch (e) { /* ignore */ }
+      const hint = Number(totalSize || 0);   // stat 失败才回退到客户端提示
+      if (hint > 0) size = hint;
     }
     const token = crypto.randomBytes(16).toString('hex');
     mediaTokens.set(token, { sessionId, remotePath, size, handle: null });

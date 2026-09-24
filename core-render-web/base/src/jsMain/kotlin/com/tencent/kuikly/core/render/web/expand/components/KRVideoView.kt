@@ -135,6 +135,9 @@ class KRVideoView : IKuiklyRenderViewExport {
             firstFrameCallback?.invoke(mapOf<String, Any>())
             // 元数据就绪后再补发早到的 seek（否则 seekTo 会被丢弃）
             flushPendingSeek()
+            // 换源（切换选集/重试）后浏览器必然回到暂停态，而引擎不会重复下发 playControl
+            // → 若用户意图是「播放」，在此恢复播放，否则新一集只加载不播放
+            if (wantPlay) ele.play()
         })
 
         addEventListener("timeupdate", {
@@ -314,7 +317,11 @@ class KRVideoView : IKuiklyRenderViewExport {
     /**
      * Set video state
      */
+    /** 记录用户意图（最近一次 playControl），用于换源后恢复播放 */
+    private var wantPlay: Boolean = false
+
     private fun playControl(state: KRVideoViewPlayControl) {
+        wantPlay = state == KRVideoViewPlayControl.KRVideoViewPlayControlPlay
         when (state) {
             KRVideoViewPlayControl.KRVideoViewPlayControlPrePlay -> {
                 // No pre-play capability in web
@@ -330,6 +337,7 @@ class KRVideoView : IKuiklyRenderViewExport {
             }
 
             KRVideoViewPlayControl.KRVideoViewPlayControlStop -> {
+                wantPlay = false
                 // No direct stop video and destroy resource in web, so pause first
                 ele.pause()
                 // Then reset progress to simulate stop
