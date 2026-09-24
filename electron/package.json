@@ -14,7 +14,8 @@
     "test:dual": "node test/dual-pane.mjs",
     "build:web:release": "KUIKLY_WEB_MODE=release node scripts/build-web.mjs",
     "sync:release": "KUIKLY_WEB_MODE=release node scripts/sync-resources.mjs",
-    "dist:release": "KUIKLY_WEB_MODE=release npm run dist"
+    "dist:release": "KUIKLY_WEB_MODE=release npm run dist",
+    "test:player": "node test/player-window.mjs"
   },
   "devDependencies": {
     "electron": "33.4.11",

@@ -52,6 +52,14 @@ async function waitCdp() {
   return false;
 }
 
+// WATCHDOG：无人值守时避免无限等待（超时即失败退出，便于自动化）
+let __finished = false;
+setTimeout(() => {
+  if (__finished) return;
+  console.log('FAIL | WATCHDOG 全局超时 900s，强制退出');
+  process.exit(1);
+}, 900 * 1000);
+
 (async () => {
   // ---------- 夹具（本脚本自建自清，运行结束不留残余）----------
   const localFixtures = [UPLOAD_TXT, UPLOAD_BIN, DL_TXT].map((n) => path.join(LOCAL_HOME, n));
