@@ -698,6 +698,20 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   `npm test` 为端到端功能验证（S1-S10，含真实目录与播放）。启动需 `env -u ELECTRON_RUN_AS_NODE`（§12）。
 - **Web(H5) 模块/宿主**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`、
   `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
+- **独立窗口播放（桌面壳，2026-09）**：视频在 Electron 下开**独立窗口**（可同时播多个、互不影响）。
+  能力经 `BridgeModule.supportsPlayerWindow()/openPlayerWindow()`（Web 端读 preload 暴露的 `window.kuiklyHost`），
+  其它端返回 supported=false 自动回退页内路由；统一入口 `SftpPlayerLauncher.openPlayerPage()`。
+  ⚠️ 两处易错：① 宿主开窗口**必须显式带 `page_name`**（页内路由由 RouterModule 补，宿主不会）；
+  ② 独立窗口 URL 加 `standalone=1`，`KRRouterModule.closePage` 只对该标记的窗口执行「关窗」，
+     否则主窗口的返回键会误关整个应用。用例：`npm run test:player`（P0–P5，真实点击开多窗口/逐个关闭）。
+- **播放页：从头播放 + 进度记录/续播**：控制条新增 `⏮`（清续播提示、回到 0 并起播）；
+  播放历史每 5s + 暂停时 + `pageWillDestroy` 落盘，重开时 >10s 弹「继续播放？」。
+  ⚠️ 网关 `history.get/markCompleted` 必须按**与写入同一 id 规则**匹配（页面写入用 `buildId` 哈希 id，
+  网关此前按 `connectionId::remotePath` 查 → 永远查不到，表现为「进度存了但从不弹续播」）；用例 S9k。
+- **已知问题（框架级，暂未修）**：Web/桌面**根视图 resize 链路失效** —— 实测窗口/视口尺寸已变，
+  但 `KuiklyRenderView.updateRootViewSize` 从未被调用；且 core `handlePagerViewSizeDidChanged` 仅在带
+  `densityInfo` 时才 `markDirty/layoutIfNeed`。后果：**缩放窗口后视频区不跟随**（用例 S9l 以 SKIP 记录证据）。
+  修复方向：让宿主 resizing 走到 Pager 并触发重排（或事件通道通知当前页自适配）。
 - **Web 播放器三个坑（2026-09，均已修 + 已有自动化用例）**：
   1. **Web `KRVideoView` 曾未实现 `seekTo`** → 桌面端**所有** seek 无效（拖动看着在动、视频不跳；键盘 seek 也只是"片尾归零"的假通过）。
      已实现，并在 `loadeddata` 后补发早到的 seek（元数据未就绪时的 seek 不再被丢弃）。
