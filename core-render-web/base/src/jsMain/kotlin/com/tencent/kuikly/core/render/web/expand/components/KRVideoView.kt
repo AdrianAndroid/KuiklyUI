@@ -133,6 +133,8 @@ class KRVideoView : IKuiklyRenderViewExport {
         addEventListener("loadeddata", {
             // First frame loaded
             firstFrameCallback?.invoke(mapOf<String, Any>())
+            // 元数据就绪后再补发早到的 seek（否则 seekTo 会被丢弃）
+            flushPendingSeek()
         })
 
         addEventListener("timeupdate", {
@@ -257,6 +259,12 @@ class KRVideoView : IKuiklyRenderViewExport {
                 true
             }
 
+            SEEK_TO -> {
+                // 公共层 VideoView.seekTo(ms) 下发的显式跳转（此前 Web 端未实现 → 拖动/键盘 seek 全部无效）
+                seekToMs(propValue.unsafeCast<Number>().toLong())
+                true
+            }
+
             EVENT_PLAY_STATE_CHANGE -> {
                 stateChangeCallback = propValue.unsafeCast<KuiklyRenderCallback>()
                 true
@@ -279,6 +287,28 @@ class KRVideoView : IKuiklyRenderViewExport {
 
             else -> super.setProp(propKey, propValue)
         }
+    }
+
+    /** 元数据未就绪时暂存的 seek（毫秒），loadeddata 后补发 */
+    private var pendingSeekMs: Long = -1L
+
+    /**
+     * 显式跳转（毫秒）。时长未知（元数据未加载）时先暂存，避免 seek 被静默丢弃。
+     */
+    private fun seekToMs(positionMs: Long) {
+        if (positionMs < 0) return
+        val dur = video.unsafeCast<HTMLVideoElement>().duration
+        if (dur.isNaN() || dur <= 0.0) {
+            pendingSeekMs = positionMs
+            return
+        }
+        video.unsafeCast<HTMLVideoElement>().currentTime = (positionMs / 1000.0).coerceIn(0.0, dur)
+    }
+
+    private fun flushPendingSeek() {
+        val p = pendingSeekMs
+        pendingSeekMs = -1L
+        if (p >= 0) seekToMs(p)
     }
 
     /**
@@ -349,6 +379,7 @@ class KRVideoView : IKuiklyRenderViewExport {
         private const val RATE = "rate"
         private const val RESIZE_MODE = "resizeMode"
         private const val PLAY_CONTROL = "playControl"
+        private const val SEEK_TO = "seekTo"
 
         // Events
         private const val EVENT_PLAY_STATE_CHANGE = "stateChange"

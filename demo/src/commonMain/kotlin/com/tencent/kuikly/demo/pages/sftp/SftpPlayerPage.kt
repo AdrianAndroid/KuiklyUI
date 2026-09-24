@@ -60,8 +60,9 @@ internal class SftpPlayerPage : SftpBasePager() {
     private var sessionId: String = ""
     private var connectionId: String = ""
     private var connectionLabel: String = ""
-    private var remotePath: String = ""
-    private var name: String = ""
+    // 必须是 observable：切换选集后标题/历史 id 依赖它们，普通 var 不会触发重渲染（标题会停在旧文件名）
+    private var remotePath: String by observable("")
+    private var name: String by observable("")
     private var size: Long = 0L
     // 播放进度与状态都要可观察：控制条依赖它们实时刷新
     private var duration: Int by observable(0)
@@ -821,6 +822,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         // 拖动进度条期间不要被播放回调覆盖显示值
         if (!draggingProgress) currentPosition = cur
         if (total > 0) duration = total
+        // seek 已落点：把请求复位为 -1，否则「再次跳转到同一位置」因属性值未变化而不会下发
+        if (seekTarget >= 0 && kotlin.math.abs(cur - seekTarget) < 500) seekTarget = -1
         // §19.3.3 每 5s 落一次历史。
         // 注意：cur/total 单位是**毫秒**——之前写成 `cur % 5 == 0` 是按秒的直觉，
         // 毫秒下几乎每个回调都命中，导致每帧写一次磁盘（卡顿 + 日志刷屏）。
@@ -920,6 +923,10 @@ internal fun ViewContainer<*, *>.SftpResumePromptDialog(
 ) {
     View {
         attr {
+            // 全屏浮层必须绝对定位：否则会参与父级「列」布局、挤掉视频区（flex 1）的高度，
+            // 表现为打开浮层后 video 高度变 0 → 上半屏纯黑
+            positionAbsolute()
+            left(0f); top(0f)
             size(pagerData.pageViewWidth, pagerData.pageViewHeight)
             backgroundColor(Color(0x99000000.toInt()))
             allCenter()
@@ -1016,6 +1023,9 @@ internal fun ViewContainer<*, *>.SftpEpisodeDrawer(
 ) {
     View {
         attr {
+            // 同上：抽屉是全屏遮罩，必须绝对定位，避免挤掉视频区高度（打开即黑屏）
+            positionAbsolute()
+            left(0f); top(0f)
             size(pagerData.pageViewWidth, pagerData.pageViewHeight)
             backgroundColor(Color(0x99000000.toInt()))
             // 抽屉贴底：父容器是 column，贴底要用 justifyContentFlexEnd（alignItemsFlexEnd 是"右对齐"）
