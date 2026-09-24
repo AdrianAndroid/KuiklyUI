@@ -16,8 +16,10 @@ const electronDir = path.resolve(here, '..');
 const root = path.resolve(electronDir, '..');
 const res = path.join(electronDir, 'resources');
 
-const zip = path.join(root, 'demo/build/outputs/kuikly/js/debug/local/nativevue2.zip');
-const h5js = path.join(root, 'h5App/build/kotlin-webpack/js/developmentExecutable/h5App.js');
+// MODE=release 时取 release 产物（打包正式版用；debug 产物带调试开销）
+const MODE = (process.env.KUIKLY_WEB_MODE || 'debug').toLowerCase() === 'release' ? 'release' : 'debug';
+const zip = path.join(root, `demo/build/outputs/kuikly/js/${MODE}/local/nativevue2.zip`);
+const h5js = path.join(root, `h5App/build/kotlin-webpack/js/${MODE === 'release' ? 'productionExecutable' : 'developmentExecutable'}/h5App.js`);
 const html = path.join(root, 'h5App/src/jsMain/resources/index.html');
 
 for (const [what, p] of [['demo bundle', zip], ['h5App.js', h5js], ['index.html', html]]) {
@@ -34,5 +36,5 @@ execFileSync('unzip', ['-oq', zip, '-d', res], { stdio: 'inherit' });
 fs.copyFileSync(h5js, path.join(res, 'h5App.js'));
 fs.copyFileSync(html, path.join(res, 'index.html'));
 
-console.log('[sync] 已同步到 electron/resources：');
+console.log(`[sync] mode=${MODE} 已同步到 electron/resources：`);
 for (const f of fs.readdirSync(res)) console.log('  -', f);

@@ -1,7 +1,7 @@
 /*
  * 构建 Web 产物（供 electron/resources 使用）
- *   ./gradlew :demo:packLocalJsBundleDebug -Pkuikly.useLocalKsp=false
- *   ./gradlew :h5App:jsBrowserDevelopmentWebpack
+ *   KUIKLY_WEB_MODE=debug（默认）→ :demo:packLocalJsBundleDebug + :h5App:jsBrowserDevelopmentWebpack
+ *   KUIKLY_WEB_MODE=release        → :demo:packLocalJSBundleRelease + :h5App:jsBrowserProductionWebpack
  *
  * 自动探测 JDK 17（Gradle 7.6.3 不兼容 JDK 25）。
  */
@@ -42,6 +42,8 @@ function gradle(args) {
   if (r.status !== 0) process.exit(r.status || 1);
 }
 
-gradle([':demo:packLocalJsBundleDebug', '-Pkuikly.useLocalKsp=false', '--console=plain']);
-gradle([':h5App:jsBrowserDevelopmentWebpack', '--console=plain']);
+const MODE = (process.env.KUIKLY_WEB_MODE || 'debug').toLowerCase() === 'release' ? 'release' : 'debug';
+console.log('[build:web] mode =', MODE);
+gradle([MODE === 'release' ? ':demo:packLocalJSBundleRelease' : ':demo:packLocalJsBundleDebug', '-Pkuikly.useLocalKsp=false', '--console=plain']);
+gradle([MODE === 'release' ? ':h5App:jsBrowserProductionWebpack' : ':h5App:jsBrowserDevelopmentWebpack', '--console=plain']);
 console.log('[build:web] done');
