@@ -698,6 +698,13 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   `npm test` 为端到端功能验证（S1-S10，含真实目录与播放）。启动需 `env -u ELECTRON_RUN_AS_NODE`（§12）。
 - **Web(H5) 模块/宿主**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`、
   `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
+- **Web 播放器三个坑（2026-09，均已修 + 已有自动化用例）**：
+  1. **Web `KRVideoView` 曾未实现 `seekTo`** → 桌面端**所有** seek 无效（拖动看着在动、视频不跳；键盘 seek 也只是"片尾归零"的假通过）。
+     已实现，并在 `loadeddata` 后补发早到的 seek（元数据未就绪时的 seek 不再被丢弃）。
+  2. **播放器全屏浮层必须 `positionAbsolute()`**（选集抽屉 / 续播弹窗）：否则作为列布局子节点会吃掉视频区 `flex(1f)` 的高度
+     → `video` 高度变 0 → **打开浮层即"上半屏纯黑"**（黑色其实是容器底色）。
+  3. **播放页 `name` / `remotePath` 必须是 `observable`**：普通 `var` 切换选集后标题不刷新（会停在旧文件名）。
+  自动化：`electron/test/smoke.mjs` **S9g**（拖动 seek）/ **S9h**（切换选集后标题更新且播放推进）/ **S9i**（抽屉打开 video 高度 > 100，不塌陷）。
 - **Web 视频组件**：`core-render-web/base/src/jsMain/kotlin/.../expand/components/KRVideoView.kt`
 - SFTP 实现详解（学习向）：`docs/SFTP-实现详解.md`
 

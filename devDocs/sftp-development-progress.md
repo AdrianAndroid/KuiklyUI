@@ -276,3 +276,24 @@ H5（非 Electron）本地栏。
 - **清理**：`sync` 拆分（选中不再重建整栏行）、共享 `isWebLike` 与 `paramFactory` 去重、`planRemove` 去死参、
   去掉死 `mediaTokens.set` 与无效三元/未用 import。
 - **新增回归用例**：D20–D25（越界拒绝、根内可用、本地栏增删、URL 无凭据），双栏套件 **28/28**。
+
+
+---
+
+## 本轮修复：桌面端播放器（Web / Electron）三个真实缺陷 + 用例补全
+
+| 缺陷 | 现象 | 修复 |
+|---|---|---|
+| Web `KRVideoView` 未实现 `seekTo` | 拖动进度条时 tooltip 跟着走但**视频不跳**；键盘 ←/→、续播也无效（Web 端 seek 全链路失效） | 实现 `seekTo`（含元数据未就绪时暂存、`loadeddata` 后补发） |
+| 播放器全屏浮层未绝对定位 | 打开**选集抽屉**后 `video` 元素高度塌成 0 → **上半屏纯黑**（不是半透明） | 抽屉/续播弹窗改 `positionAbsolute()` |
+| `name`/`remotePath` 非 observable | 切换选集后标题停在旧文件名 | 改 `observable` |
+| `seekTarget` 不复位 | 再次跳到同一位置因属性值未变化而不下发 | seek 落点后自动复位为 -1 |
+
+**用例补全**（`electron/test/smoke.mjs`，现 **19/19**）：
+- `S9f` 键盘 seek（原先可能"假通过"，现与 S9g 共同保证真跳转）
+- `S9g` 拖动进度条 seek（真实按下-移动-松手，断言跳到目标比例）
+- `S9h` 切换选集后可正常播放（标题更新 + 时间推进）
+- `S9i` 选集抽屉打开后视频区不塌陷（`video` 高度 > 100，回归"黑屏"）
+
+**打包**：新增 `npm run build:web:release` / `sync:release` / `dist:release`（release bundle 让 app.asar 43MB→9.9MB）。
+release dmg 实测：拖动 `1.55s → 49.42s`（目标≈48s）、抽屉打开 `videoH=736`。
