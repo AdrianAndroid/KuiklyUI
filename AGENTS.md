@@ -704,6 +704,9 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   2. **播放器全屏浮层必须 `positionAbsolute()`**（选集抽屉 / 续播弹窗）：否则作为列布局子节点会吃掉视频区 `flex(1f)` 的高度
      → `video` 高度变 0 → **打开浮层即"上半屏纯黑"**（黑色其实是容器底色）。
   3. **播放页 `name` / `remotePath` 必须是 `observable`**：普通 `var` 切换选集后标题不刷新（会停在旧文件名）。
+  4. **切换选集必须刷新 `size`，网关也必须以服务端 `stat` 为准**：媒体代理用 `size` 限制 HTTP Range，
+     沿用上一集的 size 会让 Range 被截断 → 播放到约 2~3s 处 `MEDIA_ERR_DECODE`(err=3) 冻结。
+     另外 `isPlaying`（用户意图）在上一集播完/暂停后为 false，切换时必须置回 true，否则新一集只加载不播放。
   自动化：`electron/test/smoke.mjs` **S9g**（拖动 seek）/ **S9h**（切换选集后标题更新且播放推进）/ **S9i**（抽屉打开 video 高度 > 100，不塌陷）。
 - **Web 视频组件**：`core-render-web/base/src/jsMain/kotlin/.../expand/components/KRVideoView.kt`
 - SFTP 实现详解（学习向）：`docs/SFTP-实现详解.md`
@@ -729,7 +732,35 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 
 ---
 
-## 14. 维护说明
+## 14.1 SFTP 桌面端（Electron）固定交付流程（每次都要做，不可省）
+
+**触发条件**：任何一轮「测试用例全部通过 + 问题修复完成」之后。
+
+固定四步（缺一不可）：
+
+```bash
+cd /Users/zhaojian/bin/macmini/KuiklyUI/electron
+# ① 打包（release bundle + dmg）
+npm run dist:release                     # = sync(release) + electron-builder → dist/Kuikly SFTP-0.1.0.dmg
+
+# ② 覆盖安装（先优雅退出旧实例，不要 pkill；ditto 保留符号链接与签名）
+osascript -e 'quit app "Kuikly SFTP"'
+rm -rf "/Applications/Kuikly SFTP.app"
+ditto "dist/mac/Kuikly SFTP.app" "/Applications/Kuikly SFTP.app"
+xattr -dr com.apple.quarantine "/Applications/Kuikly SFTP.app"
+# 启动必须去掉 ELECTRON_RUN_AS_NODE（VS Code/Kilo 会泄漏，否则主进程直接 exit(1)）
+env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
+
+# ③ 提交 ④ 推送
+git add -A && git commit && git push origin zhaojian
+```
+
+**验收顺序**：先跑 `npm test`（播放器/单栏）+ `npm run test:dual`（双栏）+ `:core:file-manager:jvmTest jsNodeTest`，
+全绿后再打包安装，最后提交推送。安装后建议用 CDP 在**安装版**上抽测关键路径（拖动 seek / 切换选集 / 双栏打开）。
+
+---
+
+## 15. 维护说明
 
 - 本文件由维护者随项目演进同步更新。新增 Module/View/平台支持/重大架构变更时必须更新第 2、6、7、9 节。
 - 新增专题方案文档时，在第 11 节登记。

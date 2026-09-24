@@ -297,3 +297,16 @@ H5（非 Electron）本地栏。
 
 **打包**：新增 `npm run build:web:release` / `sync:release` / `dist:release`（release bundle 让 app.asar 43MB→9.9MB）。
 release dmg 实测：拖动 `1.55s → 49.42s`（目标≈48s）、抽屉打开 `videoH=736`。
+
+
+### 本轮修复：切换选集不播放 / 中途解码失败（+ 用例加严）
+
+| 缺陷 | 根因 | 修复 |
+|---|---|---|
+| 切换选集后**不播放**（上一集播完/暂停后必现） | `isPlaying`（用户意图）在 `PLAY_END/ERROR` 被复位为 false，`switchToEpisode` 未置回 true | `switchToEpisode` / 续播弹窗两动作均置 `isPlaying = true`；Web 引擎侧另加 `wantPlay`，换源后 `loadeddata` 恢复播放 |
+| 切换后播放到 ~2.3s **冻结**（`MEDIA_ERR_DECODE` err=3） | `switchToEpisode` 未更新 `size`，注册媒体 token 用了上一集的 size → 代理按错误长度截断 Range；且网关 `registerToken` **信任客户端 totalSize** | 播放页切集先 `stat` 刷新 size；网关 `registerToken` 一律以服务端 `stat` 为准（客户端值仅作兜底） |
+
+**用例**：`S9h` 改为「**无任何按键**断言自动播放 + 连续观察 8s 断言无解码错误」；
+按需求**暂缓全屏用例**（原 S9e 移除，S9f 不再依赖全屏）；当前 smoke **18/18**、双栏 28/28、core 76/76。
+
+**规则固化**：`AGENTS.md §14.1` —— 每轮「测试全绿 + 修复完成」后固定：打包 → 覆盖安装 → 提交 → 推送。
