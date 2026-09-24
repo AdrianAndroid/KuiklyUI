@@ -191,16 +191,7 @@ async function waitCdp() {
       const menuShown = (await bodyText()).includes('1.25×');
       check('S9d 点击倍速打开设置菜单(真实点击)', speedClicked && menuShown, `clicked=${speedClicked} menu=${menuShown}`);
 
-      // S9e 点击全屏按钮 → 图标切换为退出全屏（真实点击）
-      let fsOn = false;
-      for (let i = 0; i < 5 && !fsOn; i++) {
-        await wake();
-        await clickText('⛶');
-        await sleep(700);
-        fsOn = (await bodyText()).includes('⤡');
-      }
-      check('S9e 点击全屏按钮并切换状态(真实点击)', fsOn, 'exitGlyph=' + fsOn);
-
+      // 全屏（⛶/⤡）用例按需求暂缓（2026-09）：不进全屏，后续需要时再补
       // S9f 键盘快捷键（模拟人工按键）：按「←」seek。
       // 用 seek 而不是播放/暂停：测试片仅 6s，播放态在片尾存在竞态（K 会被片尾立即覆盖）。
       // 「←」seek 到 0 是确定性的，能证明键盘事件确实到达页面。
@@ -208,8 +199,6 @@ async function waitCdp() {
         await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk });
         await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk });
       };
-      await clickText('⤡');                          // 先退出全屏
-      await sleep(600);
       await keyTap('ArrowRight', 'ArrowRight', 39);  // 先跳到后面
       await sleep(900);
       const beforeSeek = await ev(pickCur);
@@ -249,27 +238,45 @@ async function waitCdp() {
       check('S9g 拖动进度条 seek 生效(真实按下-移动-松手)', !!bar && dragTime >= 0 && target > 0 && Math.abs(dragTime - target) < Math.max(1.5, target * 0.3),
         `bar=${!!bar} ${stBefore && stBefore.t}s -> ${dragTime}s（目标≈${target.toFixed(1)}s，时长=${stBefore && stBefore.d}s）`);
 
-      // S9h 切换选集后仍能正常播放：真实点 ☰ → 点列表里的另一个视频 → 断言元数据与外层一致且时间在推进
+      // S9h 切换选集后必须「自动播放」（用户意图）——真实点击，且**不做任何按键**
+      //     回归：isPlaying 是用户意图，上一集播完/被暂停后会被复位为 false；
+      //     若 switchToEpisode 不重新置 true，切换后只加载不播放（用户反馈「切换了视频不能播放」）
+      const viewTitle = async () => String(await ev("(()=>{const t=document.body.innerText.split('\\n').map(s=>s.trim());return t.find(x=>/\\.(mp4|mov|mkv|webm|m4v)$/i.test(x))||'';})()"));
+      const titleBefore = await viewTitle();
+      // 先暂停（真实点击 ⏸）：把 isPlaying 置为 false，模拟「播完/暂停后再切换」
+      await wake();
+      await clickText('❚❚');
+      await sleep(800);
+      const pausedNow = await videoState();
+      // 打开选集抽屉，点另一个视频（真实点击，取最小文本元素避免命中整页容器）
       await wake();
       await clickText('☰');
       await sleep(1000);
       const other = await ev("(()=>{const cur=" + JSON.stringify(mediaName) + ";const all=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return /\\.mp4$/.test(t)&&t!==cur&&o.r.width>1&&o.r.height>1;});if(!all.length)return null;all.sort((a,b)=>a.r.width*a.r.height-b.r.width*b.r.height);const el=all[0].e;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return JSON.stringify({name:el.textContent.trim(),x:r.left+r.width/2,y:r.top+r.height/2});})()");
-      let swap = null, swapOk = false, swapPlayed = false;
+      let swap = null, swapped = false, titleOk = false, autoPlayed = false, stA = null, stB = null;
       try { swap = other ? JSON.parse(other) : null; } catch (e) { swap = null; }
       if (swap) {
         await mouseAt('mousePressed', swap.x, swap.y, 1); await sleep(80); await mouseAt('mouseReleased', swap.x, swap.y, 0);
+        // 等待新集元数据就绪（不做任何按键！）
         const s2 = Date.now();
-        while (Date.now() - s2 < 20000) { const st = await videoState(); if (st && st.d > 0 && (await bodyText()).includes(swap.name)) break; await sleep(700); }
-        swapOk = (await bodyText()).includes(swap.name);
-        // 确保处于播放态：仅在 paused 时按空格（' ' = togglePlay，正在播时按会暂停）
-        for (let i = 0; i < 3; i++) { const st = await videoState(); if (!st || !st.paused) break; await wake(); await keyTap(' ', 'Space', 32); await sleep(900); }
-        const a = await videoState();
-        await sleep(4000);
-        const b = await videoState();
-        swapPlayed = !!(a && b && a.d > 0 && b.d > 0 && (b.t > a.t || b.t >= b.d - 0.3));
+        while (Date.now() - s2 < 20000) { const st = await videoState(); if (st && st.d > 0) { swapped = true; break; } await sleep(600); }
+        titleOk = (await viewTitle()) === swap.name;
+        // 连续观察 ~8s：既覆盖「切换后不自动播」，也覆盖「沿用上一集 size 导致 Range 截断 →
+        // 播放中途 MEDIA_ERR_DECODE(err=3) 冻结」（实测约 2.3s 处必现）
+        stA = await videoState();
+        let maxT = stA ? stA.t : 0, sawErr = 0, finalPaused = true, lastT = stA ? stA.t : 0;
+        for (let i = 0; i < 9; i++) {
+          const st = await videoState();
+          if (st) { maxT = Math.max(maxT, st.t); lastT = st.t; if (st.err) sawErr = st.err; finalPaused = st.paused; }
+          await sleep(900);
+        }
+        stB = { t: lastT, paused: finalPaused, err: sawErr };
+        autoPlayed = sawErr === 0 && maxT >= 3 && finalPaused === false;
       }
-      check('S9h 切换选集后可正常播放(真实点击)', !!swap && swapOk && swapPlayed,
-        swap ? `切到 ${swap.name} 标题命中=${swapOk} 播放推进=${swapPlayed}` : '未找到第二个视频（测试目录需≥2个 .mp4）');
+      check('S9h 切换选集后自动播放且不中断(无任何按键，真实点击)',
+        !!swap && swapped && titleOk && autoPlayed,
+        swap ? `切到 ${swap.name} 标题=${titleOk} paused(前/后)=${pausedNow && pausedNow.paused}/${stB && stB.paused} t:${stA ? stA.t : '-'}->${stB ? stB.t : '-'} 解码错误=${stB ? stB.err : '-'} 自动播放=${autoPlayed}`
+             : '未找到第二个视频（测试目录需≥2个 .mp4）');
 
       // S9i 打开选集抽屉时视频区不得塌陷（video 高度 > 0）
       //     曾因浮层未绝对定位，作为列布局子节点吃掉视频区 flex 高度 → video 高度=0 → 上半屏纯黑
