@@ -22,13 +22,46 @@ package com.tencent.kuikly.demo.pages.sftp.viewer.md
  * 行内支持 粗体 / 斜体 / 删除线 / 行内代码 / 链接。
  */
 internal sealed class MdBlock {
-    data class Heading(val level: Int, val text: String) : MdBlock()
-    data class Paragraph(val text: String) : MdBlock()
-    data class Code(val lang: String, val code: String) : MdBlock()
-    data class Quote(val text: String) : MdBlock()
-    data class ListBlock(val items: List<MdItem>) : MdBlock()
-    data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock()
-    object Hr : MdBlock()
+    /** 源码原文（编辑块时作为初始内容；替换回文档时也用它对齐行范围） */
+    abstract val raw: String
+    /** 起始行号（0 起，含） */
+    abstract val startLine: Int
+    /** 结束行号（0 起，不含） */
+    abstract val endLine: Int
+
+    data class Heading(
+        val level: Int, val text: String,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
+    data class Paragraph(
+        val text: String,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
+    data class Code(
+        val lang: String, val code: String,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
+    data class Quote(
+        val text: String,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
+    data class ListBlock(
+        val items: List<MdItem>,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
+    data class Table(
+        val header: List<String>, val rows: List<List<String>>,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
+    data class Hr(
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
 }
 
 /** 列表项：indent 用于表达层级（0 起） */
@@ -61,14 +94,24 @@ internal object MarkdownParser {
         val lines = source.replace("\r\n", "\n").replace('\r', '\n').split('\n')
         val blocks = ArrayList<MdBlock>()
         val para = StringBuilder()
+        var paraStart = -1
         var i = 0
 
-        fun flushPara() {
+        fun flushPara(endLine: Int) {
             if (para.isNotEmpty()) {
-                blocks.add(MdBlock.Paragraph(para.toString().trim()))
+                blocks.add(
+                    MdBlock.Paragraph(
+                        text = para.toString().trim(),
+                        raw = lines.subList(paraStart, endLine).joinToString("\n"),
+                        startLine = paraStart,
+                        endLine = endLine
+                    )
+                )
                 para.setLength(0)
+                paraStart = -1
             }
         }
+        fun rawOf(from: Int, toExclusive: Int) = lines.subList(from, toExclusive).joinToString("\n")
 
         while (i < lines.size) {
             val line = lines[i]
@@ -76,7 +119,8 @@ internal object MarkdownParser {
 
             // 围栏代码块 ```lang
             if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
-                flushPara()
+                flushPara(i)
+                val from = i
                 val fence = trimmed.take(3)
                 val lang = trimmed.removePrefix(fence).trim()
                 val code = StringBuilder()
@@ -86,30 +130,41 @@ internal object MarkdownParser {
                     i++
                 }
                 i++ // 跳过结束围栏
-                blocks.add(MdBlock.Code(lang, code.toString().trimEnd('\n')))
+                blocks.add(
+                    MdBlock.Code(
+                        lang, code.toString().trimEnd('\n'),
+                        raw = rawOf(from, i), startLine = from, endLine = i
+                    )
+                )
                 continue
             }
 
             // 标题
             val h = headingLevel(trimmed)
             if (h > 0) {
-                flushPara()
-                blocks.add(MdBlock.Heading(h, trimmed.drop(h).trim().trimEnd('#').trim()))
+                flushPara(i)
+                blocks.add(
+                    MdBlock.Heading(
+                        h, trimmed.drop(h).trim().trimEnd('#').trim(),
+                        raw = line, startLine = i, endLine = i + 1
+                    )
+                )
                 i++
                 continue
             }
 
             // 分隔线
             if (isHr(trimmed)) {
-                flushPara()
-                blocks.add(MdBlock.Hr)
+                flushPara(i)
+                blocks.add(MdBlock.Hr(raw = line, startLine = i, endLine = i + 1))
                 i++
                 continue
             }
 
             // 表格：当前行含 | 且下一行是分隔行
             if (trimmed.contains('|') && i + 1 < lines.size && isTableSeparator(lines[i + 1].trim())) {
-                flushPara()
+                flushPara(i)
+                val from = i
                 val header = splitRow(trimmed)
                 i += 2
                 val rows = ArrayList<List<String>>()
@@ -117,26 +172,38 @@ internal object MarkdownParser {
                     rows.add(splitRow(lines[i].trim()))
                     i++
                 }
-                blocks.add(MdBlock.Table(header, rows))
+                blocks.add(
+                    MdBlock.Table(
+                        header, rows,
+                        raw = rawOf(from, i), startLine = from, endLine = i
+                    )
+                )
                 continue
             }
 
             // 引用
             if (trimmed.startsWith(">")) {
-                flushPara()
+                flushPara(i)
+                val from = i
                 val quote = StringBuilder()
                 while (i < lines.size && lines[i].trim().startsWith(">")) {
                     quote.append(lines[i].trim().removePrefix(">").trim()).append(' ')
                     i++
                 }
-                blocks.add(MdBlock.Quote(quote.toString().trim()))
+                blocks.add(
+                    MdBlock.Quote(
+                        quote.toString().trim(),
+                        raw = rawOf(from, i), startLine = from, endLine = i
+                    )
+                )
                 continue
             }
 
             // 列表（有序/无序/任务，按缩进分层）
             val item = parseListItem(line)
             if (item != null) {
-                flushPara()
+                flushPara(i)
+                val from = i
                 val items = ArrayList<MdItem>()
                 var idx = i
                 while (idx < lines.size) {
@@ -144,23 +211,29 @@ internal object MarkdownParser {
                     items.add(it)
                     idx++
                 }
-                blocks.add(MdBlock.ListBlock(items))
+                blocks.add(
+                    MdBlock.ListBlock(
+                        items,
+                        raw = rawOf(from, idx), startLine = from, endLine = idx
+                    )
+                )
                 i = idx
                 continue
             }
 
             // 空行 → 段落分隔
             if (trimmed.isEmpty()) {
-                flushPara()
+                flushPara(i)
                 i++
                 continue
             }
 
+            if (para.isEmpty()) paraStart = i
             if (para.isNotEmpty()) para.append(' ')
             para.append(trimmed)
             i++
         }
-        flushPara()
+        flushPara(lines.size)
         return blocks
     }
 

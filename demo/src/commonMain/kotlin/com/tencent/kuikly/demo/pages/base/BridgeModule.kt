@@ -42,6 +42,19 @@ internal class BridgeModule : Module() {
         callNativeMethod(OPEN_PLAYER_WINDOW, playerParams, null)
     }
 
+    /**
+     * 桌面/Web 宿主：把内容写入宿主的本地临时文件并返回绝对路径。
+     * 读取器保存时用「写临时文件 + SftpModule.upload(localPath)」，避免新增各端原生方法。
+     * 仅当 [supportsPlayerWindow] 为 true（Web/桌面壳）时才调用 → 原生端不需要实现。
+     */
+    fun saveTempFile(contentBase64: String, callback: (path: String?) -> Unit) {
+        val args = JSONObject()
+        args.put("content", contentBase64)
+        callNativeMethod(SAVE_TEMP_FILE, args) { data ->
+            callback(data?.optString("path")?.takeIf { it.isNotEmpty() })
+        }
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -194,6 +207,7 @@ internal class BridgeModule : Module() {
     companion object {
         const val SUPPORTS_PLAYER_WINDOW = "supportsPlayerWindow"
         const val OPEN_PLAYER_WINDOW = "openPlayerWindow"
+        const val SAVE_TEMP_FILE = "saveTempFile"
 
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"

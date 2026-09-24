@@ -40,9 +40,15 @@ internal fun ViewContainer<*, *>.SftpMarkdownViewer(
     fontScaleProvider: () -> Float,
     wrapProvider: () -> Boolean,
     onLink: (String) -> Unit,
+    editingProvider: () -> Boolean = { false },
+    editTargetProvider: () -> Int = { -1 },
+    onBlockTap: (Int) -> Unit = { },
 ) {
     vif({ blocksProvider().isNotEmpty() }) {
-        SftpMarkdownBody(blocksProvider(), fontScaleProvider, wrapProvider, onLink)
+        SftpMarkdownBody(
+            blocksProvider(), fontScaleProvider, wrapProvider, onLink,
+            editingProvider, editTargetProvider, onBlockTap
+        )
     }
     velse {
         View {
@@ -57,6 +63,9 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
     fontScaleProvider: () -> Float,
     wrapProvider: () -> Boolean,
     onLink: (String) -> Unit,
+    editingProvider: () -> Boolean,
+    editTargetProvider: () -> Int,
+    onBlockTap: (Int) -> Unit,
 ) {
     View {
         attr {
@@ -66,16 +75,27 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
             borderRadius(8f)
             padding(14f, 14f, 14f, 14f)
         }
-        blocks.forEach { block ->
-            when (block) {
-                is MdBlock.Heading -> MdHeading(block, fontScaleProvider)
-                is MdBlock.Paragraph -> MdInlineText(MarkdownParser.parseInline(block.text), 14f, fontScaleProvider, wrapProvider, onLink, 6f)
-                is MdBlock.Code -> MdCode(block, fontScaleProvider, wrapProvider)
-                is MdBlock.Quote -> MdQuote(block.text, fontScaleProvider, wrapProvider, onLink)
-                is MdBlock.ListBlock -> MdList(block.items, fontScaleProvider, wrapProvider, onLink)
-                is MdBlock.Table -> MdTable(block, fontScaleProvider)
-                MdBlock.Hr -> View {
-                    attr { height(1f); backgroundColor(SftpColorTokens.divider); margin(10f, 0f, 10f, 0f) }
+        blocks.forEachIndexed { index, block ->
+            // 编辑模式：每个块可点（进来改这一块的 Markdown 源码，完成即重渲染 = 即时渲染）
+            View {
+                attr {
+                    backgroundColor(
+                        if (editingProvider() && editTargetProvider() == index) Color(0x22007AFF)
+                        else Color.TRANSPARENT
+                    )
+                    borderRadius(4f)
+                }
+                event { click { if (editingProvider()) onBlockTap(index) } }
+                when (block) {
+                    is MdBlock.Heading -> MdHeading(block, fontScaleProvider)
+                    is MdBlock.Paragraph -> MdInlineText(MarkdownParser.parseInline(block.text), 14f, fontScaleProvider, wrapProvider, onLink, 6f)
+                    is MdBlock.Code -> MdCode(block, fontScaleProvider, wrapProvider)
+                    is MdBlock.Quote -> MdQuote(block.text, fontScaleProvider, wrapProvider, onLink)
+                    is MdBlock.ListBlock -> MdList(block.items, fontScaleProvider, wrapProvider, onLink)
+                    is MdBlock.Table -> MdTable(block, fontScaleProvider)
+                    is MdBlock.Hr -> View {
+                        attr { height(1f); backgroundColor(SftpColorTokens.divider); margin(10f, 0f, 10f, 0f) }
+                    }
                 }
             }
         }

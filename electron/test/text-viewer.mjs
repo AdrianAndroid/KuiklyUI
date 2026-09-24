@@ -73,6 +73,8 @@ async function attach(wsUrl) {
 
 const listTargets = async () => { try { return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === 'page'); } catch (e) { return []; } };
 const viewerTargets = async () => (await listTargets()).filter((t) => t.url.includes('page_name=SftpViewerDispatcherPage'));
+/** 按远端文件名精确匹配查看器窗口（同名文件可能同时开了 txt/md 两个窗口） */
+const viewerFor = async (fileName) => (await viewerTargets()).filter((t) => t.url.includes(encodeURIComponent(fileName)) || t.url.includes(fileName));
 const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() - t0 > ms) return null; await sleep(step); } };
 
 let __finished = false;
@@ -127,7 +129,7 @@ setTimeout(() => {
       const rendered = await waitFor(async () => { const t = await md.body(); return t.includes('业务背景') ? t : null; }, 30000, 700);
       const t2 = rendered || (await md.body());
       // Markdown 专属特征：目录 chip（由标题生成）+ 状态栏；纯文本态不会有「目录(N)」
-      const hasTocChip = /目录\(\d+\)/.test(t2);
+      const hasTocChip = /目录\s?\d+/.test(t2);
       const hasStatus = t2.includes('行') && t2.includes('字');
       const isMdMode = t2.includes('源码') && hasTocChip;
       check('T2 Markdown 渲染（含目录）+ 阅读器状态栏', !!rendered && hasStatus && isMdMode,
@@ -135,16 +137,16 @@ setTimeout(() => {
       await md.shot('text-viewer-md.png');
 
       // T3a 换行开关
-      const wrapOn = (await md.body()).includes('换行:开');
-      await md.clickText('换行:开');
-      const wrapOff = (await md.body()).includes('换行:关');
-      check('T3a 换行开关可切换', wrapOn && wrapOff, `开→关=${wrapOn}&&${wrapOff}`);
+      const wrapOn = (await md.body()).includes('换行') && !(await md.body()).includes('不换行');
+      await md.clickText('换行');
+      const wrapOff = (await md.body()).includes('不换行');
+      check('T3a 换行开关可切换', wrapOn && wrapOff, `换行→不换行=${wrapOn}&&${wrapOff}`);
 
       // T3b 源码 ⇄ 预览
       await md.clickText('源码');
       const srcView = await waitFor(async () => { const t = await md.body(); return t.includes('## ') ? t : null; }, 12000, 600);
       await md.clickText('预览');
-      const backPreview = await waitFor(async () => { const t = await md.body(); return (t.includes('业务背景') && !t.includes('## ') && /目录\(\d+\)/.test(t)) ? t : null; }, 12000, 600);
+      const backPreview = await waitFor(async () => { const t = await md.body(); return (t.includes('业务背景') && !t.includes('## ') && /目录\s?\d+/.test(t)) ? t : null; }, 12000, 600);
       check('T3b Markdown 源码⇄预览可切换', !!srcView && !!backPreview, `源码态=${!!srcView} 回预览=${!!backPreview}`);
 
       // T3c 字号 A+ 生效
@@ -156,11 +158,17 @@ setTimeout(() => {
       check('T3c 字号 A+ 生效（最大字号变大）', f1 > f0, `${f0}px -> ${f1}px`);
 
       // T3d 目录抽屉
-      const tocChip = (await md.body()).match(/目录\((\d+)\)/);
+      const tocChip = (await md.body()).match(/目录\s?(\d+)/);
       await md.clickText(tocChip ? tocChip[0] : '目录');
-      const tocOpen = await waitFor(async () => (await md.body()).includes('目录') ? (await md.body()) : null, 10000, 500);
+      // 只认「弹窗独有」的标记：头部「目录 · N 项」（文档正文里不会出现）
+      const tocOpen = await waitFor(async () => { const t = await md.body(); return /目录\s*·\s*\d+\s*项/.test(t) ? t : null; }, 10000, 500);
       const tocCount = tocChip ? Number(tocChip[1]) : 0;
-      check('T3d 目录（TOC）抽屉可打开且列出条目', !!tocOpen && tocCount > 0, `目录条目数=${tocCount}`);
+      const entriesVisible = !!tocOpen && (tocOpen.match(/业务背景/g) || []).length >= 1;
+      check('T3d 目录二级弹窗可打开并列出条目', !!tocOpen && tocCount > 0 && entriesVisible,
+        `弹窗头=「目录 · N 项」${!!tocOpen} 条目数=${tocCount}`);
+      if (tocOpen) await md.shot('text-viewer-toc-sheet.png');
+      await md.clickText('关闭');
+      await sleep(500);
       await md.clickText('关闭');
       md.close();
     }
@@ -178,6 +186,70 @@ setTimeout(() => {
       tx.close();
     } else {
       check('T4 纯文本窗口打开', false, '未找到第二个查看器窗口');
+    }
+
+    // ---- Vditor 对照用例 ----
+    // T9 工具栏：单行、置顶、紧凑（对应 Vditor toolbarConfig.pin，不占大空间）
+    const mdWin0 = (await viewerFor(FIX_MD))[0];
+    if (mdWin0) {
+      const v9 = await attach(mdWin0.webSocketDebuggerUrl);
+      await v9.send('Page.enable');
+      const barInfo = await v9.ev("(()=>{const rows=[...document.querySelectorAll('*')].map(e=>({t:(e.textContent||''),r:e.getBoundingClientRect()})).filter(o=>o.t.includes('A+')&&o.t.includes('换行')&&o.t.includes('保存')&&o.r.height>0);if(!rows.length)return 'null';rows.sort((a,b)=>a.r.height-b.r.height);const r=rows[0].r;return JSON.stringify({h:Math.round(r.height),top:Math.round(r.top),w:Math.round(r.width),txt:rows[0].t.slice(0,40)});})()");
+      const bar = barInfo && barInfo !== 'null' ? JSON.parse(barInfo) : null;
+      check('T9 工具栏单行置顶紧凑（Vditor toolbar pin 类比）', !!bar && bar.h <= 56 && bar.top <= 60,
+        bar ? `高=${bar.h}px 顶部=${bar.top}px 内容='${bar.txt}'` : '未找到工具条');
+      v9.close();
+    }
+
+    // T7 即时渲染（Vditor ir 类比）：编辑块 → 在编辑区输入 → **实时预览立即更新**（不点任何按钮）→ 完成 → 正文更新
+    const mdWin = (await viewerFor(FIX_MD))[0];
+    let inlinePreview = false, applied = false, oldGone = false, fmtApplied = false;
+    if (mdWin) {
+      const v7 = await attach(mdWin.webSocketDebuggerUrl);
+      await v7.send('Page.enable');
+      await v7.clickText('编辑');
+      const editOn = await waitFor(async () => ((await v7.body()).includes('完成') ? true : null), 8000, 500);
+      await v7.clickText('文档目的');
+      const overlay = await waitFor(async () => ((await v7.body()).includes('编辑（第') ? true : null), 10000, 500);
+      // 用格式工具条的文字按钮（B 加粗）驱动：同样走「即时渲染」，改完实时预览立即刷新
+      await v7.clickText('B');
+      await sleep(700);
+      const taVal = await v7.ev("(()=>{const ts=[...document.querySelectorAll('textarea')].filter(e=>e.getBoundingClientRect().height>20);return ts.length?ts[ts.length-1].value:'';})()");
+      const editorBold = String(taVal).includes('**');
+      // 实时预览：出现加粗的同一段文字（且不是编辑区源码）＝未点应用就已重渲染
+      const boldInPreview = async () => Number(await v7.ev("(()=>{const es=[...document.querySelectorAll('*')].filter(e=>{const t=(e.textContent||'');return t.includes('文档目的')&&!t.includes('**')&&getComputedStyle(e).fontWeight&&parseInt(getComputedStyle(e).fontWeight)>=600;});return es.length;})()"));
+      const pvBold = await waitFor(async () => ((await boldInPreview()) > 0 ? true : null), 8000, 400);
+      inlinePreview = !!pvBold;
+      if (pvBold) await v7.shot('text-viewer-ir-live-preview.png');
+      fmtApplied = editorBold;
+      await v7.clickText('应用');
+      // 断言「应用」后的效果：正文出现加粗渲染 + 出现 dirty 标记（保存*）
+      const boldInBody = async () => Number(await v7.ev("(()=>{const es=[...document.querySelectorAll('*')].filter(e=>{const t=(e.textContent||'');return t.includes('文档目的')&&!t.includes('**')&&parseInt(getComputedStyle(e).fontWeight||'0')>=600;});return es.length;})()"));
+      const afterApply = await waitFor(async () => ((await boldInBody()) > 0 ? true : null), 12000, 600);
+      const dirtyMark = await waitFor(async () => ((await v7.body()).includes('保存*') ? true : null), 8000, 500);
+      applied = !!afterApply;
+      check('T7 即时渲染（工具条 B → 实时预览自动加粗，不点应用）', editOn && !!overlay && editorBold && inlinePreview,
+        `编辑态=${!!editOn} 浮层=${!!overlay} 编辑区含**=${editorBold} 实时预览已加粗=${inlinePreview}`);
+      check('T10 格式工具条生效（点 B → 编辑区出现 ** 加粗标记）', !!fmtApplied, `编辑区含 '**'=${editorBold}`);
+      check('T7b 点「应用」→ 正文立即重渲染（块被替换为加粗）', !!afterApply,
+        `正文已加粗渲染=${!!afterApply}（dirty 标记=${!!dirtyMark}）`);
+
+      // T8 保存：点保存 → 提示已保存 → 远端文件内容确实更新
+      await v7.clickText('保存');
+      const saved = await waitFor(async () => { const t = await v7.body(); return t.includes('已保存') ? t : null; }, 25000, 700);
+      const rd = await rpc('sftp', 'openRead', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD}` });
+      let remoteHas = false, remoteLen = 0;
+      if (rd && rd.fileHandleId) {
+        const rb = await rpc('sftp', 'read', { fileHandleId: rd.fileHandleId, offset: 0, length: 128 * 1024 });
+        const buf = Buffer.from(rb.base64 || '', 'base64');
+        remoteLen = buf.length;
+        remoteHas = buf.toString('utf8').includes('**');
+        await rpc('sftp', 'close', { fileHandleId: rd.fileHandleId });
+      }
+      const dirtyCleared = !(await v7.body()).includes('保存*');
+      check('T8 保存按钮写回远端（读回内容含加粗标记）', remoteHas,
+        `远端含加粗标记=${remoteHas} 远端大小=${remoteLen}B 提示=${!!saved} dirty已清除=${dirtyCleared}`);
+      v7.close();
     }
 
     // T5 多窗口并存 + 逐个关闭

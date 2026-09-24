@@ -13,6 +13,7 @@ import kotlin.js.Date
  */
 class KRBridgeModule : KuiklyRenderBaseModule() {
     override fun call(method: String, params: String?, callback: KuiklyRenderCallback?): Any? {
+        val cb = callback
         return when (method) {
             "toast" -> {
                 toast(params)
@@ -32,6 +33,14 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             "supportsPlayerWindow" -> {
                 val ok = js("(typeof window !== 'undefined' && !!window.kuiklyHost && typeof window.kuiklyHost.openPlayerWindow === 'function')") as Boolean
                 if (ok) "{\"supported\":true}" else "{\"supported\":false}"
+            }
+
+            // 读取器保存：把内容写到宿主的本地临时文件，返回绝对路径（供 upload(localPath) 使用）
+            "saveTempFile" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val content = q.content as? String ?: ""
+                js("window.localFs.home().then(function(home){ var p = home + '/.kuikly_edit_tmp'; return window.localFs.writeFile(p, content).then(function(){ return p; }); }).then(function(p){ cb({ path: p }); }).catch(function(e){ cb({ path: '' }); })")
+                Unit
             }
 
             "openPlayerWindow" -> {

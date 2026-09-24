@@ -122,6 +122,67 @@ internal object SftpTextLoader {
         return decodeUtf8(bytes, 0) to "UTF-8"
     }
 
+    // ---------- 编码（保存用；纯 Kotlin，全端一致） ----------
+
+    /** UTF-8 编码（含代理对 → 4 字节） */
+    fun encodeUtf8(text: String): ByteArray {
+        val out = ArrayList<Byte>(text.length * 3)
+        for (ch in text) {
+            val c = ch.code
+            when {
+                c < 0x80 -> out.add(c.toByte())
+                c < 0x800 -> {
+                    out.add((0xC0 or (c shr 6)).toByte())
+                    out.add((0x80 or (c and 0x3F)).toByte())
+                }
+                c in 0xD800..0xDBFF -> {
+                    // 高代理：与后续低代理组成码点
+                    val next = text.indexOf(ch) + 1
+                    val lo = if (next < text.length) text[next].code else 0
+                    if (lo in 0xDC00..0xDFFF) {
+                        val cp = 0x10000 + ((c - 0xD800) shl 10) + (lo - 0xDC00)
+                        out.add((0xF0 or (cp shr 18)).toByte())
+                        out.add((0x80 or ((cp shr 12) and 0x3F)).toByte())
+                        out.add((0x80 or ((cp shr 6) and 0x3F)).toByte())
+                        out.add((0x80 or (cp and 0x3F)).toByte())
+                    }
+                }
+                else -> {
+                    out.add((0xE0 or (c shr 12)).toByte())
+                    out.add((0x80 or ((c shr 6) and 0x3F)).toByte())
+                    out.add((0x80 or (c and 0x3F)).toByte())
+                }
+            }
+        }
+        return ByteArray(out.size) { out[it] }
+    }
+
+    private const val B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+    /** 标准 base64（保存文本时经宿主/网关传字节） */
+    fun base64(bytes: ByteArray): String {
+        val sb = StringBuilder((bytes.size + 2) / 3 * 4)
+        var i = 0
+        while (i + 2 < bytes.size) {
+            val n = ((bytes[i].toInt() and 0xFF) shl 16) or ((bytes[i + 1].toInt() and 0xFF) shl 8) or (bytes[i + 2].toInt() and 0xFF)
+            sb.append(B64[(n shr 18) and 0x3F]).append(B64[(n shr 12) and 0x3F])
+                .append(B64[(n shr 6) and 0x3F]).append(B64[n and 0x3F])
+            i += 3
+        }
+        when (bytes.size - i) {
+            1 -> {
+                val n = (bytes[i].toInt() and 0xFF) shl 16
+                sb.append(B64[(n shr 18) and 0x3F]).append(B64[(n shr 12) and 0x3F]).append("==")
+            }
+            2 -> {
+                val n = ((bytes[i].toInt() and 0xFF) shl 16) or ((bytes[i + 1].toInt() and 0xFF) shl 8)
+                sb.append(B64[(n shr 18) and 0x3F]).append(B64[(n shr 12) and 0x3F])
+                    .append(B64[(n shr 6) and 0x3F]).append('=')
+            }
+        }
+        return sb.toString()
+    }
+
     private fun decodeUtf16(bytes: ByteArray, littleEndian: Boolean): String {
         val sb = StringBuilder(bytes.size / 2)
         var i = 2

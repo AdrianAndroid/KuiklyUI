@@ -698,6 +698,17 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   `npm test` 为端到端功能验证（S1-S10，含真实目录与播放）。启动需 `env -u ELECTRON_RUN_AS_NODE`（§12）。
 - **Web(H5) 模块/宿主**：`h5App/src/jsMain/kotlin/module/SftpGatewayModules.kt`、
   `h5App/src/jsMain/kotlin/KuiklyWebRenderViewDelegator.kt`、`h5App/src/jsMain/kotlin/Main.kt`
+- **Markdown「即时渲染」编辑（参考 Vditor 的 IR 模式，2026-09）**：点「编辑」后**点正文块**进入该块编辑，
+  浮层内是**一排格式工具条**（H1/H2/H3/B/I/S/`/```/>/•/1./☐/🔗/▦/―，对齐 Vditor 工具栏）+ 等宽编辑区
+  + **实时预览**（输入/工具条操作后防抖 450ms 自动重渲染 = 即时渲染）；「应用」把该块源码替换回文档并立即重排。
+  阅读/编辑工具条**单行置顶紧凑**（Vditor `toolbarConfig.pin` 类比）：`A− A+ 换行 源码 编辑 目录 N 保存` + 状态同行。
+  **保存**：写入宿主本地临时文件（web 用 `window.localFs`，其它端 `FileModule` 沙盒）后 `SftpModule.upload(localPath)` 覆盖远端
+  —— 不新增各端原生方法（web 走 `BridgeModule.saveTempFile`，由 `supportsPlayerWindow` 探测门控）。
+  **目录**是**底部二级弹窗**（圆角抽屉 + 独立滚动 + 层级缩进，点击条目近似跳转）。
+  ⚠️ 两个坑（勿回退）：① 浮层**必须放在内容区之后**（Web 上同级节点后渲染者在上，放前面会被正文盖住，表现为"只看到一条遮罩"）；
+  ② 浮层里的按钮**不要与工具条同名**（曾把浮层「完成」和工具条「编辑/完成」撞名，自动化会点到开关）；
+  ③ Kotlin/JS 下**不要用正则**解析 Markdown（unicode 模式会抛 `Lone quantifier brackets`）。
+  用例：`npm run test:text` → **16/16**（含 T7 即时渲染：工具条 B → 实时预览自动加粗**不点应用**；T8 保存后**读回远端**校验含加粗标记；T9 工具栏 51px 单行；T3d 目录弹窗）。
 - **文本文件查看器（含 Markdown，桌面壳独立窗口，2026-09）**：参考 **MarkText**（MIT，Electron 富功能 Markdown 阅读/编辑器）
   的渲染范围 + **VS Code/Monaco** 的只读查看（行号/换行/字号/字数），实现子集：
   标题(左侧色条) / 段落行内(粗体·斜体·删除线·行内代码·链接，用 `RichText + Span` 单文本流保证跨行折行) /

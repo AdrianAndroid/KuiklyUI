@@ -20,7 +20,13 @@ import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.velseif
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.module.FileModule
 import com.tencent.kuikly.core.module.RouterModule
+import com.tencent.kuikly.core.module.sftp.OverwriteMode
+import com.tencent.kuikly.core.timer.clearTimeout
+import com.tencent.kuikly.core.timer.setTimeout
+import com.tencent.kuikly.core.views.TextArea
+import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.demo.pages.sftp.viewer.md.MarkdownParser
 import com.tencent.kuikly.demo.pages.sftp.viewer.md.MdBlock
@@ -84,6 +90,16 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private var fontScale: Float by observable(1f)
     private var tocVisible: Boolean by observable(false)
     private var readerScrollTo: ((Float) -> Unit)? = null
+    // ---- 编辑 / 保存（对齐 Vditor 的即时渲染 + 显式保存）----
+    private var editing: Boolean by observable(false)
+    private var editTargetBlock: Int by observable(-1)
+    private var editBuffer: String by observable("")
+    private var dirty: Boolean by observable(false)
+    private var saving: Boolean = false
+    private var saveMsg: String by observable("")
+    /** 编辑区的「实时预览」块（输入后防抖刷新 = Vditor 即时渲染） */
+    private var editPreviewBlocks: List<MdBlock> by observable(emptyList())
+    private var editDebounceRef: String? = null
 
     enum class ViewerKind {
         TEXT, MARKDOWN, HTML, IMAGE, PDF, AUDIO, VIDEO, UNSUPPORTED
@@ -180,20 +196,158 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
             textTruncated = content.truncated
             val body = content.text
             if (viewer == ViewerKind.MARKDOWN) {
-                // 解析异常兜底：任何解析器问题都退化为纯文本，绝不出现空白文档
-                val blocks = try {
-                    MarkdownParser.parse(body)
-                } catch (e: Throwable) {
-                    emptyList()
-                }
-                val capped = if (blocks.size > MAX_MD_BLOCKS) blocks.subList(0, MAX_MD_BLOCKS) else blocks
-                mdBlocks = capped
-                mdOutline = try { MarkdownParser.outline(capped) } catch (e: Throwable) { emptyList() }
-                textLines = body.split('\n')
-                if (capped.isEmpty()) mdSourceView = true   // 解析失败 → 直接显示源码，避免空白
-
+                reparse()
+                if (mdBlocks.isEmpty()) mdSourceView = true   // 解析失败 → 显示源码，避免空白
             } else {
                 textLines = body.split('\n')
+            }
+        }
+    }
+
+    /** 编辑模式开关（Vditor 的「编辑」入口） */
+    private fun toggleEditing() {
+        editing = !editing
+        editTargetBlock = -1
+        editBuffer = ""
+        saveMsg = ""
+    }
+
+    /** 点某个块 → 用它自己的 Markdown 源码进入编辑 */
+    private fun onBlockTap(index: Int) {
+        val b = mdBlocks.getOrNull(index) ?: return
+        editTargetBlock = index
+        editBuffer = b.raw
+        refreshEditPreview()
+        saveMsg = ""
+    }
+
+    /** 完成编辑 → 替换该块源码 → 立即重新解析渲染（即时渲染） */
+    private fun applyBlockEdit() {
+        val b = mdBlocks.getOrNull(editTargetBlock)
+        if (b == null) {
+            editTargetBlock = -1
+            return
+        }
+        val lines = textContent.split('\n').toMutableList()
+        val start = b.startLine.coerceIn(0, lines.size)
+        val end = b.endLine.coerceIn(start, lines.size)
+        repeat(end - start) { if (start < lines.size) lines.removeAt(start) }
+        lines.addAll(start, editBuffer.split('\n'))
+        textContent = lines.joinToString("\n")
+        dirty = true
+        editTargetBlock = -1
+        editBuffer = ""
+        editPreviewBlocks = emptyList()
+        reparse()
+    }
+
+    /** 编辑区内容变化 → 防抖 450ms 后刷新实时预览（即时渲染） */
+    private fun onEditBufferChanged(text: String) {
+        editBuffer = text
+        editDebounceRef?.let { clearTimeout(it) }
+        editDebounceRef = setTimeout(450) { refreshEditPreview() }
+    }
+
+    private fun refreshEditPreview() {
+        editPreviewBlocks = try {
+            MarkdownParser.parse(editBuffer)
+        } catch (e: Throwable) {
+            emptyList()
+        }
+    }
+
+    /**
+     * 格式工具条（对齐 Vditor 的工具栏按钮：标题/加粗/斜体/删除线/行内代码/代码块/引用/列表/任务/链接/表格/分隔线）。
+     * 作用于当前编辑块的内容。
+     */
+    private fun applyFormat(kind: String) {
+        val t = editBuffer
+        val lines = t.split('\n')
+        fun stripHeading(s: String) = s.removePrefix("### ").removePrefix("## ").removePrefix("# ")
+        val out = when (kind) {
+            "h1" -> lines.mapIndexed { i, l -> if (i == 0) "# " + stripHeading(l) else l }.joinToString("\n")
+            "h2" -> lines.mapIndexed { i, l -> if (i == 0) "## " + stripHeading(l) else l }.joinToString("\n")
+            "h3" -> lines.mapIndexed { i, l -> if (i == 0) "### " + stripHeading(l) else l }.joinToString("\n")
+            "bold" -> "**$t**"
+            "italic" -> "*$t*"
+            "strike" -> "~~$t~~"
+            "code" -> "`$t`"
+            "codeblock" -> "```\n$t\n```"
+            "quote" -> lines.joinToString("\n") { if (it.startsWith("> ")) it else "> $it" }
+            "ul" -> lines.joinToString("\n") { if (it.startsWith("- ")) it else "- $it" }
+            "ol" -> lines.mapIndexed { i, l -> "${i + 1}. " + l.removePrefix("- ") }.joinToString("\n")
+            "task" -> lines.joinToString("\n") { if (it.startsWith("- [ ] ")) it else "- [ ] $it" }
+            "link" -> "[$t](https://)"
+            "table" -> "| 列1 | 列2 |\n| --- | --- |\n| $t |  |"
+            "hr" -> "$t\n\n---"
+            else -> t
+        }
+        editBuffer = out
+        refreshEditPreview()
+    }
+
+    private fun cancelBlockEdit() {
+        editTargetBlock = -1
+        editBuffer = ""
+        editPreviewBlocks = emptyList()
+    }
+
+    /** 重新解析并刷新（编辑后即时渲染） */
+    private fun reparse() {
+        val body = textContent
+        val blocks = try { MarkdownParser.parse(body) } catch (e: Throwable) { emptyList() }
+        val capped = if (blocks.size > MAX_MD_BLOCKS) blocks.subList(0, MAX_MD_BLOCKS) else blocks
+        mdBlocks = capped
+        mdOutline = try { MarkdownParser.outline(capped) } catch (e: Throwable) { emptyList() }
+        textLines = body.split('\n')
+    }
+
+    /**
+     * 保存：web/桌面把内容写入宿主本地临时文件（localFs）后 upload；
+     * 其它端写入应用沙盒（FileModule）后 upload —— 不新增各端原生方法。
+     */
+    private fun save() {
+        if (saving) return
+        saving = true
+        saveMsg = "保存中…"
+        val b64 = SftpTextLoader.base64(SftpTextLoader.encodeUtf8(textContent))
+        val web = runCatching {
+            acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsPlayerWindow()
+        }.getOrDefault(false)
+        if (web) {
+            acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).saveTempFile(b64) { path ->
+                if (path.isNullOrEmpty()) {
+                    saving = false
+                    saveMsg = "保存失败：无法写入宿主临时文件"
+                } else {
+                    uploadSaved(path)
+                }
+            }
+        } else {
+            val fm = acquireModule<FileModule>(FileModule.MODULE_NAME)
+            fm.writeFile(TMP_FILE_NAME, textContent) {
+                fm.getFilesDir { res ->
+                    val d = (res?.optString("dir") ?: res?.optString("path")).orEmpty()
+                    if (d.isEmpty()) {
+                        saving = false
+                        saveMsg = "保存失败：无法获取沙盒目录"
+                    } else {
+                        uploadSaved("$d/$TMP_FILE_NAME")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun uploadSaved(localPath: String) {
+        val sid = sessionId.ifEmpty { connectionId }
+        sftpModule().upload(sid, localPath, remotePath, overwrite = OverwriteMode.OVERWRITE) { _, ok, err ->
+            saving = false
+            if (err != null || !ok) {
+                saveMsg = "保存失败：" + (err?.msg ?: "未知错误")
+            } else {
+                dirty = false
+                saveMsg = "已保存 $name"
             }
         }
     }
@@ -249,61 +403,6 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                 }
             }
 
-            // Markdown 目录抽屉（绝对定位；点击条目近似跳转）
-            vif({ ctx.tocVisible && ctx.mdOutline.isNotEmpty() }) {
-                View {
-                    attr {
-                        positionAbsolute(); left(0f); top(56f)
-                        width(pagerData.pageViewWidth)
-                        height(pagerData.pageViewHeight - 56f)
-                        backgroundColor(Color(0x99000000))
-                        flexDirectionColumn()
-                    }
-                    event { click { ctx.tocVisible = false } }
-                    View {
-                        attr {
-                            width(pagerData.pageViewWidth - 40f)
-                            margin(20f, 20f, 20f, 20f)
-                            backgroundColor(SftpColorTokens.cardBg)
-                            borderRadius(10f)
-                            padding(12f, 10f, 12f, 10f)
-                            flexDirectionColumn()
-                        }
-                        event { click { } }
-                        Text {
-                            attr {
-                                text("目录")
-                                fontSize(15f); fontWeightBold(); color(SftpColorTokens.textPrimary)
-                                marginBottom(6f)
-                            }
-                        }
-                        Scroller {
-                            attr { flex(1f); flexDirectionColumn() }
-                            ctx.mdOutline.forEachIndexed { oi, entry ->
-                                Text {
-                                    attr {
-                                        text(entry.second)
-                                        fontSize((13f - entry.first * 0.6f) * ctx.fontScale)
-                                        color(SftpColorTokens.textPrimary)
-                                        margin(6f, 6f, 6f, 6f)
-                                        marginLeft((entry.first - 1) * 10f + 6f)
-                                    }
-                                    event { click { ctx.jumpToOutline(oi) } }
-                                }
-                            }
-                        }
-                        Text {
-                            attr {
-                                text("关闭")
-                                fontSize(13f); color(SftpColorTokens.textSecondary)
-                                margin(6f, 6f, 6f, 6f)
-                            }
-                            event { click { ctx.tocVisible = false } }
-                        }
-                    }
-                }
-            }
-
             // 内容区
             View {
                 attr { flex(1f) }
@@ -324,6 +423,9 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                                 wrapProvider = { ctx.wrapLines },
                                 onToggleWrap = { ctx.wrapLines = !ctx.wrapLines },
                                 onScrollerReady = { ctx.readerScrollTo = it },
+                                dirtyProvider = { ctx.dirty },
+                                onSave = { ctx.save() },
+                                saveMsgProvider = { ctx.saveMsg },
                             ) {
                                 SftpTextViewer({ ctx.textLines }, { ctx.fontScale }, { ctx.wrapLines }, { ctx.textTruncated })
                             }
@@ -338,13 +440,24 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                                 tocCountProvider = { ctx.mdOutline.size },
                                 onToggleToc = { ctx.tocVisible = !ctx.tocVisible },
                                 onScrollerReady = { ctx.readerScrollTo = it },
+                                editingProvider = { ctx.editing },
+                                onToggleEditing = { ctx.toggleEditing() },
+                                dirtyProvider = { ctx.dirty },
+                                onSave = { ctx.save() },
+                                saveMsgProvider = { ctx.saveMsg },
                             ) {
                                 // 源码/预览分支必须用 vif/velse（结构层 if 不会被依赖收集 → 切换不生效）
                                 vif({ ctx.mdSourceView }) {
                                     SftpTextViewer({ ctx.textLines }, { ctx.fontScale }, { ctx.wrapLines }, { ctx.textTruncated })
                                 }
                                 velse {
-                                    SftpMarkdownViewer({ ctx.mdBlocks }, { ctx.fontScale }, { ctx.wrapLines }) { /* 链接暂不外跳 */ }
+                                    SftpMarkdownViewer(
+                                        { ctx.mdBlocks }, { ctx.fontScale }, { ctx.wrapLines },
+                                        onLink = { /* 链接暂不外跳 */ },
+                                        editingProvider = { ctx.editing },
+                                        editTargetProvider = { ctx.editTargetBlock },
+                                        onBlockTap = { ctx.onBlockTap(it) },
+                                    )
                                 }
                             }
                             ViewerKind.HTML -> SftpHtmlViewer(ctx.sessionId, ctx.remotePath, ctx.size)
@@ -366,6 +479,173 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                     }
                 }
             }
+            // 块编辑浮层：格式工具条（对齐 Vditor 工具栏）+ 编辑区 + 实时预览（即时渲染）
+            vif({ ctx.editTargetBlock >= 0 }) {
+                View {
+                    attr {
+                        positionAbsolute(); left(0f); top(0f)
+                        size(pagerData.pageViewWidth, pagerData.pageViewHeight)
+                        backgroundColor(Color(0x99000000))
+                        flexDirectionColumn()
+                        padding(14f, 14f, 14f, 14f)
+                    }
+                    View {
+                        attr {
+                            width(pagerData.pageViewWidth - 28f)
+                            flex(1f)
+                            backgroundColor(SftpColorTokens.cardBg)
+                            borderRadius(10f)
+                            padding(10f, 8f, 10f, 8f)
+                            flexDirectionColumn()
+                        }
+                        // 标题行
+                        View {
+                            attr { flexDirectionRow(); alignItemsCenter(); marginBottom(4f) }
+                            Text {
+                                attr {
+                                    text("编辑（第 ${ctx.editTargetBlock + 1} 块）· 输入即预览")
+                                    fontSize(12f); fontWeightBold(); color(SftpColorTokens.textPrimary)
+                                    flex(1f)
+                                }
+                            }
+                            Text {
+                                attr { text("取消"); fontSize(12f); color(SftpColorTokens.textSecondary); margin(6f, 6f, 6f, 6f) }
+                                event { click { ctx.cancelBlockEdit() } }
+                            }
+                            Text {
+                                // 注意：不要叫「完成」——工具条的编辑开关也叫完成，会撞名导致自动化点到开关
+                                attr { text("应用"); fontSize(12f); color(SftpColorTokens.primary); margin(6f, 6f, 6f, 6f) }
+                                event { click { ctx.applyBlockEdit() } }
+                            }
+                        }
+                        // 格式工具条（Vditor 样式的一排按钮）
+                        View {
+                            attr { flexDirectionRow(); alignItemsCenter(); flexWrapWrap() }
+                            MdFmtChip("H1") { ctx.applyFormat("h1") }
+                            MdFmtChip("H2") { ctx.applyFormat("h2") }
+                            MdFmtChip("H3") { ctx.applyFormat("h3") }
+                            MdFmtChip("B") { ctx.applyFormat("bold") }
+                            MdFmtChip("I") { ctx.applyFormat("italic") }
+                            MdFmtChip("S") { ctx.applyFormat("strike") }
+                            MdFmtChip("`") { ctx.applyFormat("code") }
+                            MdFmtChip("```") { ctx.applyFormat("codeblock") }
+                            MdFmtChip(">") { ctx.applyFormat("quote") }
+                            MdFmtChip("•") { ctx.applyFormat("ul") }
+                            MdFmtChip("1.") { ctx.applyFormat("ol") }
+                            MdFmtChip("☐") { ctx.applyFormat("task") }
+                            MdFmtChip("🔗") { ctx.applyFormat("link") }
+                            MdFmtChip("▦") { ctx.applyFormat("table") }
+                            MdFmtChip("―") { ctx.applyFormat("hr") }
+                        }
+                        // 编辑区
+                        TextArea {
+                            attr {
+                                text(ctx.editBuffer)
+                                height(120f)
+                                fontSize(12.5f)
+                                color(SftpColorTokens.textPrimary)
+                                backgroundColor(SftpColorTokens.bg)
+                                borderRadius(6f)
+                                placeholder("Markdown 源码…")
+                            }
+                            event { textDidChange { e -> ctx.onEditBufferChanged(e.text) } }
+                        }
+                        // 实时预览
+                        Text {
+                            attr {
+                                text("实时预览")
+                                fontSize(11f); color(SftpColorTokens.textSecondary)
+                                margin(6f, 0f, 6f, 2f)
+                            }
+                        }
+                        Scroller {
+                            attr { flex(1f); flexDirectionColumn(); backgroundColor(SftpColorTokens.bg); borderRadius(6f); padding(6f, 6f, 6f, 6f) }
+                            SftpMarkdownViewer(
+                                { ctx.editPreviewBlocks }, { ctx.fontScale }, { ctx.wrapLines },
+                                onLink = { },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 目录：二级弹窗（底部抽屉，独立滚动；条目点击后关闭并近似跳转）
+            vif({ ctx.tocVisible && ctx.mdOutline.isNotEmpty() }) {
+                View {
+                    attr {
+                        positionAbsolute(); left(0f); top(0f)
+                        size(pagerData.pageViewWidth, pagerData.pageViewHeight)
+                        backgroundColor(Color(0x88000000))
+                        flexDirectionColumn()
+                    }
+                    // 点击遮罩关闭
+                    event { click { ctx.tocVisible = false } }
+                    View { attr { flex(1f) } }
+                    // 弹窗主体：底部抽屉（固定高度、圆角、独立滚动）
+                    View {
+                        attr {
+                            width(pagerData.pageViewWidth)
+                            height(pagerData.pageViewHeight * 0.62f)
+                            backgroundColor(SftpColorTokens.cardBg)
+                            borderRadius(14f)
+                            flexDirectionColumn()
+                            padding(14f, 12f, 14f, 12f)
+                        }
+                        // 阻止穿透到遮罩
+                        event { click { } }
+                        // 头部
+                        View {
+                            attr { flexDirectionRow(); alignItemsCenter(); marginBottom(8f) }
+                            Text {
+                                attr {
+                                    text("目录 · ${ctx.mdOutline.size} 项")
+                                    fontSize(15f); fontWeightBold(); color(SftpColorTokens.textPrimary)
+                                    flex(1f)
+                                }
+                            }
+                            Text {
+                                attr { text("关闭"); fontSize(13f); color(SftpColorTokens.textSecondary); margin(6f, 6f, 6f, 6f) }
+                                event { click { ctx.tocVisible = false } }
+                            }
+                        }
+                        // 条目列表（独立滚动）
+                        Scroller {
+                            attr {
+                                flex(1f)
+                                width(pagerData.pageViewWidth - 28f)
+                                flexDirectionColumn()
+                                showScrollerIndicator(true)
+                            }
+                            ctx.mdOutline.forEachIndexed { oi, entry ->
+                                View {
+                                    attr {
+                                        width(pagerData.pageViewWidth - 36f)
+                                        padding(10f, 8f, 10f, 8f)
+                                        flexDirectionRow()
+                                        alignItemsCenter()
+                                    }
+                                    event { click { ctx.jumpToOutline(oi) } }
+                                    if (entry.first > 1) {
+                                        View { attr { width((entry.first - 1) * 14f); height(1f) } }
+                                    }
+                                    Text {
+                                        attr {
+                                            text(entry.second)
+                                            fontSize((14f - entry.first * 0.5f) * ctx.fontScale)
+                                            color(if (entry.first == 1) SftpColorTokens.textPrimary else SftpColorTokens.textSecondary)
+                                            flex(1f)
+                                            lines(2)
+                                        }
+                                    }
+                                    Text {
+                                        attr { text("›"); fontSize(14f); color(SftpColorTokens.textSecondary); marginLeft(6f) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -381,5 +661,22 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         const val PAGE_NAME = "SftpViewerDispatcherPage"
         /** Markdown 渲染块上限（超大文档只渲染前 N 块，避免卡死） */
         private const val MAX_MD_BLOCKS = 700
+        /** 保存时写入宿主/沙盒的临时文件名 */
+        private const val TMP_FILE_NAME = "kuikly_viewer_edit_tmp.md"
+    }
+}
+
+/** 浮层里的格式按钮（对齐 Vditor 工具条样式：小圆角胶囊） */
+private fun com.tencent.kuikly.core.base.ViewContainer<*, *>.MdFmtChip(label: String, onClick: () -> Unit) {
+    View {
+        attr {
+            backgroundColor(SftpColorTokens.bg)
+            borderRadius(5f)
+            padding(6f, 4f, 6f, 4f)
+            margin(2f, 2f, 2f, 2f)
+            allCenter()
+        }
+        event { click { onClick() } }
+        Text { attr { text(label); fontSize(11.5f); color(SftpColorTokens.textPrimary); lines(1) } }
     }
 }
