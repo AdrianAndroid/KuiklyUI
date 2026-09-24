@@ -180,6 +180,52 @@ ipcMain.handle('localfs:writeFile', async (_e, p, base64) => {
   return true;
 });
 
+/* ---- 独立播放窗口（可同时播放多个视频，互不影响主窗口浏览）---- */
+const playerWindows = new Set();
+const MAX_PLAYER_WINDOWS = 8;
+
+/** 以播放页 pageData 为 query 打开一个新的播放窗口；返回是否成功创建。 */
+function createPlayerWindow(playerQuery) {
+  if (playerWindows.size >= MAX_PLAYER_WINDOWS) {
+    console.warn('[electron] 播放窗口已达上限', MAX_PLAYER_WINDOWS);
+    return false;
+  }
+  const win = new BrowserWindow({
+    width: 1024,
+    height: 640,
+    minWidth: 420,
+    minHeight: 260,
+    title: 'Kuikly SFTP - 播放',
+    backgroundColor: '#000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: ['--gateway=' + gatewayUrl],
+    },
+  });
+  playerWindows.add(win);
+  win.on('closed', () => playerWindows.delete(win));
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  const query = { standalone: '1' };   // 标记独立窗口：只有它才允许「返回=关窗」
+  Object.keys(playerQuery || {}).forEach((k) => {
+    if (playerQuery[k] != null) query[k] = String(playerQuery[k]);
+  });
+  win.loadFile(path.join(RES_DIR, 'index.html'), { query });
+  return true;
+}
+
+ipcMain.handle('shell:open-player-window', async (_e, playerQuery) => createPlayerWindow(playerQuery));
+ipcMain.handle('shell:close-window', async (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return false;
+  w.close();
+  return true;
+});
+
 /* ---- 生命周期 ---- */
 app.whenReady().then(async () => {
   try {

@@ -28,6 +28,18 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 currentTimestamp(params)
             }
 
+            // 桌面壳（Electron preload 注入 window.kuiklyHost）：支持把播放页开成独立窗口
+            "supportsPlayerWindow" -> {
+                val ok = js("(typeof window !== 'undefined' && !!window.kuiklyHost && typeof window.kuiklyHost.openPlayerWindow === 'function')") as Boolean
+                if (ok) "{\"supported\":true}" else "{\"supported\":false}"
+            }
+
+            "openPlayerWindow" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                js("window.kuiklyHost.openPlayerWindow(q)")
+                Unit
+            }
+
             "dateFormatter" -> {
                 dateFormatter(params)
             }

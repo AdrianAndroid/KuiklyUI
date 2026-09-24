@@ -785,6 +785,21 @@ const favoritesModule = {
   },
 };
 
+/**
+ * 历史记录匹配：页面写入用的 id 是 SftpPlaybackRecord.buildId 的哈希，
+ * 与网关拼的 `connectionId::remotePath` 不同 → 依次按 id、拼接 id、(connectionId, remotePath) 匹配。
+ * 注意：模块方法是 `const fn = mod[method]; fn(params)` 调用的（this 为 undefined），故必须是模块级函数。
+ */
+function findHistoryIndex(arr, params) {
+  const wantId = params && params.id ? String(params.id) : '';
+  if (wantId) { const i = arr.findIndex((x) => String(x.id || '') === wantId); if (i >= 0) return i; }
+  const fallback = String((params && params.connectionId) || '') + '::' + String((params && params.remotePath) || '');
+  let i = arr.findIndex((x) => String(x.id || '') === fallback);
+  if (i >= 0) return i;
+  return arr.findIndex((x) => String(x.connectionId || '') === String((params && params.connectionId) || '')
+    && String(x.remotePath || '') === String((params && params.remotePath) || ''));
+}
+
 const historyModule = {
   async upsert(params) {
     const arr = loadArray(F_HISTORY);
@@ -798,9 +813,9 @@ const historyModule = {
     return { ok: true };
   },
   async get(params) {
-    const id = String(params.connectionId || '') + '::' + String(params.remotePath || '');
-    const found = loadArray(F_HISTORY).find((x) => x.id === id);
-    return found ? { record: found } : { ok: true };
+    const arr = loadArray(F_HISTORY);
+    const i = findHistoryIndex(arr, params);
+    return i >= 0 ? { record: arr[i] } : { ok: true };
   },
   async listByDirectory(params) {
     const parentOf = (p) => { const s = String(p || '').replace(/\/+$/, ''); const i = s.lastIndexOf('/'); return i <= 0 ? '/' : s.slice(0, i); };
@@ -823,8 +838,7 @@ const historyModule = {
   },
   async markCompleted(params) {
     const arr = loadArray(F_HISTORY);
-    const id = String(params.connectionId || '') + '::' + String(params.remotePath || '');
-    const idx = arr.findIndex((x) => x.id === id);
+    const idx = findHistoryIndex(arr, params);
     if (idx >= 0) arr[idx] = Object.assign({}, arr[idx], { completed: true, position: arr[idx].duration });
     saveArray(F_HISTORY, arr);
     return { ok: true };

@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('kuiklyHost', {
   notify: (payload) => ipcRenderer.invoke('host:notify', payload),
   // 只读信息：{ version, platform, gatewayUrl }
   getInfo: () => ipcRenderer.invoke('host:getInfo'),
+  // 独立播放窗口：query 即播放页 pageData（支持同时开多个窗口播放不同视频）
+  openPlayerWindow: (query) => ipcRenderer.invoke('shell:open-player-window', query),
+  // 关闭调用方所在的窗口（独立播放窗口的返回键走这里）
+  closeWindow: () => ipcRenderer.invoke('shell:close-window'),
 });
 
 // 本地文件系统（双栏「本地栏」用；仅限用户主目录之下）

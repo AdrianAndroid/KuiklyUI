@@ -102,6 +102,10 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             "readAssetFile" -> {
                 readAssetPath(params, callback)
             }
+            // 独立窗口播放仅桌面壳（Electron）支持；其它端返回 supported=false，业务侧回退页内路由
+            "supportsPlayerWindow" -> "{\"supported\":false}"
+            "openPlayerWindow" -> Unit
+
             else -> callback?.invoke(mapOf(
                 "code" to -1,
                 "message" to "方法不存在"

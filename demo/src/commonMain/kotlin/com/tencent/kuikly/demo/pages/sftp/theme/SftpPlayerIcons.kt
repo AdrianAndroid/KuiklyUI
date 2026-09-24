@@ -49,6 +49,9 @@ object SftpPlayerIcons {
         /** 下一集（对齐 mpv `playlist_next`，几何箭头） */
         const val NEXT_EPISODE = "│▶"
         /** 快退（对齐 mpv `skip_backward`） */
+        /// 从头播放（回到 0 并起播）
+        const val RESTART = "⏮"
+
         const val SKIP_BACKWARD = "◀◀"
         /** 快进（对齐 mpv `skip_forward`） */
         const val SKIP_FORWARD = "▶▶"

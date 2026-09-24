@@ -174,4 +174,17 @@
     });
 }
 
+
+#pragma mark - 独立窗口播放（桌面壳能力）
+
+/// 独立窗口播放仅桌面壳（Electron）支持；原生端返回 supported=false，
+/// Kotlin 侧（SftpPlayerLauncher）据此回退为页内路由。
+- (NSDictionary *)supportsPlayerWindow:(NSDictionary *)args {
+    return @{@"supported": @NO};
+}
+
+- (void)openPlayerWindow:(NSDictionary *)args {
+    // 原生端不提供独立窗口播放（业务侧不会走到这里）
+}
+
 @end

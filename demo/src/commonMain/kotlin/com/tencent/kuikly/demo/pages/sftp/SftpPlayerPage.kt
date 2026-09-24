@@ -185,11 +185,11 @@ internal class SftpPlayerPage : SftpBasePager() {
 
         // 2. 取播放历史
         sftpPlaybackHistoryModule().get(connectionId, remotePath) { record, _ ->
-            record?.let {
-                resumePosition = it.position
-                duration = it.duration.toInt()
-                hasResumePromptShown = it.position > 10_000L  // > 10s 才提示
-            }
+            // 每集独立判定：没有记录（或记录已播完）时必须复位，否则会沿用上一集的续播提示
+            val rec = record
+            resumePosition = rec?.position ?: 0L
+            hasResumePromptShown = (rec?.position ?: 0L) > 10_000L  // > 10s 才提示
+            if ((rec?.duration ?: 0L) > 0L) duration = rec!!.duration.toInt()
         }
     }
 
@@ -429,6 +429,23 @@ internal class SftpPlayerPage : SftpBasePager() {
                             attr {
                                 text(if (ctx.isPlaying) SftpPlayerIcons.Classic.PAUSE else SftpPlayerIcons.Classic.PLAY)
                                 fontSize(if (ctx.isPlaying) SftpPlayerTokens.BUTTON_ICON_FONT_SIZE else SftpPlayerTokens.PLAY_ICON_FONT_SIZE)
+                                color(SftpPlayerTokens.buttons)
+                            }
+                        }
+                    }
+                    // 从头播放（回到 0 并起播；清掉续播提示）
+                    View {
+                        attr {
+                            size(SftpPlayerTokens.BUTTON_W, SftpPlayerTokens.BUTTON_W)
+                            allCenter()
+                            marginLeft(6f)
+                            accessibility(SftpAccessibility.BTN_RESTART)
+                        }
+                        event { click { ctx.restartFromBeginning() } }
+                        Text {
+                            attr {
+                                text(SftpPlayerIcons.Classic.RESTART)
+                                fontSize(13f)
                                 color(SftpPlayerTokens.buttons)
                             }
                         }
@@ -687,13 +704,14 @@ internal class SftpPlayerPage : SftpBasePager() {
     /**
      * 进度条实际宽度（对齐 mpv seekbar 在 line2 中间，两侧有按钮/时间码）
      *
-     * line2 布局：play(44) + 6 + seekBack(40) + 6 + seekFwd(40) + 10 + tcLeft(64) + 10 + [seekbar] + 10 + tcRight(64) + 6 + mute(40)
-     * 固定部分 = 44+6+40+6+40+10+64+10 + 10+64+6+40 = 220 + 120 = 340
-     * seekbar 宽度 = pageWidth - 2*PAD_X - 340
+     * line2 布局：play(44) + 6 + restart(40) + 6 + seekBack(40) + 6 + seekFwd(40) + 10 + tcLeft(64) + 10 + [seekbar] + 10 + tcRight(64) + 6 + mute(40)
+     * 固定部分 = 44+6+40+6+40+6+40+10+64+10 + 10+64+6+40 = 380
+     * seekbar 宽度 = pageWidth - 2*PAD_X - 380
      */
     private fun seekbarWidth(): Float {
         val fixedLeft = SftpPlayerTokens.PLAY_BUTTON_SIZE + 6f + SftpPlayerTokens.BUTTON_W + 6f +
-                        SftpPlayerTokens.BUTTON_W + 10f + SftpPlayerTokens.TC_W + 10f
+                        SftpPlayerTokens.BUTTON_W + 6f + SftpPlayerTokens.BUTTON_W + 10f +
+                        SftpPlayerTokens.TC_W + 10f
         val fixedRight = 10f + SftpPlayerTokens.TC_W + 6f + SftpPlayerTokens.BUTTON_W
         return (pagerData.pageViewWidth - 2f * SftpPlayerTokens.PAD_X - fixedLeft - fixedRight).coerceAtLeast(0f)
     }
@@ -723,6 +741,15 @@ internal class SftpPlayerPage : SftpBasePager() {
             val target = (duration * dragRatio).toInt().coerceIn(0, duration)
             applySeek(target)
         }
+    }
+
+    /** 从头播放：清掉续播提示与记录、回到 0 并起播 */
+    private fun restartFromBeginning() {
+        hasResumePromptShown = false
+        resumePosition = 0L
+        draggingProgress = false
+        isPlaying = true
+        applySeek(0)
     }
 
     /** 显式跳转：更新显示位置 + 下发 seek（progress 回调不会走这里） */
@@ -812,6 +839,10 @@ internal class SftpPlayerPage : SftpBasePager() {
 
     private fun togglePlay() {
         isPlaying = !isPlaying   // 驱动 playControl(PLAY/PAUSE)
+        // 暂停即落一次历史：用户暂停后直接关窗也能续播（不必等 5s 周期）
+        if (!isPlaying && duration > 0 && currentPosition > 0) {
+            savePlaybackHistory(currentPosition.toLong(), duration.toLong(), false)
+        }
         showControls()
     }
 
@@ -886,6 +917,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         remotePath = episodes[index]
         name = remotePath.substringAfterLast('/')
         firstFrameShown = false
+        hasResumePromptShown = false
+        resumePosition = 0L
         // 切集等同于用户意图「播放」：isPlaying 在上一集播完/暂停时已被复位为 false，
         // 不置回 true 会导致新一集只加载不播放（用户反馈「切换了视频不能播放」）
         isPlaying = true
@@ -960,7 +993,8 @@ internal fun ViewContainer<*, *>.SftpResumePromptDialog(
             }
             Text {
                 attr {
-                    text("${I18n.t("sftp.player.resume_prompt")} ${formatTime(resumeMs)}")
+                    // I18n 文案里带 %s 占位符，必须替换（否则界面出现「上次看到 %s 00:12」）
+                    text(I18n.t("sftp.player.resume_prompt").replace("%s", formatTime(resumeMs)))
                     fontSize(14f)
                     color(SftpColorTokens.textSecondary)
                     marginBottom(20f)

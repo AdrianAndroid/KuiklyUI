@@ -27,6 +27,21 @@ internal class BridgeModule : Module() {
         return MODULE_NAME
     }
 
+    /**
+     * 桌面壳（Electron）：是否支持把播放页开成**独立窗口**（可同时播放多个视频）。
+     * 其它端实现返回 supported=false，业务侧自动回退为页内路由。
+     */
+    fun supportsPlayerWindow(): Boolean {
+        val res = syncToNativeMethod(SUPPORTS_PLAYER_WINDOW, JSONObject(), null)
+        return runCatching { JSONObject(res).optBoolean("supported", false) }
+            .getOrDefault(res.trim() == "true")
+    }
+
+    /** 桌面壳（Electron）：把播放页开成独立窗口。参数即播放页 pageData。 */
+    fun openPlayerWindow(playerParams: JSONObject) {
+        callNativeMethod(OPEN_PLAYER_WINDOW, playerParams, null)
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -177,6 +192,9 @@ internal class BridgeModule : Module() {
     }
 
     companion object {
+        const val SUPPORTS_PLAYER_WINDOW = "supportsPlayerWindow"
+        const val OPEN_PLAYER_WINDOW = "openPlayerWindow"
+
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"
         const val CLOSE_PAGE = "closePage"

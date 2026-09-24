@@ -150,7 +150,7 @@ internal class SftpFavoritesPage : SftpBasePager() {
             params.put("remotePath", favorite.remotePath)
             params.put("name", favorite.name)
             params.put("size", favorite.size)
-            acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPlayerPage.PAGE_NAME, params)
+            openPlayerPage(params)
         }
     }
 

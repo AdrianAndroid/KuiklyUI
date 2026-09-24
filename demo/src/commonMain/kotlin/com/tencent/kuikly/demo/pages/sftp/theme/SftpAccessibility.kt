@@ -33,6 +33,7 @@ object SftpAccessibility {
     const val BTN_SORT = "排序"
     const val BTN_FILTER = "过滤"
     const val BTN_PLAY = "播放"
+    const val BTN_RESTART = "从头播放"
     const val BTN_PAUSE = "暂停"
     const val BTN_FULLSCREEN = "全屏"
     const val BTN_SEEK_BACKWARD = "快退10秒"

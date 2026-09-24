@@ -129,7 +129,7 @@ internal class SftpHistoryPage : SftpBasePager() {
         params.put("remotePath", record.remotePath)
         params.put("name", record.name)
         params.put("size", record.size)
-        acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPlayerPage.PAGE_NAME, params)
+        openPlayerPage(params)
     }
 
     private fun clearAll() {

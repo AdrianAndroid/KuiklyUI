@@ -63,6 +63,14 @@ class KRRouterModule : KuiklyRenderBaseModule() {
      * Close page opened by click
      */
     private fun closePage() {
+        // 只有**独立窗口**（桌面壳开出来的播放窗口，URL 带 standalone=1）才关原生窗口；
+        // 主窗口的返回键必须保持页内回退，否则会误关整个应用窗口。
+        val standalone = js("(typeof window !== 'undefined' && /(?:^|[?&])standalone=1(?:&|$)/.test(window.location.search))") as Boolean
+        val hasShell = js("(typeof window !== 'undefined' && !!window.kuiklyHost && typeof window.kuiklyHost.closeWindow === 'function')") as Boolean
+        if (standalone && hasShell) {
+            js("window.kuiklyHost.closeWindow()")
+            return
+        }
         if (globalClosePageHandler?.invoke() == true) {
             return
         }

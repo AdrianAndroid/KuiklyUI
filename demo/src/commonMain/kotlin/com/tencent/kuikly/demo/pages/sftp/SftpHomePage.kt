@@ -268,8 +268,7 @@ internal class SftpHomePage : SftpBasePager() {
         } else {
             params.put("name", favorite.name)
             params.put("size", favorite.size)
-            acquireModule<RouterModule>(RouterModule.MODULE_NAME)
-                .openPage(SftpPlayerPage.PAGE_NAME, params)
+            openPlayerPage(params)
         }
     }
 
@@ -281,8 +280,7 @@ internal class SftpHomePage : SftpBasePager() {
         params.put("remotePath", record.remotePath)
         params.put("name", record.name)
         params.put("size", record.size)
-        acquireModule<RouterModule>(RouterModule.MODULE_NAME)
-            .openPage(SftpPlayerPage.PAGE_NAME, params)
+        openPlayerPage(params)
     }
 
     private fun onTabChange(newTab: Int) {
