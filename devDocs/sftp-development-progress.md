@@ -92,11 +92,11 @@
 
 | 能力 | Web/Electron | Android | iOS | macOS | MiniApp | OHOS |
 |---|---|---|---|---|---|---|
-| 远程终端 | ✅ xterm + 网关 shell | ✅ JSch `ChannelShell`（`KRTerminalModule`） | ❌ 待接 NMSSH pty | ❌ 待接 | ❌ 显式不支持 | ❌ 待接 libssh2 |
+| 远程终端 | ✅ xterm + 网关 shell | ✅ JSch `ChannelShell`（`KRTerminalModule`） | ✅ NMSSH shell（`KRTerminalModule`，resize no-op） | ✅ 同 iOS | ❌ 显式不支持 | ❌ 显式不支持（待 libssh2 pty） |
 | 本地终端 | ✅ 网关本地 pty | ❌ 无本地 shell（显式失败） | ❌ | ❌ | ❌ | ❌ |
-| 剪贴板复制路径 | ✅ | ✅ ClipboardManager | ✅ UIPasteboard | ✅ NSPasteboard | ❌ 显式不支持 | ❌ 待接 |
-| 目录/单文件缓存 | ✅ 网关直写 | ✅ 沙盒 `.kuikly_cache`（download 支持绝对路径） | ✅ Caches/.kuikly_cache | ✅ 同 iOS | ❌ 无宿主目录 | ❌ 待接 |
-| 清空缓存 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 剪贴板复制路径 | ✅ | ✅ ClipboardManager | ✅ UIPasteboard | ✅ NSPasteboard | ✅ wx.setClipboardData | ✅ pasteboard（ETS） |
+| 目录/单文件缓存 | ✅ 网关直写 | ✅ 沙盒 `.kuikly_cache`（download 支持绝对路径） | ✅ Caches/.kuikly_cache | ✅ 同 iOS | ❌ 无宿主目录 | ✅ cacheDir/.kuikly_cache（ETS） |
+| 清空缓存 | ✅ | ✅ | ✅ | ✅ | ❌ | ✅（ETS） |
 | 独立窗口播放 | ✅ | ❌ 回退页内 | ❌ 回退页内 | ❌ 回退页内 | ❌ | ❌ |
 | 双栏文件管理 | ✅（JS 页 + localFs） | ❌（JS 页，非原生） | ❌ | ❌ | ❌ | ❌ |
 
@@ -106,11 +106,13 @@
   已把「清空缓存」改为 `BridgeModule.clearCache()` 宿主能力，各端实现（Web 删 `<home>/.kuikly_cache`；Android/iOS/macOS 删沙盒缓存目录）。
 - `SftpHomePage`：远程终端入口不再限定 `isWebLike`（改由 `supportsTerminal()` 决定）；本地终端入口限定 Web/桌面（原生无本地 shell）。
 - Android：新增 `KRTerminalModule`（复用 `KRSftpClient` 会话的 JSch shell + pty，输出偏移轮询）、`clipboardSupported/copyToClipboard`、`cacheRoot/clearCache`；`KRSftpClient.download` 支持**绝对路径** localName（缓存落盘）。
-- iOS/macOS：`KRBridgeModule` 新增 `clipboardSupported/copyToClipboard/cacheRoot/clearCache/supportsXterm`。
-- MiniApp：`HRBridgeModule` 显式返回不支持/空（clipboard/terminal/cache 入口隐藏），绝不伪报。
+- iOS/macOS：新增 `KRTerminalModule`（复用 `KRSftpSession` 的 NMSSH 会话，`requestPty + startShell`，`NMSSHChannelDelegate` 原始字节累积 + 偏移拉取；pty resize 因 NMSSH 未公开 API 为 no-op），`supportsTerminal` 置 YES；`KRBridgeModule` 另加 `clipboard/cacheRoot/clearCache/supportsXterm`；**必须 `pod install`** 让新源文件进 Pod。
+- MiniApp：`copyToClipboard` 走 `NativeApi.plat.setClipboardData`（wx）；无本地目录/终端底座 → `cacheRoot=""`、`supportsTerminal=false`（入口隐藏，绝不伪报）。
+- OHOS：`KRBridgeModule.ets` 新增 `supportsXterm/SUPPORTS_TERMINAL(false)/clipboardSupported/copyToClipboard(pasteboard)/cacheRoot(cacheDir)/clearCache`，`syncMode=true`
+  （⚠️ **ETS 未在本机编译**：需要 DevEco/hvigor；C++ 未改动）。终端仍显式不支持（同会话并发需专门处理，见待办）。
 - 编译结果：**Android `assembleDebug` ✅ / iOS `xcodebuild` ✅ / macOS `xcodebuild` ✅ / `:demo`+`:h5App`+`:miniApp` JS ✅**。
 - Electron 用例：`features 25/25`、`smoke 22/22`、`term 7/7`（S9l 在无自动化权限时用 CDP `Emulation` 改视口回退，仍验证同一条 resize 链路）。
-- 仍待办：iOS/macOS/OHOS 的**终端**（NMSSH / libssh2 pty）；OHOS 剪贴板/缓存；MiniApp 剪贴板（需 wx 渲染层公开接口）；原生端双栏本地栏（本地文件 Module）。
+- **仍待办**：**OHOS 终端**（libssh2 shell，需处理同会话并发/非阻塞读取 → 建议为终端单开一条 SSH 连接；并需 DevEco 构建验证 ETS+C++）；MiniApp 缓存/终端无底座（sandbox 限制）；原生端双栏本地栏（需各端本地文件 Module）。
 
 ---
 

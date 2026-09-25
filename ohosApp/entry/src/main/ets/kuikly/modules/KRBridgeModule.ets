@@ -19,6 +19,7 @@ import { window } from '@kit.ArkUI';
 import { KRAny, KuiklyRenderBaseModule, KuiklyRenderCallback } from '@kuikly-open/render';
 import util from '@ohos.util';
 import fs from '@ohos.file.fs';
+import pasteboard from '@ohos.pasteboard';
 import { fileUri } from '@kit.CoreFileKit';
 // import { KRNetworkCacheUtil } from '@kuikly-open/render';
 
@@ -39,9 +40,17 @@ export class KRBridgeModule extends KuiklyRenderBaseModule {
   static readonly READ_ASSET_FILE_SYNC = 'readAssetFileSync';
   static readonly GET_LOCAL_IMAGE_PATH = 'getLocalImagePath';
   static readonly REQUEST_ORIENTATION = 'requestOrientation';
+  // 跨端统一能力（与 Android/iOS/macOS/Web 对齐）
+  static readonly SUPPORTS_PLAYER_WINDOW = 'supportsPlayerWindow';
+  static readonly SUPPORTS_XTERM = 'supportsXterm';
+  static readonly SUPPORTS_TERMINAL = 'supportsTerminal';
+  static readonly CLIPBOARD_SUPPORTED = 'clipboardSupported';
+  static readonly COPY_TO_CLIPBOARD = 'copyToClipboard';
+  static readonly CACHE_ROOT = 'cacheRoot';
+  static readonly CLEAR_CACHE = 'clearCache';
 
   syncMode(): boolean {
-    return false;
+    return true;
   }
 
   call(method: string, params: KRAny, callback: KuiklyRenderCallback): KRAny {
@@ -103,6 +112,30 @@ export class KRBridgeModule extends KuiklyRenderBaseModule {
         this.requestOrientation(params);
         break;
       }
+      case KRBridgeModule.SUPPORTS_PLAYER_WINDOW: {
+        return '{"supported":false}';
+      }
+      case KRBridgeModule.SUPPORTS_XTERM: {
+        return '{"supported":false}';
+      }
+      case KRBridgeModule.SUPPORTS_TERMINAL: {
+        // 终端待接入 libssh2 shell（同会话并发需专门处理）；当前显式不支持，入口隐藏
+        return '{"supported":false}';
+      }
+      case KRBridgeModule.CLIPBOARD_SUPPORTED: {
+        return '{"supported":true}';
+      }
+      case KRBridgeModule.COPY_TO_CLIPBOARD: {
+        this.copyToClipboard(params);
+        break;
+      }
+      case KRBridgeModule.CACHE_ROOT: {
+        return this.cacheRoot();
+      }
+      case KRBridgeModule.CLEAR_CACHE: {
+        this.clearCache();
+        break;
+      }
       default:
         break;
     }
@@ -122,6 +155,45 @@ export class KRBridgeModule extends KuiklyRenderBaseModule {
 
   // TODO copy to paste board
   private copyToPasteboard() {
+  }
+
+  /** 复制文本到系统剪贴板（params.text） */
+  private copyToClipboard(params: KRAny) {
+    try {
+      let records = JSON.parse(params as string) as Record<string, string>;
+      const text = records['text'] ? records['text'] : '';
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      pasteboard.getSystemPasteboard().setDataSync(data);
+    } catch (e) {
+      console.error(`KuiklyRender copyToClipboard failed: ${e}`);
+    }
+  }
+
+  /** 缓存根目录：应用 cacheDir 下的 .kuikly_cache（缓存下载落盘根） */
+  private cacheRoot(): string {
+    try {
+      const ctx = getContext() as common.UIAbilityContext;
+      const dir = ctx.cacheDir + '/.kuikly_cache';
+      try {
+        fs.mkdirSync(dir);
+      } catch (e) {
+        // 已存在则忽略
+      }
+      return JSON.stringify({ path: dir });
+    } catch (e) {
+      console.error(`KuiklyRender cacheRoot failed: ${e}`);
+      return '{"path":""}';
+    }
+  }
+
+  /** 清空缓存目录 */
+  private clearCache() {
+    try {
+      const ctx = getContext() as common.UIAbilityContext;
+      fs.rmdirSync(ctx.cacheDir + '/.kuikly_cache');
+    } catch (e) {
+      // 目录不存在或无权限 → 忽略
+    }
   }
 
   // TODO open toast

@@ -36,10 +36,16 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             "supportsPlayerWindow" -> "{\"supported\":false}"
             "supportsXterm" -> "{\"supported\":false}"
             "supportsTerminal" -> "{\"supported\":false}"
-            // 剪贴板：小程序需走 wx.setClipboardData（渲染层 KRWXClipboardModule，internal 不可跨模块调用）
-            // → 本桥不实现，显式不支持，入口隐藏（绝不伪报成功）
-            "clipboardSupported" -> "{\"supported\":false}"
-            "copyToClipboard" -> Unit
+            // 剪贴板：小程序走 wx.setClipboardData（NativeApi.plat 即宿主 wx 对象，dynamic 调用）
+            "clipboardSupported" -> "{\"supported\":true}"
+            "copyToClipboard" -> {
+                try {
+                    val text = JSONObject(params ?: "{}").optString("text")
+                    NativeApi.plat.setClipboardData(json("data" to text))
+                } catch (e: Throwable) {
+                    Log.error("copyToClipboard failed: $e")
+                }
+            }
             // 缓存根目录：小程序无宿主本地目录 → 返回空（缓存入口隐藏）
             "cacheRoot" -> "{\"path\":\"\"}"
             "clearCache" -> Unit

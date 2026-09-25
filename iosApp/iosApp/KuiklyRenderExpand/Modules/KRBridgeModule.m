@@ -190,9 +190,9 @@
 
 #pragma mark - 终端能力（待接入 libssh2 pty）
 
-/// 原生端终端能力：接入 libssh2 channel + pty 后改为返回 YES，页面即显示终端入口。
+/// 远程终端已接入（KRTerminalModule，复用 NMSSH 会话 shell）；本地终端不支持
 - (NSDictionary *)supportsTerminal:(NSDictionary *)args {
-    return @{@"supported": @NO};
+    return @{@"supported": @YES};
 }
 
 #pragma mark - 剪贴板 / 缓存 / xterm（跨端统一能力）
