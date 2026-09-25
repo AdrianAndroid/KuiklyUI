@@ -41,6 +41,14 @@ struct SessionHandle {
     std::string home;
     std::recursive_mutex io;
     bool broken = false;
+    // 连接凭据（供终端另开一条独立 SSH 连接复用；见 KRTerminalModule）
+    std::string host;
+    int port = 22;
+    std::string user;
+    std::string password;
+    std::string privateKey;
+    std::string passphrase;
+    int connectTimeoutSec = 10;
 };
 
 using SessionPtr = std::shared_ptr<SessionHandle>;

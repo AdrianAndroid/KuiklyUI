@@ -124,6 +124,7 @@ set(SOURCE_SET
         libohos_render/expand/modules/sftp/KRSftpConnectionModule.cpp
         libohos_render/expand/modules/sftp/KRSftpFavoritesModule.cpp
         libohos_render/expand/modules/sftp/KRSftpPlaybackHistoryModule.cpp
+        libohos_render/expand/modules/sftp/KRTerminalModule.cpp
 )
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/extra.cmake" OPTIONAL)

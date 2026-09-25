@@ -34,6 +34,7 @@
 #include "libohos_render/expand/modules/sftp/KRSftpFavoritesModule.h"
 #include "libohos_render/expand/modules/sftp/KRSftpPlaybackHistoryModule.h"
 #include "libohos_render/expand/modules/sftp/KRSftpConnectionModule.h"
+#include "libohos_render/expand/modules/sftp/KRTerminalModule.h"
 #include "libohos_render/core/KRRenderFactories.h"
 #include "libohos_render/export/IKRRenderModuleExport.h"
 
@@ -98,6 +99,9 @@ static void ModulesRegisterEntry() {
     });
     IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRSftpConnectionModule::MODULE_NAME, [] {
         return std::make_shared<kuikly::module::KRSftpConnectionModule>();
+    });
+    IKRRenderModuleExport::RegisterModuleCreator(kuikly::module::KRTerminalModule::MODULE_NAME, [] {
+        return std::make_shared<kuikly::module::KRTerminalModule>();
     });
 
     kuikly::features::RegisterFeatureModules();

@@ -119,8 +119,8 @@ export class KRBridgeModule extends KuiklyRenderBaseModule {
         return '{"supported":false}';
       }
       case KRBridgeModule.SUPPORTS_TERMINAL: {
-        // 终端待接入 libssh2 shell（同会话并发需专门处理）；当前显式不支持，入口隐藏
-        return '{"supported":false}';
+        // 远程终端已接入（C++ KRTerminalModule：复用连接凭据单开 SSH 连接 + shell/pty）
+        return '{"supported":true}';
       }
       case KRBridgeModule.CLIPBOARD_SUPPORTED: {
         return '{"supported":true}';

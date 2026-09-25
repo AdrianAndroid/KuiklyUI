@@ -92,7 +92,7 @@
 
 | 能力 | Web/Electron | Android | iOS | macOS | MiniApp | OHOS |
 |---|---|---|---|---|---|---|
-| 远程终端 | ✅ xterm + 网关 shell | ✅ JSch `ChannelShell`（`KRTerminalModule`） | ✅ NMSSH shell（`KRTerminalModule`，resize no-op） | ✅ 同 iOS | ❌ 显式不支持 | ❌ 显式不支持（待 libssh2 pty） |
+| 远程终端 | ✅ xterm + 网关 shell | ✅ JSch `ChannelShell`（`KRTerminalModule`） | ✅ NMSSH shell（`KRTerminalModule`，resize no-op） | ✅ 同 iOS | ❌ 显式不支持 | ✅ libssh2 shell（C++，单开独立 SSH 连接 + pty） |
 | 本地终端 | ✅ 网关本地 pty | ❌ 无本地 shell（显式失败） | ❌ | ❌ | ❌ | ❌ |
 | 剪贴板复制路径 | ✅ | ✅ ClipboardManager | ✅ UIPasteboard | ✅ NSPasteboard | ✅ wx.setClipboardData | ✅ pasteboard（ETS） |
 | 目录/单文件缓存 | ✅ 网关直写 | ✅ 沙盒 `.kuikly_cache`（download 支持绝对路径） | ✅ Caches/.kuikly_cache | ✅ 同 iOS | ❌ 无宿主目录 | ✅ cacheDir/.kuikly_cache（ETS） |
@@ -108,11 +108,11 @@
 - Android：新增 `KRTerminalModule`（复用 `KRSftpClient` 会话的 JSch shell + pty，输出偏移轮询）、`clipboardSupported/copyToClipboard`、`cacheRoot/clearCache`；`KRSftpClient.download` 支持**绝对路径** localName（缓存落盘）。
 - iOS/macOS：新增 `KRTerminalModule`（复用 `KRSftpSession` 的 NMSSH 会话，`requestPty + startShell`，`NMSSHChannelDelegate` 原始字节累积 + 偏移拉取；pty resize 因 NMSSH 未公开 API 为 no-op），`supportsTerminal` 置 YES；`KRBridgeModule` 另加 `clipboard/cacheRoot/clearCache/supportsXterm`；**必须 `pod install`** 让新源文件进 Pod。
 - MiniApp：`copyToClipboard` 走 `NativeApi.plat.setClipboardData`（wx）；无本地目录/终端底座 → `cacheRoot=""`、`supportsTerminal=false`（入口隐藏，绝不伪报）。
-- OHOS：`KRBridgeModule.ets` 新增 `supportsXterm/SUPPORTS_TERMINAL(false)/clipboardSupported/copyToClipboard(pasteboard)/cacheRoot(cacheDir)/clearCache`，`syncMode=true`
-  （⚠️ **ETS 未在本机编译**：需要 DevEco/hvigor；C++ 未改动）。终端仍显式不支持（同会话并发需专门处理，见待办）。
-- 编译结果：**Android `assembleDebug` ✅ / iOS `xcodebuild` ✅ / macOS `xcodebuild` ✅ / `:demo`+`:h5App`+`:miniApp` JS ✅**。
+- OHOS：`KRBridgeModule.ets` 新增 `supportsXterm/SUPPORTS_TERMINAL(true)/clipboardSupported/copyToClipboard(pasteboard)/cacheRoot(cacheDir)/clearCache`，`syncMode=true`
+  （⚠️ **ETS 未在本机编译**：需要 DevEco/hvigor）；新增 C++ `KRTerminalModule`（复用 `KRSftpSession` 保存的凭据**单开一条独立 SSH 连接** + `openssh` shell/pty，读取线程阻塞式读取、输出偏移拉取；`libkuikly.so` **CMake 编译通过**）。
+- 编译结果：**Android `assembleDebug` ✅ / iOS `xcodebuild` ✅ / macOS `xcodebuild` ✅ / OHOS 渲染器 CMake `libkuikly.so` ✅ / `:demo`+`:h5App`+`:miniApp` JS ✅**（OHOS 的 ETS 需 DevEco 编译，本机未验）。
 - Electron 用例：`features 25/25`、`smoke 22/22`、`term 7/7`（S9l 在无自动化权限时用 CDP `Emulation` 改视口回退，仍验证同一条 resize 链路）。
-- **仍待办**：**OHOS 终端**（libssh2 shell，需处理同会话并发/非阻塞读取 → 建议为终端单开一条 SSH 连接；并需 DevEco 构建验证 ETS+C++）；MiniApp 缓存/终端无底座（sandbox 限制）；原生端双栏本地栏（需各端本地文件 Module）。
+- **仍待办**：MiniApp 缓存/终端无底座（sandbox 无原始 socket/本地目录）；原生端双栏本地栏（需各端本地文件 Module）；OHOS ETS 需在 DevEco 内编译验证。
 
 ---
 

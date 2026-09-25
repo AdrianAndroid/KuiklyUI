@@ -622,6 +622,14 @@ std::string KRSftpSession::Connect(const KRAnyValue &params) {
     char homeBuf[1024];
     int homeLen = libssh2_sftp_realpath(handle->sftp, ".", homeBuf, sizeof(homeBuf) - 1);
     handle->home = (homeLen > 0) ? std::string(homeBuf, static_cast<size_t>(homeLen)) : "/";
+    // 记录凭据：终端（KRTerminalModule）另开独立 SSH 连接时复用
+    handle->host = host;
+    handle->port = port;
+    handle->user = user;
+    handle->password = password;
+    handle->privateKey = privateKey;
+    handle->passphrase = passphrase;
+    handle->connectTimeoutSec = connectTimeoutSec;
 
     std::string sessionId;
     {
