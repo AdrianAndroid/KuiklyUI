@@ -48,20 +48,7 @@ fun main() {
 
     KuiklyRouter.fallbackDelegator = delegator
 
-    // 窗口尺寸变化时更新根视图尺寸。只在尺寸真的变化时下发，避免与拖动手势互相干扰。
-    // （不用 Kuikly 的 autoUpdateRootViewSizeOnResize：它基于 ResizeObserver，
-    //   会在手势/内容变化时也可能触发重排。）
-    var lastW = window.innerWidth
-    var lastH = window.innerHeight
-    window.addEventListener("resize", {
-        val w = window.innerWidth
-        val h = window.innerHeight
-        if (w != lastW || h != lastH) {
-            lastW = w
-            lastH = h
-            delegator.updateRootViewSize(w, h)
-        }
-    })
+    // 窗口 resize 监听已统一在 installHostEventBridges() 安装（SPA 也生效），此处不再重复安装。
 
     // modify image cdn
 //    KuiklyProcessor.imageProcessor = CustomImageProcessor
@@ -152,6 +139,21 @@ private fun installHostEventBridges() {
             if (key.isNotEmpty()) {
                 KuiklyRouter.sendEventToCurrentPage("sftp_player_key", mapOf("key" to key))
             }
+        }
+    })
+
+    // 窗口尺寸变化 → 下发 rootViewSizeDidChanged（SPA 与非 SPA 都生效）。
+    // 必须在这里安装：main() 在 SPA 模式会提前 return，之前的监听装在 return 之后 → 桌面端永不生效，
+    // 表现为「缩放窗口后视频/布局不跟随」。
+    var lastW = window.innerWidth
+    var lastH = window.innerHeight
+    window.addEventListener("resize", {
+        val w = window.innerWidth
+        val h = window.innerHeight
+        if (w != lastW || h != lastH) {
+            lastW = w
+            lastH = h
+            KuiklyRouter.updateRootViewSizeForActive(w, h)
         }
     })
 }

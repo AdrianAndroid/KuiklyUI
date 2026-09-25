@@ -575,12 +575,21 @@ abstract class Pager : ComposeView<ComposeAttr, ComposeEvent>(), IPager {
         if (safeAreaInsetsString.isNotEmpty()) {
             pageData.safeAreaInsets = EdgeInsets.decodeWithString(safeAreaInsetsString)
         }
+        val oldWidth = pageData.pageViewWidth
+        val oldHeight = pageData.pageViewHeight
         pageData.updateRootViewSize(data, width, height)
         setupRootViewSizeStyle()
+        // 尺寸真的变化时也必须重排（不能只在 densityInfo 非空时）：否则宿主窗口 resize 后
+        // pageViewWidth/Height 已更新，但根节点未 markDirty，视图（如视频尺寸）不会跟随。
+        val sizeChanged = pageData.pageViewWidth != oldWidth || pageData.pageViewHeight != oldHeight
         if(densityInfo.isNotEmpty()) {
             val info = JSONObject(densityInfo)
             val newDensity = info.optDouble(DENSITY_INFO_KEY_NEW_DENSITY)
             pageData.density = newDensity.toFloat()
+            flexNode.markDirty()
+            markChildTextViewsDirty()
+            layoutIfNeed()
+        } else if (sizeChanged) {
             flexNode.markDirty()
             markChildTextViewsDirty()
             layoutIfNeed()

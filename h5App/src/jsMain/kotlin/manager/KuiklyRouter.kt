@@ -74,6 +74,26 @@ object KuiklyRouter {
     }
 
     /**
+     * 窗口尺寸变化：把新尺寸下发给当前页面。
+     * SPA 模式取 pageCache[currentKey]（**不能只更新 fallback**，SPA 下 fallback 为 null）；
+     * 非 SPA 取 fallbackDelegator。返回是否已下发。
+     */
+    fun updateRootViewSizeForActive(width: Int, height: Int): Boolean {
+        val page = pageCache[currentKey]
+        if (page != null && !page.isDestroyed) {
+            page.delegator.updateRootViewSize(width, height)
+            return true
+        }
+        // 缓存里没有 currentKey 时（首次渲染中），退而更新所有存活页面
+        var any = false
+        for (p in pageCache.values) {
+            if (!p.isDestroyed) { p.delegator.updateRootViewSize(width, height); any = true }
+        }
+        if (!any) { fallbackDelegator?.updateRootViewSize(width, height); any = fallbackDelegator != null }
+        return any
+    }
+
+    /**
      * Try to hijack the entry point.
      * Returns true if Router took over (SPA mode active), false otherwise.
      */

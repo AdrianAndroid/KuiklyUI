@@ -761,9 +761,13 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   播放历史每 5s + 暂停时 + `pageWillDestroy` 落盘，重开时 >10s 弹「继续播放？」。
   ⚠️ 网关 `history.get/markCompleted` 必须按**与写入同一 id 规则**匹配（页面写入用 `buildId` 哈希 id，
   网关此前按 `connectionId::remotePath` 查 → 永远查不到，表现为「进度存了但从不弹续播」）；用例 S9k。
-- **已知问题（框架级，暂未修）**：Web/桌面**根视图 resize 链路失效** —— 实测窗口/视口尺寸已变，
-  但 `KuiklyRenderView.updateRootViewSize` 从未被调用；且 core `handlePagerViewSizeDidChanged` 仅在带
-  `densityInfo` 时才 `markDirty/layoutIfNeed`。后果：**缩放窗口后视频区不跟随**（用例 S9l 以 SKIP 记录证据）。
+- **窗口 resize 链路（已修复，2026-09）**：此前 Web/桌面缩放窗口后视频区不跟随（用例 S9l SKIP）。根因有两个：
+  ① `h5App/Main.kt` 的 `window.resize` 监听装在 `KuiklyRouter.handleEntry()` 提前 `return` **之后**，
+  SPA 模式下永不安装 → `updateRootViewSize` 从不被调用；
+  ② core `handlePagerViewSizeDidChanged` 仅在带 `densityInfo` 时才 `markDirty/layoutIfNeed`，纯尺寸变化不重排。
+  修复：把 resize 监听移入 `installHostEventBridges()`（SPA 也生效），经 `KuiklyRouter.updateRootViewSizeForActive`
+  下发；core 在 `pageViewWidth/Height` 变化时也 `markDirty()+markChildTextViewsDirty()+layoutIfNeed()`。
+  回归：`npm test` 的 **S9l 通过**（`video 宽 1180 → 760 → 1180`，视口同步变化）。
   修复方向：让宿主 resizing 走到 Pager 并触发重排（或事件通道通知当前页自适配）。
 - **Web 播放器三个坑（2026-09，均已修 + 已有自动化用例）**：
   1. **Web `KRVideoView` 曾未实现 `seekTo`** → 桌面端**所有** seek 无效（拖动看着在动、视频不跳；键盘 seek 也只是"片尾归零"的假通过）。
