@@ -109,6 +109,11 @@ setTimeout(() => {
       const waitText = async (pred, ms = 40000) => { const t0 = Date.now(); let t = await ev('document.body.innerText'); while (!pred(String(t || '')) && Date.now() - t0 < ms) { await sleep(500); t = await ev('document.body.innerText'); } return String(t || ''); };
       const text = await waitText((t) => t.includes('SFTP 客户端'));
       check('S3 首页渲染(SFTP 客户端)', text.includes('SFTP 客户端'), 'len=' + text.length + (text ? '' : ' | readyState=' + (await ev('document.readyState'))));
+      // S3b 首帧非空白（#root 内容高度 > 0 + 首页已渲染）：防「打包态首帧 #root 高 0 → 窗口空白」回归
+      // 只断言稳定信号（根高度 + 「历史」Tab）；「本地文件管理」面板在连接加载后才渲染，不作硬断言
+      const paint = String(await ev("(()=>{const r=document.querySelector('#root');const c=r&&r.firstElementChild&&r.firstElementChild.firstElementChild;const h=c?Math.round(c.getBoundingClientRect().height):0;return h+'|'+document.body.innerText.includes('本地文件管理')+'|'+document.body.innerText.includes('历史');})()"));
+      const [paintH, hasLocal, hasHist] = paint.split('|');
+      check('S3b 首帧非空白（根内容高度>0 + 首页已渲染）', Number(paintH) > 100 && hasHist === 'true', `rootH=${paintH} 历史Tab=${hasHist} 本地入口=${hasLocal}`);
       const gw = await ev('window.__SFTP_GATEWAY_URL__');
       check('S4 注入网关地址', /^http:\/\/127\.0\.0\.1:\d+$/.test(String(gw)), String(gw));
       const benignErr = (t) => /AbortError|play\(\) request was interrupted|NotAllowedError/i.test(String(t));
@@ -366,8 +371,9 @@ setTimeout(() => {
         await sleep(3000);
         afterContinue = await videoState();
       }
+      // 断言按「语义」而非固定秒数：只要记录位置 >10s（续播弹窗的触发阈值）且继续后确实前进即可
       check('S9k 播放进度记录 → 重开出现续播弹窗并可跳到记录位置',
-        recorded >= 12 && resumed && !!afterContinue && afterContinue.t >= 8 && afterContinue.err === 0,
+        recorded > 10 && resumed && !!afterContinue && afterContinue.t >= 8 && afterContinue.err === 0,
         `记录位置≈${recorded.toFixed(1)}s 弹窗=${resumed} 继续后=${afterContinue ? afterContinue.t : '-'}s err=${afterContinue ? afterContinue.err : '-'}`);
 
       // S9l 视频随窗口自适应：真实改变**窗口**大小 → video 元素尺寸随之变化（可见）
@@ -388,16 +394,9 @@ setTimeout(() => {
       const w2 = await sizeOf();
       const vp2 = await vp();
       const follows = w0 > 0 && w1 > 0 && Math.abs(w1 - 760) < 120 && w1 !== w0;
-      if (follows) {
-        check('S9l 视频随窗口自适应（改窗口大小→video 尺寸跟着变）', true,
-          `video 宽: ${w0} -> ${w1} -> ${w2} | 视口: ${vp0} -> ${vp1} -> ${vp2}`);
-      } else {
-        // 已知问题（框架级）：Web 端根视图 resize 链路失效 —— 视口确实变了，但 Pager 从不重排。
-        // 已定位：KuiklyRenderView.updateRootViewSize 未被调用；且 core handlePagerViewSizeDidChanged
-        // 仅在带 densityInfo 时才 markDirty/layoutIfNeed。待修，故此处 SKIP 并留证据。
-        skip('S9l 视频随窗口自适应（已知问题：Web 根视图 resize 链路失效，video 不跟随）',
-          `video 宽 ${w0} -> ${w1} -> ${w2}；视口确实变了 ${vp0} -> ${vp1} -> ${vp2}（osascript ok=${resized1}/${resized2}）`);
-      }
+      // 窗口 resize 链路已修复（h5App 在 SPA 前安装监听 + core 尺寸变化即重排），此处为硬断言
+      check('S9l 视频随窗口自适应（改窗口大小→video 尺寸跟着变）', follows,
+        `video 宽: ${w0} -> ${w1} -> ${w2} | 视口: ${vp0} -> ${vp1} -> ${vp2}（osascript ok=${resized1}/${resized2}）`);
 
       check('S10 功能验证后仍无 JS 异常', realErrs().length === 0, realErrs().slice(0, 2).join(';') || `(已忽略媒体告警 ${errs.length} 条)`);
 

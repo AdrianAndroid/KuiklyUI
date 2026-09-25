@@ -198,12 +198,13 @@ const waitFor = async (fn, ms, step = 500) => {
       check('F5 点收藏（目录）→ 打开浏览页', !!opened, `opened=${!!opened}`);
     }
 
-    // F9 终端命令历史：先给应用网关预置「本机」凭据（否则新 profile 会停在登录弹窗）
-    const seeded = await main.ev("(async()=>{const u=window.__SFTP_GATEWAY_URL__;const c=new AbortController();const t=setTimeout(()=>c.abort(),8000);try{const post=(m,p)=>fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({module:'connection',method:m,params:p}),signal:c.signal}).then(r=>r.json());const l0=await post('list',{});const has=(l0.items||[]).some(x=>x.host==='127.0.0.1');if(!has)await post('add',{label:'本机',host:'127.0.0.1',port:22,user:'zhaojian',password:'flannery',authMethod:'PASSWORD'});const l1=await post('list',{});return ((l1.items||[]).some(x=>x.host==='127.0.0.1'))?'seeded':'failed';}catch(e){return 'failed';}finally{clearTimeout(t);}})()", true);
-    console.log('      [info] 本机凭据预置=' + seeded);
+    // F9/F9b 终端「历史」按钮：预置到测试服务器的连接，走**远程终端**
+    // （原实现依赖本机 SSH + 硬编码密码 'flannery'，环境相关、不合理 → 已移除）
+    await pageRpc('connection', 'add', { label: 'FeatSrv', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
     await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
-    await waitFor(async () => (await main.body()).includes('>_'), 30000, 800);
-    const ce = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>o.e.textContent&&o.e.textContent.trim()==='>_'&&o.r.width>0);if(!a.length)return null;a.sort((p,q)=>p.r.top-q.r.top);const r=a[0].e.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+    await waitFor(async () => { const t = await main.body(); return (t.includes('>_') && t.includes(HOST)) ? t : null; }, 30000, 800);
+    // 点「含该主机名的连接行」右侧的 >_（不要点到本地终端格）
+    const ce = await main.ev("(()=>{const all=[...document.querySelectorAll('*')];const btns=all.filter(e=>(e.textContent||'').trim()==='>_'&&e.getBoundingClientRect().width>0);for(const el of btns){let p=el.parentElement;for(let i=0;i<8&&p;i++){if((p.textContent||'').includes(" + JSON.stringify(HOST) + ")){const r=el.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});}p=p.parentElement;}}return null;})()");
     if (ce) {
       const p0 = JSON.parse(ce);
       await main.mouse('mouseMoved', p0.x, p0.y, 0); await sleep(120);
@@ -228,8 +229,7 @@ const waitFor = async (fn, ms, step = 500) => {
         await term.clickText('历史');
         const histOpen = await waitFor(async () => { const t = await term.body(); return t.includes('命令历史') ? t : null; }, 8000, 500);
         const histHas = !!histOpen && histOpen.includes('KH_');
-        // 执行结果（KH_42）在 test:term T4 已有稳定断言；此处 F9 专注「历史按钮记录+回填」
-        check('F9 终端：「历史」按钮记录真实输入的命令', !!ready && typed && histHas, `就绪=${!!ready} 执行=${ran} 历史含命令=${histHas}`);
+        check('F9 终端：远程真实回车执行 + 「历史」记录', !!ready && typed && ran && histHas, `就绪=${!!ready} 执行=${ran} 历史含命令=${histHas}`);
         if (histHas) {
           await term.clickText(CMD);
           const filled = await waitFor(async () => { const v = String(await term.ev("(()=>{const els=[...document.querySelectorAll('input')];return els.length?els[els.length-1].value:'';})()")); return v.includes('KH_') ? v : null; }, 8000, 500);
@@ -240,7 +240,7 @@ const waitFor = async (fn, ms, step = 500) => {
         await sleep(500);
         term.close();
       } else {
-        skip('F9 终端历史（终端窗口未打开）', '已在 test:term 覆盖终端基础能力');
+        check('F9 终端：远程终端窗口未打开', false, '未找到 SftpTerminalPage 窗口');
       }
     }
 

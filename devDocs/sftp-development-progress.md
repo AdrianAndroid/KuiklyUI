@@ -51,7 +51,7 @@
 |---|---|---|
 | 功能（收藏/历史/设置/终端历史/缓存/复制路径） | `cd electron && npm run test:features` | **25/25** |
 | 终端 | `npm run test:term` | **7/7** |
-| 冒烟（播放/seek/切集/续播/resize） | `npm test` | **21/21**（原 S9l SKIP 已转 PASS） |
+| 冒烟（首帧/播放/seek/切集/续播/resize） | `npm test` | **22/22**（新增 S3b 首帧非空白；S9l 由 SKIP 转硬断言；S9k 阈值改语义断言） |
 | 独立播放窗口 | `npm run test:player` | **8/8** |
 | 文本/Markdown 查看器 | `npm run test:text` | **16/16** |
 | 双栏文件管理器 | `npm run test:dual` | **28/28** |
