@@ -77,6 +77,8 @@ internal class SftpBrowserPage : SftpBasePager() {
     /** 本地缓存根目录（空 = 本端不支持，入口隐藏，绝不伪报成功） */
     private var cacheRoot: String = ""
     private var cacheSupported: Boolean by observable(false)
+    /** 本端是否支持复制路径（Web/桌面 true；其它端隐藏按钮） */
+    private var clipboardSupported: Boolean by observable(false)
     /** 超过该体积先弹确认（可被路由参数 cacheConfirmBytes 覆盖，便于小体积验证） */
     private var cacheConfirmBytes: Long = CacheEngine.NEED_CONFIRM_BYTES
     private var cacheBarText: String by observable("")
@@ -116,6 +118,9 @@ internal class SftpBrowserPage : SftpBasePager() {
             acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).cacheRoot()
         }.getOrDefault("")
         cacheSupported = cacheRoot.isNotEmpty()
+        clipboardSupported = runCatching {
+            acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsClipboard()
+        }.getOrDefault(false)
         cacheConfirmBytes = params.optLong("cacheConfirmBytes", CacheEngine.NEED_CONFIRM_BYTES)
         doConnectAndList()
         scheduleCachePoll()
@@ -246,6 +251,17 @@ internal class SftpBrowserPage : SftpBasePager() {
                         color(SftpColorTokens.textPrimary)
                         flex(1f)
                         marginLeft(8f)
+                    }
+                }
+                // 复制当前路径（Web/桌面）：方便把有问题的路径发出来
+                vif({ ctx.clipboardSupported }) {
+                    View {
+                        attr {
+                            width(38f); height(38f); allCenter()
+                            accessibility("copy_path")
+                        }
+                        event { click { ctx.copyCurrentPath() } }
+                        Text { attr { text("⧉"); fontSize(17f); color(SftpColorTokens.primary) } }
                     }
                 }
                 // 右上角：收藏当前目录（可点容器）
@@ -523,8 +539,15 @@ internal class SftpBrowserPage : SftpBasePager() {
         pendingDirFiles = emptyList()
     }
 
-    internal fun openCachePanel() {
-        refreshCacheState()
+    /** 复制当前远端路径（含 host，便于反馈问题）到系统剪贴板 */
+    internal fun copyCurrentPath() {
+        val host = connectParam?.host ?: ""
+        val full = if (host.isNotEmpty()) "$host:$currentPath" else currentPath
+        runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).copyToClipboard(full) }
+        Utils.bridgeModule(this).toast("路径已复制：" + full)
+    }
+
+    internal fun openCachePanel() {        refreshCacheState()
         cachePanelVisible = true
     }
 

@@ -129,6 +129,19 @@ internal class BridgeModule : Module() {
         callNativeMethod(XTERM_SET_VISIBLE, args, null)
     }
 
+    /** 本端是否支持复制到剪贴板（Web/桌面 true；其它端 false → 入口隐藏） */
+    fun supportsClipboard(): Boolean {
+        val res = syncToNativeMethod(CLIPBOARD_SUPPORTED, JSONObject(), null)
+        return runCatching { JSONObject(res).optBoolean("supported", false) }.getOrDefault(false)
+    }
+
+    /** 复制文本到系统剪贴板 */
+    fun copyToClipboard(text: String) {
+        val args = JSONObject()
+        args.put("text", text)
+        callNativeMethod(COPY_TO_CLIPBOARD, args, null)
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -290,6 +303,8 @@ internal class BridgeModule : Module() {
         const val XTERM_RESIZE = "xtermResize"
         const val XTERM_DISPOSE = "xtermDispose"
         const val XTERM_SET_VISIBLE = "xtermSetVisible"
+        const val CLIPBOARD_SUPPORTED = "clipboardSupported"
+        const val COPY_TO_CLIPBOARD = "copyToClipboard"
 
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"

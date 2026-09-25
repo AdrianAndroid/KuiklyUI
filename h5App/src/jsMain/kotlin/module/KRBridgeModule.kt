@@ -88,6 +88,26 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 Unit
             }
 
+            // 剪贴板（Web/桌面）：优先 navigator.clipboard，失败回退 textarea+execCommand
+            "clipboardSupported" -> {
+                val ok = js("(typeof navigator !== 'undefined' && (!!(navigator.clipboard && navigator.clipboard.writeText) || !!document.execCommand))") as Boolean
+                if (ok) "{\"supported\":true}" else "{\"supported\":false}"
+            }
+
+            "copyToClipboard" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val text = (q.text as? String) ?: ""
+                js("window.__krCopyText = text")
+                js(
+                    "(function(){try{var t=window.__krCopyText||'';" +
+                        "if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t);return;}" +
+                        "var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';" +
+                        "document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);" +
+                        "}catch(e){}})()"
+                )
+                Unit
+            }
+
             // 本地缓存根目录（缓存整个目录时作为落盘根）
             // 必须**同步**返回：Kuikly 的 cacheRoot 走同步通道，异步 home() 拿不到值（会恒为空）。
             // 桌面壳 preload 暴露 homeSync（sendSync）；纯浏览器无 window.localFs → 空串（不支持缓存）。

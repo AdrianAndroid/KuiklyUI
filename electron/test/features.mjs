@@ -377,6 +377,19 @@ const waitFor = async (fn, ms, step = 500) => {
     // ---- F14 点目录 → 统计体积并弹「过大确认」（阈值注入 1000 字节，带截图）----
     await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=22&user=${USER}&password=${PASS}&remotePath=${FIX}&cacheConfirmBytes=1000` });
     const browserReady = await waitFor(async () => { const t = await main.body(); return t.includes('cachedir') ? t : null; }, 45000, 700);
+
+    // ---- F25 浏览页标题旁「⧉ 复制路径」（带截图）----
+    const copyBtn = await main.ev("(()=>[...document.querySelectorAll('*')].some(e=>(e.textContent||'').trim()==='⧉'&&e.getBoundingClientRect().width>0))()");
+    await main.clickText('⧉');
+    const copied = await waitFor(async () => { const t = await main.body(); return t.includes('路径已复制') ? t : null; }, 8000, 400);
+    let clip = '';
+    try {
+      await main.send('Browser.grantPermissions', { origin: base, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] });
+      clip = String(await main.ev('navigator.clipboard.readText()', true));
+    } catch (e) { clip = ''; }
+    await main.shot('features-copy-path.png');
+    check('F25 浏览页标题旁「⧉」可复制当前路径', !!copyBtn && !!copied, `按钮=${!!copyBtn} 提示=${!!copied} 剪贴板=${clip.slice(0, 60)}`);
+
     await clickCacheBtn('cachedir');
     const confirmShown = await waitFor(async () => { const t = await main.body(); return (t.includes('缓存体积较大') && t.includes('是否继续')) ? t : null; }, 15000, 500);
     const confirmMentionsDir = !!confirmShown && confirmShown.includes('cachedir');
