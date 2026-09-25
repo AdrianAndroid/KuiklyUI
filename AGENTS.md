@@ -840,6 +840,12 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 - **用例**：`cd electron && npm run test:features` → **F14–F23**（目录体积确认/进度/暂停冻结/取消/单文件字节一致/
   浮层关闭/清空已完成），关键路径均截图到 `electron/test/artifacts/`。
 
+### 13.1.7 浏览页「复制路径」按钮（Web / 桌面，2026-09 新增）
+
+- 浏览页标题旁 `⧉` → `BridgeModule.copyToClipboard(host + ":" + currentPath)`；`supportsClipboard()` 为 true 才显示
+  （Web/桌面 true；native false → 隐藏，绝不伪报）。Web 实现优先 `navigator.clipboard.writeText`，回退 `textarea+execCommand`。
+- 用途：用户遇到打不开的路径时一键复制 `host:path` 反馈。用例 **F25**（含剪贴板内容校验）。
+
 ### 13.1.4 双栏文件管理器（Web / 桌面，2026-09 新增）
 
 `core/file-manager/`（纯状态机，jvm+js，76/76 单测）+ `demo/src/jsMain/.../FilesDualPanePage.kt`（双栏 UI）

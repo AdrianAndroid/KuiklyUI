@@ -7,11 +7,90 @@
 > - `devDocs/sftp-impl-plan.md` — 全平台 Phase 0~6 落地清单
 > - `devDocs/sftp-player-modernz-plan.md` — 播放页 mpv OSC 改造方案
 >
-> 最近一次更新：2026-09-22（`042c4784`）
+> 最近一次更新：2026-09-25（`524a2ebb`，含 §0 最新快照）
+
+---
+
+## 0. 最新状态快照（2026-09-25）—— 下一个模型从这里开始
+
+### 0.1 仓库 / 环境 / 命令
+
+- 仓库：`/Users/zhaojian/bin/macmini/KuiklyUI`，分支 **`zhaojian`**，远程 `git@github.com:AdrianAndroid/KuiklyUI.git`（推送 `git push origin zhaojian`）。
+- JDK 17（**JDK 25 会破坏 Gradle 7.6.3**）：`export JAVA_HOME=/Users/zhaojian/Library/Java/JavaVirtualMachines/corretto-17.0.13/Contents/Home`。
+- Node（Gradle 内置）：`export PATH="$HOME/.gradle/nodejs/node-v22.0.0-darwin-x64/bin:$PATH"`。
+- 常用 Gradle 参数：`-Pkuikly.useLocalKsp=false --offline`；Android 编译需 `ANDROID_HOME=$HOME/Library/Android/sdk`。
+- **启动 Electron 必须去掉 `ELECTRON_RUN_AS_NODE`**（VS Code/Kilo 会泄漏，导致主进程 `exit(1)`）：
+  `env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"`。
+- 测试用外部网关（远程夹具/直连 SFTP）：`cd sftp-gateway && node server.js`（监听 127.0.0.1:18090）。
+  页面业务走的是 **Electron 自带网关（随机端口）**，所以收藏/历史断言要用页面内 `window.__SFTP_GATEWAY_URL__`，不能走 18090。
+
+### 0.2 交付流程（固定，见 `AGENTS.md §14.1`）
+
+`npm run dist:release`（**已修**：会先 `build:web:release` 再 sync+打包；此前只 sync，release 产物陈旧 → 新代码打不进包）
+→ 优雅退出旧实例 + `ditto` 覆盖安装到 `/Applications` + `xattr -dr com.apple.quarantine`
+→ `env -u ELECTRON_RUN_AS_NODE open` 启动 → 提交 → `git push origin zhaojian`。
+
+### 0.3 本轮（2026-09-25）新增 / 修复
+
+| 项 | 说明 | 证据 |
+|---|---|---|
+| **终端改用 xterm.js** | Web/桌面主路径用 vendored `xterm.js`（MIT）做仿真；native 回退共享网格 `TerminalBuffer`/`TerminalGridView`。**真实回车曾完全无效**：命令 `Input` 未注册 `inputReturn`（Web 端 Enter keydown 未绑定）→ 已补。去掉状态栏 `#轮询计数` 残留 | `test:term` **7/7**（真实输入 + 回车 `echo TERM_$((6*7))` → `TERM_42`、`whoami`） |
+| **本地 pty 就绪** | 启动期写入会把 ZLE 带偏（回显但不执行）→ 就绪判定「安静 900ms / 硬上限 5s」，期间输入排队 | 同上 |
+| **目录 / 单文件缓存** | `cache/CacheManager.kt`（全局单例 + 顺序状态机）+ `CacheListOverlay.kt`（**页内浮层**，不新增路由页）。目录递归、**单文件也支持**、超阈值先确认、暂停/继续/取消/清空已完成 | `features` **F14–F18/F22/F23** |
+| **设置页 + 更多入口** | 终端历史条数（5/10/20/50）、播放历史条数（5/10/20/50/200/1000）、清空缓存/播放历史、关于；首页右下「更多」抽屉 | `features` **F10/F11/F12/F21** |
+| **首页「⚙ 设置」直达** | 右下角 FAB 在桌面端可能落在可视区外 → 顶部新增 ⚙ 入口 | `features` **F24** |
+| **复制路径按钮** | 浏览页标题旁 `⧉` → 复制 `host:path`（Web/桌面；`supportsClipboard()` 门控） | `features` **F25**（剪贴板内容已校验） |
+| **窗口 resize 修复** | SPA 模式 `handleEntry()` 提前 return，resize 监听装在 return 之后 → 永不生效；core 仅带 densityInfo 才重排。修复：监听移入 `installHostEventBridges()` + `KuiklyRouter.updateRootViewSizeForActive()` + core 尺寸变化即 `markDirty/layoutIfNeed` | `smoke` **S9l 通过**（`video 宽 1180→760→1180`）；安装版实测根内容宽同步 |
+| **打包首帧空白** | 打包态 `#root` 高 0（layout 未触发）→ 窗口空白。`main.js` 加载完成后派发 `resize` nudge | 安装版 CDP：`本地文件管理/历史/⚙` 均渲染 |
+| **测试防卡死** | `waitFor`/CDP `ev`/`rpc`/页面内 `fetch` 全部加超时（曾因页面 fetch 无超时 + `waitFor` 无超时 → 整体卡死）；看门狗内 `SIGKILL` 子进程；逐条打印耗时 | 规则写入 `AGENTS.md §3.1 规则 7` |
+| **toast 不拦截点击** | `h5App/utils/Ui.kt` toast `pointer-events:none`（否则盖住终端/缓存悬浮条） | — |
+
+### 0.4 测试套件与当前通过数（2026-09-25）
+
+| 套件 | 命令 | 结果 |
+|---|---|---|
+| 功能（收藏/历史/设置/终端历史/缓存/复制路径） | `cd electron && npm run test:features` | **25/25** |
+| 终端 | `npm run test:term` | **7/7** |
+| 冒烟（播放/seek/切集/续播/resize） | `npm test` | **21/21**（原 S9l SKIP 已转 PASS） |
+| 独立播放窗口 | `npm run test:player` | **8/8** |
+| 文本/Markdown 查看器 | `npm run test:text` | **16/16** |
+| 双栏文件管理器 | `npm run test:dual` | **28/28** |
+| `core/file-manager` 单测 | `./gradlew :core:file-manager:jvmTest :core:file-manager:jsNodeTest` | BUILD SUCCESSFUL |
+| 集成自测页（原生端） | `SftpIntegrationTestPage` | macOS/iOS/Android 74/74（历史结论） |
+
+### 0.5 已知问题 / 待办（下一个模型优先看）
+
+1. **选集切换播放**：安装版用 `/data` 真实视频复测**可切换可播放**（播放中/暂停中切集均自动起播，无 `MEDIA_ERR_DECODE`），未能复现"切集放不了"；等用户用 **`⧉` 复制路径**反馈具体文件再定位。
+2. **HarmonyOS 播放未实现**：`KRLocalHttpProxy` 仍是桩、无视频组件 → OHOS 暂不支持播放（其余 SFTP 能力已实现，运行时未验证）。
+3. **小程序未验证**：复用 Web JS 模块，需网关可达 + 微信 request 域名白名单。
+4. **播放异常信息**：页面目前只有「加载中/文件不存在」文案，遇到黑屏/解码失败时用户不易反馈；可考虑把 `<video>.error.code` 显示出来。
+5. **native 端缓存/剪贴板/终端**：`cacheRoot()/supportsClipboard()/supportsTerminal()` 在 native 返回 false → 入口隐藏（未伪报）；接入点见 §13.1.5/13.1.6。
+6. **网关安全**：known_hosts 校验在 Android(TOFU)+Web 已接，iOS/OHOS 待补；Web 网关会话在内存，重启即失效。
+
+### 0.6 关键文件（本轮相关）
+
+- 终端：`demo/.../sftp/terminal/SftpTerminalPage.kt`、`TerminalModule.kt`、`TerminalBuffer.kt`、`TerminalGridView.kt`；
+  `h5App/src/jsMain/resources/lib/xterm.js` + `kr-terminal.js`；`demo/.../base/BridgeModule.kt`（xtermMount/Write/Resize/Dispose/SetVisible）。
+- 缓存：`demo/.../sftp/cache/CacheManager.kt`、`CacheListOverlay.kt`、`CacheEngine.kt`（纯逻辑）；浏览页入口 `SftpBrowserPage.kt`。
+- 设置/更多/复制路径：`SftpSettingsPage.kt`、`SftpHomePage.kt`（更多抽屉 + ⚙ + 连接/历史）、`SftpBrowserPage.kt`（`⧉`）。
+- resize：`h5App/src/jsMain/kotlin/Main.kt`、`manager/KuiklyRouter.kt`、`core/.../pager/Pager.kt`；`electron/main.js`（首帧 nudge）。
+- 测试：`electron/test/features.mjs`（F1–F25）、`terminal.mjs`、`smoke.mjs`、`dual-pane.mjs`、`player-window.mjs`、`text-viewer.mjs`。
+- 截图证据：`electron/test/artifacts/`。
+
+### 0.7 踩坑速查（勿回退）
+
+- **响应式**：状态必须 provider + 在 `attr{}`/`vif` 条件 lambda 内读取；结构层 `if/when` 只算首帧（设置项文案曾因此不刷新）。
+- **浮层**必须放在内容区之后且 `positionAbsolute()`；**快照/列表用页内浮层**，不要为页内状态新增路由页（宿主对新增页名解析在 Web 下曾 `PagerNotFoundException`）。
+- **不要用 kuikly core 的 `GlobalScope.launch + delay`** 做续跑/节流（依赖 `currentPageId`，异步回调里可能不恢复）；用 kotlinx.coroutines 或页面 `setTimeout`。
+- **Web toast 必须 `pointer-events:none`**；**行内小按钮要独立格**，否则与父行点击冲突。
+- **网关绝对路径写入**要向上找最近存在祖先目录做校验（否则新建多级目录被 `LOCAL_PATH_DENIED` 误拒）。
+- **CDP 合成按键会触发 macOS「听写」**：测试用 `Input.insertText` + DOM `KeyboardEvent`，不要用 `Input.dispatchKeyEvent`。
+- **Kotlin/JS 禁正则**解析 Markdown（unicode 模式抛 `Lone quantifier brackets`）。
 
 ---
 
 ## 1. 项目目标
+
 
 一份 KMP 代码六端运行的 SFTP 客户端，支持：
 - 完整文件管理：连接 / 浏览 / 上传 / 下载 / mkdir / rm / rename / move / copy / chmod / chown / setMtime / 批量
@@ -30,6 +109,7 @@
 | **Android** | ✅ `./gradlew :androidApp:assembleDebug` | JSch 0.1.55 | NanoHTTPD | ✅ 模拟器 **74/74 × 10 轮零失败** + ExoPlayer 经代理播放 | **全链路可用** |
 | **HarmonyOS** | ✅ 渲染器 `libkuikly.so` + 业务 `libshared.so` | libssh2 + 自 vendored mbedTLS 2.28.8 | ❌ 桩（未进 CMake） | ❌ 运行时未验证（无设备） | **核心可用、播放未实现** |
 | **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | 浏览器无 socket → Node 网关代持（ssh2） | 网关直接出 HTTP Range | ✅ 浏览器实测（连接 / 浏览 / Range / 拖动 seek） | **全链路可用** |
+| **桌面壳 (Electron)** | ✅ `npm run dist:release`（dmg + `/Applications` 覆盖安装） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 25/25`、`smoke 21/21`、`player 8/8`、`text 16/16`、`dual 28/28`、`term 7/7` | **全链路可用（含独立窗口：播放/终端/文本查看器）** |
 | **小程序** | ✅ 同 Web（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | 复用 Web 的 JS 模块 | 需网关 | ❌ 未验证（需微信域名白名单） | **未验证** |
 
 ---
