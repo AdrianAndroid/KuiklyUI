@@ -15,6 +15,7 @@
 package com.tencent.kuikly.demo.pages.sftp
 
 import com.tencent.kuikly.core.annotations.Page
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
@@ -29,10 +30,21 @@ import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.module.sftp.SftpConnectParam
 import com.tencent.kuikly.core.module.sftp.SftpConnection
 import com.tencent.kuikly.core.module.sftp.SftpEntry
+import com.tencent.kuikly.core.module.sftp.SftpError
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.timer.clearTimeout
+import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
+import com.tencent.kuikly.demo.pages.base.BridgeModule
+import com.tencent.kuikly.demo.pages.base.Utils
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheEngine
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheFile
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheIo
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheManager
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheTask
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheTasksOverlay
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpAccessibility
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
 import com.tencent.kuikly.demo.pages.sftp.viewer.SftpViewerDispatcherPage
@@ -61,6 +73,37 @@ internal class SftpBrowserPage : SftpBasePager() {
     private var errorMsg: String? by observable(null)
     private var currentPath: String by observable("/")
 
+    // —— 缓存（目录 / 单文件）——
+    /** 本地缓存根目录（空 = 本端不支持，入口隐藏，绝不伪报成功） */
+    private var cacheRoot: String = ""
+    private var cacheSupported: Boolean by observable(false)
+    /** 超过该体积先弹确认（可被路由参数 cacheConfirmBytes 覆盖，便于小体积验证） */
+    private var cacheConfirmBytes: Long = CacheEngine.NEED_CONFIRM_BYTES
+    private var cacheBarText: String by observable("")
+    private var cacheBarVisible: Boolean by observable(false)
+    /** 缓存任务浮层（页内，避免缓存中跳页丢状态） */
+    private var cachePanelVisible: Boolean by observable(false)
+    private var cacheTasks by observableList<CacheTask>()
+    private var cacheVersionSeen: Int = -1
+    private var cacheConfirmVisible: Boolean by observable(false)
+    private var cacheConfirmText: String by observable("")
+    // 待确认任务（确认后入队）
+    private var pendingDir: SftpEntry? = null
+    private var pendingDirFiles: List<CacheFile> = emptyList()
+    private var pendingFile: SftpEntry? = null
+    private var cachePollRef: String? = null
+
+    /** 缓存任务 I/O：列目录（递归求体积）+ 下载落盘（宿主本地绝对路径） */
+    private val cacheIo: CacheIo = object : CacheIo {
+        override fun list(sessionId: String, path: String, callback: (List<SftpEntry>, SftpError?) -> Unit) {
+            sftpModule().list(sessionId, path) { items, _, err -> callback(items, err) }
+        }
+
+        override fun download(sessionId: String, remotePath: String, localPath: String, callback: (Boolean, SftpError?) -> Unit) {
+            sftpModule().download(sessionId, remotePath, localPath) { _, _, err -> callback(err == null, err) }
+        }
+    }
+
     override fun created() {
         super.created()
         val params = pageData.params
@@ -68,7 +111,39 @@ internal class SftpBrowserPage : SftpBasePager() {
         connectionId = params.optString("connectionId", "")
         connectionLabel = params.optString("connectionLabel", "")
         currentPath = params.optString("remotePath", "/")
+        // 缓存能力：本地缓存根目录（Web/桌面由宿主注入；其它端为空 → 入口隐藏）
+        cacheRoot = runCatching {
+            acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).cacheRoot()
+        }.getOrDefault("")
+        cacheSupported = cacheRoot.isNotEmpty()
+        cacheConfirmBytes = params.optLong("cacheConfirmBytes", CacheEngine.NEED_CONFIRM_BYTES)
         doConnectAndList()
+        scheduleCachePoll()
+    }
+
+    override fun pageWillDestroy() {
+        super.pageWillDestroy()
+        cachePollRef?.let { clearTimeout(it) }
+    }
+
+    /** 轮询缓存进度以刷新顶部悬浮条与浮层（CacheManager 为全局单例，跨页面） */
+    private fun scheduleCachePoll() {
+        cachePollRef = setTimeout(350) {
+            refreshCacheState()
+            scheduleCachePoll()
+        }
+    }
+
+    private fun refreshCacheState() {
+        // 有任意任务（含已完成）就保留悬浮条，便于任务结束后仍能打开浮层看结果/清空
+        cacheBarVisible = CacheManager.hasAny()
+        cacheBarText = CacheManager.barSummary()
+        if (CacheManager.version != cacheVersionSeen) {
+            cacheVersionSeen = CacheManager.version
+            val snap = CacheManager.snapshot()
+            cacheTasks.clear()
+            cacheTasks.addAll(snap)
+        }
     }
 
     private fun doConnectAndList() {
@@ -94,7 +169,10 @@ internal class SftpBrowserPage : SftpBasePager() {
         val sid = sessionId ?: return
         sftpModule().list(sid, currentPath) { items, _, err ->
             if (err != null) {
-                errorMsg = err.msg
+                errorMsg = if (err.code == com.tencent.kuikly.core.module.sftp.SftpErrorCode.NO_SUCH_FILE.code ||
+                    err.code == com.tencent.kuikly.core.module.sftp.SftpErrorCode.NO_SUCH_PATH.code ||
+                    err.msg.contains("No such") || err.msg.contains("not exist")
+                ) "目录不存在，可能已被删除" else err.msg
                 loading = false
             } else {
                 entries.clear()
@@ -170,6 +248,15 @@ internal class SftpBrowserPage : SftpBasePager() {
                         marginLeft(8f)
                     }
                 }
+                // 右上角：收藏当前目录（可点容器）
+                View {
+                    attr {
+                        width(38f); height(38f); allCenter()
+                        accessibility("favorite_current_dir")
+                    }
+                    event { click { ctx.toggleFavoriteDir() } }
+                    Text { attr { text("⭐"); fontSize(17f); color(SftpColorTokens.primary) } }
+                }
                 // 右上角：切到双栏（本地 ↔ 当前远端目录）—— 仅 Web/桌面
                 vif({ ctx.isWebLike }) {
                     View {
@@ -195,8 +282,102 @@ internal class SftpBrowserPage : SftpBasePager() {
                     SftpEmptyView("空目录")
                 }
                 velse {
-                    SftpEntriesView({ ctx.entries }) { entry -> ctx.onEntryClick(entry) }
+                    SftpEntriesView(
+                        { ctx.entries },
+                        { entry -> ctx.onEntryClick(entry) },
+                        { e -> ctx.favoriteEntry(e) },
+                        if (ctx.cacheSupported) { { e -> ctx.requestCache(e) } } else null,
+                    )
                 }
+            }
+
+            // 顶部缓存悬浮条（有进行中/暂停任务时出现；放在内容区之后以便覆盖在上层）
+            vif({ ctx.cacheBarVisible }) {
+                View {
+                    attr {
+                        positionAbsolute()
+                        left(12f)
+                        bottom(12f)
+                        width(pagerData.pageViewWidth - 24f)
+                        height(34f)
+                        borderRadius(17f)
+                        padding(10f, 6f, 10f, 6f)
+                        backgroundColor(SftpColorTokens.primary)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                        zIndex(60)
+                        accessibility("cache_bar")
+                    }
+                    event { click { ctx.openCachePanel() } }
+                    Text { attr { text("⬇ " + ctx.cacheBarText); fontSize(13f); color(Color(0xFFFFFFFF.toInt())); flex(1f) } }
+                    Text { attr { text("查看 ›"); fontSize(13f); color(Color(0xFFFFFFFF.toInt())) } }
+                }
+            }
+
+            // 过大确认弹层（绝对定位；放在最后以免被内容盖住）
+            vif({ ctx.cacheConfirmVisible }) {
+                View {
+                    attr {
+                        positionAbsolute(); left(0f); top(0f)
+                        width(pagerData.pageViewWidth)
+                        height(pagerData.pageViewHeight)
+                        backgroundColor(Color(0x99000000.toInt()))
+                        allCenter()
+                        zIndex(80)
+                        accessibility("cache_confirm_dialog")
+                    }
+                    View {
+                        attr {
+                            width(300f)
+                            padding(24f, 20f, 24f, 20f)
+                            backgroundColor(SftpColorTokens.cardBg)
+                            borderRadius(12f)
+                            flexDirectionColumn()
+                        }
+                        Text {
+                            attr {
+                                text("缓存体积较大")
+                                fontSize(16f); fontWeightBold(); color(SftpColorTokens.textPrimary); marginBottom(8f)
+                            }
+                        }
+                        Text {
+                            attr {
+                                text(ctx.cacheConfirmText)
+                                fontSize(13f); color(SftpColorTokens.textSecondary); marginBottom(16f)
+                            }
+                        }
+                        View {
+                            attr { flexDirectionRow(); width(252f) }
+                            View {
+                                attr {
+                                    flex(1f); height(40f); allCenter()
+                                    backgroundColor(SftpColorTokens.divider); borderRadius(8f); marginRight(8f)
+                                    accessibility("cache_confirm_no")
+                                }
+                                event { click { ctx.dismissCacheConfirm() } }
+                                Text { attr { text("取消"); fontSize(14f); color(SftpColorTokens.textPrimary) } }
+                            }
+                            View {
+                                attr {
+                                    flex(1f); height(40f); allCenter()
+                                    backgroundColor(SftpColorTokens.primary); borderRadius(8f)
+                                    accessibility("cache_confirm_yes")
+                                }
+                                event { click { ctx.confirmCache() } }
+                                Text { attr { text("继续"); fontSize(14f); color(Color(0xFFFFFFFF.toInt())) } }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 缓存任务浮层（页内；缓存中打开，避免跳页丢状态）
+            vif({ ctx.cachePanelVisible }) {
+                CacheTasksOverlay(
+                    tasksProvider = { ctx.cacheTasks },
+                    onChanged = { ctx.refreshCacheState() },
+                    onClose = { ctx.cachePanelVisible = false },
+                )
             }
                     }
 }
@@ -234,6 +415,117 @@ internal class SftpBrowserPage : SftpBasePager() {
                 }
             }
         }
+    }
+
+    /** 收藏当前目录（已收藏再点则取消） */
+    internal fun toggleFavoriteDir() {
+        if (connectionId.isEmpty()) { Utils.bridgeModule(this).toast("请先从连接列表进入"); return }
+        val fav = com.tencent.kuikly.core.module.sftp.SftpFavorite(
+            id = connectionId + "::" + currentPath,
+            connectionId = connectionId,
+            connectionLabel = connectionLabel,
+            remotePath = currentPath,
+            name = currentPath.substringAfterLast('/').ifEmpty { "/" },
+            isDir = true,
+            size = 0L,
+            starredAt = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp(),
+        )
+        sftpFavoritesModule().add(fav) { id, err ->
+            val msg = if (err != null) "收藏失败：" + err.msg else "已收藏目录"
+            Utils.bridgeModule(this).toast(msg)
+        }
+    }
+
+    /** 收藏一个条目（文件或目录） */
+    internal fun favoriteEntry(entry: SftpEntry) {
+        val fav = com.tencent.kuikly.core.module.sftp.SftpFavorite(
+            id = connectionId + "::" + entry.path,
+            connectionId = connectionId,
+            connectionLabel = connectionLabel,
+            remotePath = entry.path,
+            name = entry.name,
+            isDir = entry.isDir,
+            size = entry.size,
+            starredAt = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp(),
+        )
+        sftpFavoritesModule().add(fav) { _, err ->
+            val msg = if (err != null) "收藏失败：" + err.msg else if (entry.isDir) "已收藏目录" else "已收藏文件"
+            Utils.bridgeModule(this).toast(msg)
+        }
+    }
+
+    /** 请求缓存一个条目：目录递归展开后统计体积；单文件直接入队（用户要求单文件也可缓存）。 */
+    internal fun requestCache(entry: SftpEntry) {
+        if (!cacheSupported) {
+            Utils.bridgeModule(this).toast("本端暂不支持缓存到本地")
+            return
+        }
+        val sid = sessionId ?: ""
+        if (entry.isDir) {
+            Utils.bridgeModule(this).toast("正在统计目录体积…")
+            CacheManager.measureDir(cacheIo, sid, entry.path) { files, total, err ->
+                if (err != null) {
+                    Utils.bridgeModule(this).toast("统计失败：" + err.msg)
+                    return@measureDir
+                }
+                if (files.isEmpty()) {
+                    Utils.bridgeModule(this).toast("目录为空")
+                    return@measureDir
+                }
+                if (total > cacheConfirmBytes) {
+                    pendingDir = entry
+                    pendingDirFiles = files
+                    cacheConfirmText = "${entry.name} · ${files.size} 个文件 · ${formatSize(total)}，是否继续？"
+                    cacheConfirmVisible = true
+                } else {
+                    CacheManager.enqueueDir(cacheIo, sid, entry.path, entry.name, cacheRoot, files)
+                    Utils.bridgeModule(this).toast("已加入缓存：${entry.name}")
+                    refreshCacheState()
+                }
+            }
+        } else {
+            if (entry.size > cacheConfirmBytes) {
+                pendingFile = entry
+                cacheConfirmText = "${entry.name} · ${formatSize(entry.size)}，是否继续？"
+                cacheConfirmVisible = true
+            } else {
+                CacheManager.enqueueFile(cacheIo, sid, entry, cacheRoot)
+                Utils.bridgeModule(this).toast("已加入缓存：${entry.name}")
+                refreshCacheState()
+            }
+        }
+    }
+
+    /** 确认弹层「继续」：把待确认任务入队 */
+    internal fun confirmCache() {
+        cacheConfirmVisible = false
+        val dir = pendingDir
+        val file = pendingFile
+        val files = pendingDirFiles
+        pendingDir = null
+        pendingFile = null
+        pendingDirFiles = emptyList()
+        val sid = sessionId ?: ""
+        if (dir != null) {
+            CacheManager.enqueueDir(cacheIo, sid, dir.path, dir.name, cacheRoot, files)
+            Utils.bridgeModule(this).toast("已加入缓存：${dir.name}")
+        } else if (file != null) {
+            CacheManager.enqueueFile(cacheIo, sid, file, cacheRoot)
+            Utils.bridgeModule(this).toast("已加入缓存：${file.name}")
+        }
+        refreshCacheState()
+    }
+
+    internal fun dismissCacheConfirm() {
+        cacheConfirmVisible = false
+        pendingDir = null
+        pendingFile = null
+        pendingDirFiles = emptyList()
+    }
+
+    internal fun openCachePanel() {
+        refreshCacheState()
+        cachePanelVisible = true
     }
 
     private fun onEntryClick(entry: SftpEntry) {
@@ -279,7 +571,9 @@ internal class SftpBrowserPage : SftpBasePager() {
 /** 目录项列表渲染 */
 internal fun ViewContainer<*, *>.SftpEntriesView(
     entriesProvider: () -> ObservableList<SftpEntry>,
-    onClick: (SftpEntry) -> Unit
+    onClick: (SftpEntry) -> Unit,
+    onFavorite: (SftpEntry) -> Unit = { },
+    onCache: ((SftpEntry) -> Unit)? = null
 ) {
     // 必须放在滚动容器里：此前行直接铺在普通 View 上，没有滚动能力，
     // 目录条目超过一屏后就再也够不到（文件浏览器基本不可用）。
@@ -327,6 +621,30 @@ internal fun ViewContainer<*, *>.SftpEntriesView(
                             fontSize(12f)
                             color(SftpColorTokens.textSecondary)
                         }
+                    }
+                }
+                // 行内收藏（文件与目录都可收藏）：用可点容器（Way 与首页 ⇄ />_ 一致，裸 Text+event 在本页点击不生效）
+                View {
+                    attr {
+                        width(38f)
+                        height(38f)
+                        allCenter()
+                        accessibility("favorite_entry")
+                    }
+                    event { click { onFavorite(entry) } }
+                    Text { attr { text("⭐"); fontSize(15f); color(SftpColorTokens.primary) } }
+                }
+                // 行内缓存（目录递归缓存 / 单文件缓存）：仅在支持本地缓存的端显示
+                if (onCache != null) {
+                    View {
+                        attr {
+                            width(38f)
+                            height(38f)
+                            allCenter()
+                            accessibility("cache_entry")
+                        }
+                        event { click { onCache(entry) } }
+                        Text { attr { text("⬇"); fontSize(15f); color(SftpColorTokens.primary) } }
                     }
                 }
             }

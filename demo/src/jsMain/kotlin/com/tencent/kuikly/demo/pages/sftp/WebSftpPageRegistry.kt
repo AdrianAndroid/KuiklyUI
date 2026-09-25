@@ -55,6 +55,10 @@ internal fun registerSftpWebPages() {
         registerWebPage("SftpBatchProgressDialog") { SftpBatchProgressDialog() }
         // 双栏文件管理器（桌面版：Electron / H5）
         registerWebPage(FilesDualPanePage.PAGE_NAME) { FilesDualPanePage() }
+        // 设置页（终端历史条数 / 清空缓存 / 清空播放历史 / 关于）
+        registerWebPage(com.tencent.kuikly.demo.pages.sftp.SftpPageNames.SETTINGS) {
+            com.tencent.kuikly.demo.pages.sftp.SftpSettingsPage()
+        }
         // 终端页（本地/远程 shell，独立窗口）
         registerWebPage(com.tencent.kuikly.demo.pages.sftp.SftpPageNames.TERMINAL) {
             com.tencent.kuikly.demo.pages.sftp.terminal.SftpTerminalPage()

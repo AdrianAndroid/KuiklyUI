@@ -75,6 +75,8 @@
 4. **验证至少一端 + 覆盖共享路径**：本轮允许只跑 Electron 用例，但用例要覆盖「native 会走的那条共享代码路径」
    （实例：终端用例走网格渲染，而不是只测 xterm.js）。
 5. 交付时在对应文档（`AGENTS.md` / `devDocs/*`）写明：哪些端已实现/已验证、哪些端待接入及接入点。
+6. **必要功能必须截图留证**：关键路径（入口可见、弹层/抽屉、设置项、收藏结果、缓存列表与进度等）在自动化用例中
+   必须 `Page.captureScreenshot` 存到 `electron/test/artifacts/`，失败时可人工复核；截图文件名带用例语义。
 
 ---
 
@@ -780,17 +782,17 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 |---|---|---|
 | shell 通道（契约） | `demo/.../sftp/terminal/TerminalModule.kt`（`KRTerminalModule`） | `open/read/write/resize/close`；输出用**绝对偏移 + 轮询**（无需 WebSocket）|
 | Web/桌面 | `h5App` 的 `KRTerminalModule`（一行转发 `shell` 到网关）+ `sftp-gateway` 的 `shell` 模块 | 远程 = ssh2 `conn.shell()`（pty）；本地 = SSH 连本机（127.0.0.1，见下）|
-| 共享渲染（六端） | `TerminalBuffer`（纯 Kotlin ANSI-lite：光标移动/清屏/清行/宽字符）+ `TerminalGridView`（Kuikly 等宽网格）| **native 端只需实现 shell 模块 + 打开 `supportsTerminal`，UI 即可用**（无需平台 UI 代码）|
-| Web 加速（可选） | `h5App/src/jsMain/resources/lib/xterm.js`（MIT，本地 vendor）+ `kr-terminal.js` | `window.__krTerm`；网格与 xterm 共用同一 shell 通道 |
+| 共享渲染（六端） | `TerminalBuffer`（纯 Kotlin ANSI-lite：光标移动/清屏/清行/宽字符）+ `TerminalGridView`（Kuikly 等宽网格）| native 端回退用；Web/桌面已改用 xterm（见下）|
+| Web/桌面渲染（主路径） | `h5App/src/jsMain/resources/lib/xterm.js`（MIT，本地 vendor）+ `kr-terminal.js` + `BridgeModule.xtermMount/Write/Resize/Dispose/SetVisible` | **xterm 负责 ANSI/CJK/方向键/回车/退格**；输出经 `xtermWrite` 灌入，输入经 xterm `onData → terminal_input` 回传。`renderer=grid` 可强制回退网格 |
 
 - **入口**：首页「本地文件管理」那一栏**右侧的 `>_`**（本地终端）+ **每个连接行右侧的 `>_`**（远程终端）；都开**独立窗口**（`standalone=1`，返回键关窗）。
 - **本地终端 = SSH 本机**：首次弹**账号密码弹窗**（绝对定位模态，不占终端区域），勾选「记住账号密码」后写入连接库（label 「本机」、host `127.0.0.1`），下次直接连接。
-- **能力探测**：`BridgeModule.supportsTerminal()`（web=true；Android/iOS/macOS 目前 false → 入口隐藏并提示），
-  **绝不调用未实现的原生方法**（iOS DEBUG 会 NSAssert）。
+- **能力探测**：`BridgeModule.supportsTerminal()`（web=true；Android/iOS/macOS 目前 false → 入口隐藏并提示）
+  + `supportsXterm()`（web=true，其余端 false → 回退共享网格）。**绝不调用未实现的原生方法**（iOS DEBUG 会 NSAssert）。
 - **native 接入点**：在 `core-render-*` 实现 `KRTerminalModule`（libssh2 `libssh2_channel_open_session` +
   `libssh2_channel_request_pty`；本地 shell 用各端 pty），并把 `supportsTerminal` 改为 true —— UI 无需改动。
-- **用例**：`cd electron && npm run test:term` → **T1–T7 7/7**（本地行入口/独立窗口/本地 SSH 终端/输入回显/
-  每连接行入口/远程 whoami 回显/无异常）。
+- **用例**：`cd electron && npm run test:term` → **T1–T7 7/7**（真实输入 + 回车执行 `echo TERM_$((6*7))` → `TERM_42`、
+  远程 `whoami`、入口/独立窗口/无异常），另有 `npm run test:features` 的 F9/F9b。
 - ⚠️ 踩过的坑（勿回退）：
   1. **新 Module 必须注册在 `Pager.createExternalModules()`**（只在 web delegator 注册不够，否则
      `acquireModule 失败：未注册`，页面直接空白）；且要用 `acquireModule` 取实例（直接 `new` 回调不会回来）。
@@ -799,6 +801,36 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   4. 解析宿主回调 JSON 用 `optString/optLong/optBoolean`（`JSONObject.str` 不存在）。
   5. macOS 上 `script -q /dev/null <shell>` 在管道里建不了 pty（`Operation not supported on socket`），
      本地 pty 需用 `python3 -c "import pty; pty.spawn([...])"`（网关已如此实现，作兜底）。
+  6. **真实回车曾完全无效**：网格模式下命令 `Input` 只注册了 `textDidChange`，未注册 `inputReturn` →
+     Web `KRTextFieldView` 不绑定 Enter keydown。补 `inputReturn { sendInput(...) }` 后真实键盘回车才生效
+     （自动化必须用真实输入 + 回车，不能用 `__kuiklySendEvent__` 注入，否则测不出来）。
+  7. **本地 pty 启动期写入会被带偏**（输入回显但永不执行）：shell 就绪判定用「有输出后安静 900ms，
+     硬上限 5s」，就绪前的输入先排队（`pendingRaw/pendingSend`）。
+  8. **状态栏曾显示 `#轮询计数`**（每 130ms +1，调试残留）→ 已移除，状态只显示「本地终端/远程终端/会话已结束」。
+  9. **不要用 CDP `Input.dispatchKeyEvent` 发合成按键**（macOS 会弹出「听写」系统弹窗并阻塞输入）；
+     自动化改用 `Input.insertText` + DOM `KeyboardEvent`。
+  10. **xterm 是 canvas，DOM 取不到文本**：测试经 `window.__krTerm.text(window.__krTerm.lastId())` 读取。
+
+
+### 13.1.6 目录 / 单文件缓存（Web / 桌面，2026-09 新增）
+
+- **入口**：浏览页每个条目行尾的 `⬇`（**目录递归缓存 / 单文件也支持**）；缓存中在底部出现悬浮条「⬇ 缓存 N … ›」，
+  点开是**页内浮层**（进度条 / 暂停 / 继续 / 取消 / 清空已完成），另从首页「更多 → 缓存列表」打开同一浮层。
+- **实现**：`demo/.../sftp/cache/CacheManager.kt`（全局单例 + 顺序下载状态机，`CacheEngine` 纯逻辑）
+  + `CacheListOverlay.kt`（页内浮层）。落盘根 = `BridgeModule.cacheRoot()`（Web/桌面 `<home>/.kuikly_cache`；
+  其它端空 → 入口隐藏）。下载走 `SftpModule.download` 绝对路径（网关 `assertWithinLocalRoot` 校验）。
+- **过大确认**：超过阈值先弹「缓存体积较大 … 是否继续？」；阈值可用路由参数 `cacheConfirmBytes` 覆盖（便于小体积测试）。
+- ⚠️ 勿回退：
+  1. **缓存列表用页内浮层，不新增路由页**：缓存状态在页面内存，跳页会丢；且宿主对新增页面名的解析在 Web 下不可靠
+     （曾报 `PagerNotFoundException`，而 KSP 注册确实存在）。
+  2. **不要用 kuikly core 的 `GlobalScope.launch + delay` 续跑下载**：该 `delay` 依赖 `currentPageId`，在模块异步回调里
+     可能不恢复（表现为「只下了第一个文件就停住」）。已改用 `kotlinx.coroutines` 的 `delay` 续跑。
+  3. **网关绝对路径校验要向上找最近存在的祖先目录**：否则「缓存到 `<root>/<新任务目录>/<文件>`」因父目录不存在被误拒
+     （`LOCAL_PATH_DENIED`，表现为缓存全部失败）。
+  4. **toast 必须 `pointer-events:none`**（`h5App/utils/Ui.kt`）：否则会盖住其下的终端/缓存悬浮条，点不动。
+  5. **缓存悬浮条放底部**（不要放顶部）：顶部会盖住列表第一行的 `⬇`。
+- **用例**：`cd electron && npm run test:features` → **F14–F23**（目录体积确认/进度/暂停冻结/取消/单文件字节一致/
+  浮层关闭/清空已完成），关键路径均截图到 `electron/test/artifacts/`。
 
 ### 13.1.4 双栏文件管理器（Web / 桌面，2026-09 新增）
 

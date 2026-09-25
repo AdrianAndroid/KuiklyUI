@@ -563,9 +563,20 @@ async function assertWithinLocalRoot(p) {
   try {
     real = await fs.promises.realpath(resolved);
   } catch (e) {
-    // 目标尚不存在（下载新建文件）：解析父目录真实路径后拼接文件名
-    const parent = await fs.promises.realpath(path.dirname(resolved)).catch(() => null);
-    if (parent) real = path.join(parent, path.basename(resolved));
+    // 目标尚不存在（下载新建文件/目录）：向上找到**最近存在的祖先**做真实路径校验，
+    // 再拼回相对部分。否则「缓存到 <root>/<新任务目录>/<文件>」会因父目录不存在被误拒（曾表现为缓存只下一个文件即失败）。
+    let dir = path.dirname(resolved);
+    let ancestorReal = null;
+    for (;;) {
+      try { ancestorReal = await fs.promises.realpath(dir); break; } catch (e2) {
+        const up = path.dirname(dir);
+        if (up === dir) break;
+        dir = up;
+      }
+    }
+    if (ancestorReal !== null) {
+      real = path.resolve(ancestorReal, path.relative(dir, resolved));
+    }
   }
   if (real === null) throw new Error('LOCAL_PATH_DENIED: cannot resolve ' + resolved);
   if (real !== localRootReal && !real.startsWith(localRootReal + path.sep)) {
@@ -807,8 +818,10 @@ const historyModule = {
     const item = Object.assign({}, params, { id, lastPlayedAt: params.lastPlayedAt || nowMs() });
     const idx = arr.findIndex((x) => x.id === id);
     if (idx >= 0) arr[idx] = item; else arr.push(item);
+    // 追加语义 + 容量上限（默认 1000，可在设置里改）：超限丢最旧
     let trimmed = arr;
-    if (arr.length > HISTORY_MAX) trimmed = sortByKey(arr, 'lastPlayedAt', 'DESC').slice(0, HISTORY_MAX);
+    const lim = historyLimit();
+    if (arr.length > lim) trimmed = sortByKey(arr, 'lastPlayedAt', 'DESC').slice(0, lim);
     saveArray(F_HISTORY, trimmed);
     return { ok: true };
   },
@@ -836,11 +849,14 @@ const historyModule = {
     saveArray(F_HISTORY, loadArray(F_HISTORY).filter((x) => x.connectionId !== params.connectionId));
     return { ok: true };
   },
+  async getLimit(params) { return { limit: historyLimit() }; },
+  async setLimit(params) { return { limit: setHistoryLimit(params && params.limit) }; },
+
   async markCompleted(params) {
     const arr = loadArray(F_HISTORY);
     const idx = findHistoryIndex(arr, params);
     if (idx >= 0) arr[idx] = Object.assign({}, arr[idx], { completed: true, position: arr[idx].duration });
-    saveArray(F_HISTORY, arr);
+    saveArray(F_HISTORY, trimHistory(arr));
     return { ok: true };
   },
 };
@@ -896,6 +912,28 @@ function shellAppend(st, d) {
     st.chunks.shift();
   }
   if (st.chunks.length) st.baseOff = st.chunks[0].off;
+}
+
+/** 播放历史：追加语义 + 容量上限（默认 1000，超限丢最旧） */
+const HISTORY_DEFAULT_LIMIT = 1000;
+const F_HISTORY_LIMIT = 'sftp_history_limit.json';
+function historyLimit() {
+  try {
+    const v = Number(loadArray(F_HISTORY_LIMIT)[0] && loadArray(F_HISTORY_LIMIT)[0].limit);
+    return v > 0 ? v : HISTORY_DEFAULT_LIMIT;
+  } catch (e) { return HISTORY_DEFAULT_LIMIT; }
+}
+function setHistoryLimit(n) {
+  const v = Math.max(2, Math.min(100000, Number(n) || HISTORY_DEFAULT_LIMIT));
+  saveArray(F_HISTORY_LIMIT, [{ limit: v }]);
+  return v;
+}
+/** 按 starredAt/lastPlayedAt 去重后保留最新 limit 条 */
+function trimHistory(arr) {
+  const lim = historyLimit();
+  if (arr.length <= lim) return arr;
+  const sorted = arr.slice().sort((a, b) => (Number(b.updatedAt || b.starredAt || 0)) - (Number(a.updatedAt || a.starredAt || 0)));
+  return sorted.slice(0, lim);
 }
 
 const shellModule = {

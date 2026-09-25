@@ -144,7 +144,7 @@ internal class SftpPlayerPage : SftpBasePager() {
         name = params.optString("name", "")
         size = params.optLong("size", 0L)
         loadEpisodes()
-        startPlayback()
+        checkExistsThenStart()
     }
 
     /**
@@ -163,6 +163,23 @@ internal class SftpPlayerPage : SftpBasePager() {
             if (videos.isEmpty()) return@list
             episodes = videos
             currentIndex = videos.indexOf(remotePath).coerceAtLeast(0)
+        }
+    }
+
+    /** 打开前校验文件是否存在（历史/收藏入口可能已失效） */
+    private fun checkExistsThenStart() {
+        val sid = sessionId.ifEmpty { connectionId }
+        if (sid.isEmpty() || remotePath.isEmpty()) {
+            startPlayback()
+            return
+        }
+        sftpModule().stat(sid, remotePath) { entry, err ->
+            if (entry == null) {
+                playError = "文件不存在，可能已被删除"
+            } else {
+                if (entry.size > 0) size = entry.size
+                startPlayback()
+            }
         }
     }
 

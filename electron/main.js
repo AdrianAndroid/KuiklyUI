@@ -145,6 +145,7 @@ function entryOf(name, abs) {
 }
 
 ipcMain.handle('localfs:home', async () => LOCAL_ROOT);
+ipcMain.on('localfs:homeSync', (e) => { e.returnValue = LOCAL_ROOT; });
 ipcMain.handle('localfs:list', async (_e, dir) => {
   const { target: d } = await assertWithinRoot(dir || LOCAL_ROOT);
   const ents = await require('fs').promises.readdir(d, { withFileTypes: true });

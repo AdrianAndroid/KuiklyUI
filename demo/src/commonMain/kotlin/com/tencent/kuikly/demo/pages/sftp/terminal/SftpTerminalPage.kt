@@ -18,6 +18,9 @@ import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.directives.vfor
+import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.IPagerEventObserver
@@ -59,19 +62,34 @@ internal class SftpTerminalPage : SftpBasePager() {
     private var loginPwd: String by observable("")
     private var rememberPwd: Boolean by observable(true)
     private var loginError: String by observable("")
-    private var pollTicks: Int = 0
+    /** 性能：只在缓冲区版本变化时重建行列表（避免每 130ms 无条件 churn） */
+    private var lastRenderedVersion: Int = -1
+    // 命令历史（条数上限由设置页决定；默认 20）
+    private var cmdHistory by observableList<String>()
+    private var historyVisible: Boolean by observable(false)
+    private var historyMax: Int = 20
+    /** 宿主通道（xterm/自动化）输入的行缓冲：遇 \n 记入命令历史 */
+    private var hostLineBuffer: String = ""
     private var localMode = false
     private var forceGrid = false
+    /** Web/桌面优先用 xterm.js（MIT，成熟终端仿真：ANSI/CJK/方向键/回车）；其它端回退共享网格 */
+    private var useXterm: Boolean by observable(false)
 
     private var shellId: String? = null
     private var offset = 0L
     private var buffer: TerminalBuffer? = null
     private var pollRef: String? = null
+    private var readyTimerRef: String? = null
+    private var readyDeadline: Long = 0L
     private var xtermId: String = ""
 
     private var lines: ObservableList<String> by observableList<String>()
     private var status: String by observable("启动中…")
     private var inputText: String by observable("")
+    /** shell 是否已就绪（启动期输入先缓冲，避免带偏本地 pty 的 ZLE） */
+    private var shellReady: Boolean by observable(false)
+    private val pendingSend = ArrayList<String>()
+    private val pendingRaw = ArrayList<String>()
     private var rowsCount: Int by observable(24)
     private var colsCount: Int by observable(80)
 
@@ -97,6 +115,13 @@ internal class SftpTerminalPage : SftpBasePager() {
         forceGrid = p.optString("renderer", "auto") == "grid"
         colsCount = 80
         rowsCount = 22
+        // Web/桌面：优先 xterm.js（成熟仿真）；显式 renderer=grid 或宿主不支持时回退共享网格
+        useXterm = !forceGrid && runCatching {
+            acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsXterm()
+        }.getOrDefault(false)
+        historyMax = acquireModule<com.tencent.kuikly.core.module.SharedPreferencesModule>(
+            com.tencent.kuikly.core.module.SharedPreferencesModule.MODULE_NAME
+        ).getInt(KEY_TERM_HISTORY_MAX) ?: 20
         start()
     }
 
@@ -209,11 +234,102 @@ internal class SftpTerminalPage : SftpBasePager() {
                 return@open
             }
             shellId = id
-            buffer = TerminalBuffer(colsCount, rowsCount)
-            status = if (localMode) "本地终端" else ("远程终端 · " + label.ifEmpty { host })
+            // 本地 pty 启动期间若立刻写入会把 shell 的 ZLE 带偏（输入回显但永不执行）。
+            // 就绪判定：有输出后安静 [QUIET_MS] 视为就绪，并以 [HARD_READY_MS] 为硬上限（防持续刷屏永不就绪）。
+            shellReady = false
+            status = "启动中…"
+            readyDeadline = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp() + HARD_READY_MS
+            scheduleReadyCheck(1200)
+            if (useXterm) {
+                mountXterm()
+            } else {
+                buffer = TerminalBuffer(colsCount, rowsCount)
+                applyViewportSize()   // 按窗口尺寸设定列宽/行数（尽量贴合可见区域）
+            }
             pollOnce()   // 立即首拉，避免依赖定时器首跳
             schedulePoll()
         }
+    }
+
+    /** 挂载 xterm.js（绝对定位覆盖网格区域；输入由 xterm onData → terminal_input 回传） */
+    private fun mountXterm() {
+        if (!useXterm) return
+        val bridge = acquireModule<BridgeModule>(BridgeModule.MODULE_NAME)
+        val y = pagerData.statusBarHeight + 48f
+        val w = pagerData.pageViewWidth
+        val h = (pagerData.pageViewHeight - pagerData.statusBarHeight - 48f - 44f).coerceAtLeast(120f)
+        bridge.xtermMount(0f, y, w, h, 13f) { termId, cols, rows ->
+            if (termId.isEmpty()) {
+                // 宿主挂载失败 → 显式回退网格（不静默）
+                useXterm = false
+                buffer = TerminalBuffer(colsCount, rowsCount)
+                applyViewportSize()
+                return@xtermMount
+            }
+            xtermId = termId
+            colsCount = cols
+            rowsCount = rows
+            // 以 xterm 计算出的列/行为准通知 pty
+            shellId?.let { terminal.resize(it, cols, rows) }
+        }
+    }
+
+    /** 就绪判定（可重置）：[delayMs] 内无新输出则视为就绪；不超过硬上限 [readyDeadline] */
+    private fun scheduleReadyCheck(delayMs: Int) {
+        val now = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp()
+        val fireAt = minOf(now + delayMs.toLong(), readyDeadline)
+        readyTimerRef?.let { clearTimeout(it) }
+        readyTimerRef = setTimeout((fireAt - now).toInt().coerceAtLeast(0)) {
+            shellReady = true
+            status = if (localMode) "本地终端" else ("远程终端 · " + label.ifEmpty { host })
+            flushPendingInput()
+        }
+    }
+
+    /** shell 就绪后补发启动期间缓冲的输入（先到先发） */
+    private fun flushPendingInput() {
+        val id = shellId ?: return
+        if (pendingRaw.isNotEmpty()) {
+            val raws = ArrayList(pendingRaw)
+            pendingRaw.clear()
+            raws.forEach { writeRaw(it) }
+        }
+        if (pendingSend.isEmpty()) return
+        val cmds = ArrayList(pendingSend)
+        pendingSend.clear()
+        cmds.forEach { c -> writeLine(id, c) }
+    }
+
+    private fun writeLine(id: String, text: String) {
+        terminal.write(id, SftpTextLoader.base64(SftpTextLoader.encodeUtf8(text + "\n")))
+    }
+
+    /** 原样写入（xterm 字符流） */
+    private fun writeRaw(data: String) {
+        val id = shellId ?: return
+        terminal.write(id, SftpTextLoader.base64(SftpTextLoader.encodeUtf8(data)))
+    }
+
+    /** Kuikly 浮层（如命令历史）需要盖在 xterm 之上时，临时隐藏/恢复 xterm */
+    private fun setXtermVisible(visible: Boolean) {
+        if (!useXterm || xtermId.isEmpty()) return
+        runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).xtermSetVisible(xtermId, visible) }
+    }
+
+    /** 按窗口尺寸计算列数/行数（12.5px 等宽 ≈ 7.5x16），并通知 pty resize；xterm 模式下由 xterm 自己算 */
+    private fun applyViewportSize() {
+        if (useXterm) return
+        val w = pagerData.pageViewWidth
+        val h = pagerData.pageViewHeight
+        if (w <= 0f || h <= 0f) return
+        val newCols = ((w - 16f) / 7.5f).toInt().coerceIn(20, 400)
+        val newRows = ((h - 48f - 44f - 12f) / 16f).toInt().coerceIn(5, 200)
+        if (newCols == colsCount && newRows == rowsCount) return
+        colsCount = newCols
+        rowsCount = newRows
+        buffer?.resize(newCols, newRows)
+        shellId?.let { terminal.resize(it, newCols, newRows) }
+        refreshLines(force = true)
     }
 
     /** 偏移拉取（HTTP 轮询即可，无需 WebSocket） */
@@ -224,41 +340,88 @@ internal class SftpTerminalPage : SftpBasePager() {
     /** 单次拉取：无论有无新数据都刷新（自愈，避免丢帧后长时间不更新） */
     private fun pollOnce() {
         val id = shellId ?: return
-        pollTicks++
         terminal.read(id, offset) { b64, next, closed ->
-            status = (if (localMode) "本地终端" else "远程终端") + " · #" + pollTicks
             if (b64.isNotEmpty()) {
-                buffer?.feed(SftpTextLoader.base64Decode(b64))
+                if (useXterm && xtermId.isNotEmpty()) {
+                    // xterm 直接消费原始字节流（ANSI/CJK/光标全由它处理）
+                    acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).xtermWrite(xtermId, b64)
+                } else {
+                    buffer?.feed(SftpTextLoader.base64Decode(b64))
+                }
+                if (!shellReady) scheduleReadyCheck(QUIET_MS)
             }
             if (next > offset) offset = next
-            refreshLines()
-            if (closed && status != "会话已结束") status = "会话已结束"
+            if (!useXterm) refreshLines()
+            if (closed) {
+                status = "会话已结束"
+                shellReady = true
+            }
         }
     }
 
-    private fun refreshLines() {
+    private fun refreshLines(force: Boolean = false) {
         val b = buffer ?: return
-        val all = b.allLines()
+        if (!force && b.version == lastRenderedVersion) return
+        lastRenderedVersion = b.version
+        val all = b.linesWithScrollback()
         lines.clear()
         lines.addAll(all)
     }
 
-    /** 原样发送（含回车）；宿主 xterm 直接给字符流 */
+    /** 记录命令历史（去重相邻、超过上限截断） */
+    private fun rememberCommand(cmd: String) {
+        val c = cmd.trim()
+        if (c.isEmpty()) return
+        val list = cmdHistory.toMutableList()
+        if (list.lastOrNull() == c) list.removeAt(list.size - 1)
+        list.add(c)
+        while (list.size > historyMax) list.removeAt(0)
+        cmdHistory.clear()
+        cmdHistory.addAll(list)
+    }
+
+    /** 原样发送（含回车）；宿主 xterm 直接给字符流。同时按行累积到命令历史。 */
     private fun sendRaw(data: String) {
-        val id = shellId ?: return
-        terminal.write(id, SftpTextLoader.base64(SftpTextLoader.encodeUtf8(data)))
+        if (shellId == null) return
+        data.forEach { ch ->
+            when (ch) {
+                '\n', '\r' -> {
+                    if (hostLineBuffer.isNotBlank()) rememberCommand(hostLineBuffer)
+                    hostLineBuffer = ""
+                }
+                '\u007F', '\b' -> if (hostLineBuffer.isNotEmpty()) hostLineBuffer = hostLineBuffer.dropLast(1)
+                else -> hostLineBuffer += ch
+            }
+        }
+        if (!shellReady) {
+            pendingRaw.add(data)
+            return
+        }
+        writeRaw(data)
     }
 
     private fun sendInput(text: String) {
         val id = shellId ?: return
         if (text.isEmpty()) return
-        terminal.write(id, SftpTextLoader.base64(SftpTextLoader.encodeUtf8(text + "\n")))
+        rememberCommand(text)
         inputText = ""
+        if (!shellReady) {
+            // shell 启动中：先排队，就绪后补发（否则本地 pty 会被带偏）
+            pendingSend.add(text)
+            status = "启动中…（命令已排队）"
+            return
+        }
+        writeLine(id, text)
     }
 
     override fun pageWillDestroy() {
         super.pageWillDestroy()
         pollRef?.let { clearTimeout(it) }
+        readyTimerRef?.let { clearTimeout(it) }
+        if (xtermId.isNotEmpty()) {
+            runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).xtermDispose(xtermId) }
+            xtermId = ""
+        }
         shellId?.let { terminal.close(it) }
     }
 
@@ -297,10 +460,13 @@ internal class SftpTerminalPage : SftpBasePager() {
             // 终端区（共享网格渲染；xterm 可用时由宿主覆盖在同类区域上）
             View {
                 attr { flex(1f); flexDirectionColumn() }
-                TerminalGridView(
-                    linesProvider = { ctx.lines },
-                    onScrollerReady = { scrollBottom -> ctx.scrollToBottom = scrollBottom },
-                )
+                // xterm 模式：由宿主 xterm 覆盖该区域；网格仅作 native 回退
+                vif({ !ctx.useXterm }) {
+                    TerminalGridView(
+                        linesProvider = { ctx.lines },
+                        onScrollerReady = { scrollBottom -> ctx.scrollToBottom = scrollBottom },
+                    )
+                }
             }
 
             // 输入行（跨端可用；xterm 模式下也可用这里输入）
@@ -323,15 +489,31 @@ internal class SftpTerminalPage : SftpBasePager() {
                             placeholder("输入命令后回车…")
                             fontSize(12.5f); height(20f); flex(1f)
                             color(SftpColorTokens.textPrimary)
+                            returnKeyTypeSend()
                         }
-                        event { textDidChange { s -> ctx.inputText = s.text } }
+                        event {
+                            textDidChange { s -> ctx.inputText = s.text }
+                            // 回车即发送：Web 端 KRTextFieldView 仅在注册 inputReturn 时才绑定 Enter keydown，
+                            // 之前只注册 textDidChange → 真实键盘回车无任何反应（只能点「发送」）。
+                            inputReturn { p -> ctx.sendInput(if (p.text.isNotEmpty()) p.text else ctx.inputText) }
+                        }
                     }
+                }
+                Text {
+                    attr {
+                        text("历史")
+                        fontSize(13f); color(SftpColorTokens.textSecondary)
+                        margin(8f, 4f, 8f, 8f)
+                        accessibility("terminal_history_btn")
+                    }
+                    event { click { ctx.historyVisible = true; ctx.setXtermVisible(false) } }
                 }
                 Text {
                     attr {
                         text("发送")
                         fontSize(13f); color(SftpColorTokens.primary)
                         margin(8f, 8f, 8f, 8f)
+                        accessibility("terminal_send_btn")
                     }
                     event { click { ctx.sendInput(ctx.inputText) } }
                 }
@@ -384,8 +566,13 @@ internal class SftpTerminalPage : SftpBasePager() {
                                     text(ctx.loginPwd); placeholder("密码")
                                     fontSize(13f); height(22f); flex(1f); color(SftpColorTokens.textPrimary)
                                     keyboardTypePassword()
+                                    returnKeyTypeDone()
                                 }
-                                event { textDidChange { st -> ctx.loginPwd = st.text } }
+                                event {
+                                    textDidChange { st -> ctx.loginPwd = st.text }
+                                    // 密码框回车 = 连接
+                                    inputReturn { ctx.doLocalLogin() }
+                                }
                             }
                         }
                         Text {
@@ -420,16 +607,85 @@ internal class SftpTerminalPage : SftpBasePager() {
                     }
                 }
             }
+
+            // 命令历史弹层（绝对定位；放在内容区之后）
+            vif({ ctx.historyVisible }) {
+                View {
+                    attr {
+                        positionAbsolute(); left(0f); top(0f)
+                        size(pagerData.pageViewWidth, pagerData.pageViewHeight)
+                        backgroundColor(Color(0x99000000))
+                        flexDirectionColumn()
+                    }
+                    event { click { ctx.historyVisible = false; ctx.setXtermVisible(true) } }
+                    View { attr { flex(1f) } }
+                    View {
+                        attr {
+                            width(pagerData.pageViewWidth)
+                            height(pagerData.pageViewHeight * 0.55f)
+                            backgroundColor(SftpColorTokens.cardBg)
+                            borderRadius(14f)
+                            padding(14f, 12f, 14f, 12f)
+                            flexDirectionColumn()
+                        }
+                        event { click { } }
+                        Text {
+                            attr {
+                                text("命令历史 · 最多 " + ctx.historyMax + " 条")
+                                fontSize(14f); fontWeightBold(); color(SftpColorTokens.textPrimary)
+                                marginBottom(8f)
+                            }
+                        }
+                        vif({ ctx.cmdHistory.isEmpty() }) {
+                            Text { attr { text("暂无历史命令"); fontSize(12.5f); color(SftpColorTokens.textSecondary) } }
+                        }
+                        velse {
+                            Scroller {
+                                attr { flex(1f); width(pagerData.pageViewWidth - 28f); flexDirectionColumn() }
+                                vfor({ ctx.cmdHistory }) { c ->
+                                    Text {
+                                        attr {
+                                            text(c)
+                                            fontSize(12.5f)
+                                            color(SftpColorTokens.textPrimary)
+                                            fontFamily("monospace")
+                                            margin(9f, 8f, 9f, 8f)
+                                            backgroundColor(SftpColorTokens.bg)
+                                            borderRadius(5f)
+                                            marginBottom(4f)
+                                        }
+                                        event {
+                                            click {
+                                                ctx.inputText = c
+                                                ctx.historyVisible = false
+                                                ctx.setXtermVisible(true)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     private var scrollToBottom: (() -> Unit)? = null
 
+
+
     companion object {
         const val PAGE_NAME = SftpPageNames.TERMINAL
         /** 宿主输入事件名（与 h5App/kr-terminal.js 的 __kuiklySendEvent__ 一致） */
         private const val EVENT_TERMINAL_INPUT = "terminal_input"
+        /** 就绪判定：最后一次输出后安静该时长即视为 shell 就绪 */
+        private const val QUIET_MS = 900
+        /** 就绪判定硬上限：即使持续刷屏也会在此时间后就绪（防永不就绪） */
+        private const val HARD_READY_MS = 5000L
         private const val LOCAL_HOST = "127.0.0.1"
         private const val LOCAL_LABEL = "本机"
+        /** 设置页里可调的终端命令历史条数（SharedPreferences key） */
+        const val KEY_TERM_HISTORY_MAX = "term_history_max"
     }
 }

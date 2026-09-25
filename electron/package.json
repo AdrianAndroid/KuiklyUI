@@ -17,7 +17,8 @@
     "dist:release": "KUIKLY_WEB_MODE=release npm run dist",
     "test:player": "node test/player-window.mjs",
     "test:text": "node test/text-viewer.mjs",
-    "test:term": "node test/terminal.mjs"
+    "test:term": "node test/terminal.mjs",
+    "test:features": "node test/features.mjs"
   },
   "devDependencies": {
     "electron": "33.4.11",

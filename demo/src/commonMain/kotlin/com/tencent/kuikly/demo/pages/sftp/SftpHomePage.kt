@@ -29,7 +29,13 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.timer.clearTimeout
+import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.demo.pages.base.BridgeModule
+import com.tencent.kuikly.demo.pages.base.Utils
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheManager
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheTask
+import com.tencent.kuikly.demo.pages.sftp.cache.CacheTasksOverlay
 import com.tencent.kuikly.core.utils.PlatformUtils
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
@@ -58,6 +64,13 @@ internal class SftpHomePage : SftpBasePager() {
     private var loading: Boolean by observable(true)
     private var errorMsg: String? by observable(null)
     private var currentTab: Int by observable(0)  // 0 连接 / 1 收藏 / 2 历史
+    /** 右下角「更多」抽屉（设置 / 缓存列表 / 关于） */
+    private var moreVisible: Boolean by observable(false)
+    /** 缓存任务浮层（与浏览页共用同一 CacheManager） */
+    private var cachePanelVisible: Boolean by observable(false)
+    private var cacheTasks by observableList<CacheTask>()
+    private var cacheVersionSeen: Int = -1
+    private var cachePollRef: String? = null
     // 收藏 Tab 状态
     internal var favorites by observableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>()
     internal var favoritesLoaded: Boolean by observable(false)
@@ -234,8 +247,75 @@ internal class SftpHomePage : SftpBasePager() {
                     SftpEmptyView("暂无播放历史")
                 }
                 velse {
-                    SftpHistoryList({ ctx.history }) { rec -> ctx.openHistory(rec) }
+                    SftpHistoryList({ ctx.history }, { rec -> ctx.openHistory(rec) }) { rec -> ctx.deleteHistory(rec) }
                 }
+
+                // 右下角「更多」按钮（仅 Web/桌面）
+                if (ctx.isWebLike) {
+                    View {
+                        attr {
+                            positionAbsolute()
+                            right(16f)
+                            bottom(16f)
+                            zIndex(99)
+                            size(48f, 48f)
+                            borderRadius(24f)
+                            backgroundColor(SftpColorTokens.primary)
+                            allCenter()
+                            accessibility("home_more_fab")
+                        }
+                        event { click { ctx.moreVisible = true } }
+                        Text { attr { text("＋"); fontSize(24f); color(Color(0xFFFFFFFF.toInt())) } }
+                    }
+                }
+
+                // 「更多」抽屉（绝对定位；必须放在内容区之后，避免被盖住）
+                vif({ ctx.moreVisible }) {
+                    View {
+                        attr {
+                            positionAbsolute(); left(0f); bottom(0f)
+                            width(pagerData.pageViewWidth)
+                            zIndex(98)
+                            backgroundColor(Color(0x99000000))
+                            flexDirectionColumn()
+                        }
+                        event { click { ctx.moreVisible = false } }
+                        View {
+                            attr {
+                                width(pagerData.pageViewWidth)
+                                height(240f)
+                                backgroundColor(SftpColorTokens.cardBg)
+                                borderRadius(14f)
+                                padding(16f, 12f, 16f, 12f)
+                                flexDirectionColumn()
+                            }
+                            event { click { } }
+                            Text { attr { text("更多"); fontSize(15f); fontWeightBold(); color(SftpColorTokens.textPrimary); marginBottom(8f) } }
+                            MoreRow("设置", "历史条数 / 清空缓存 / 清空播放历史") {
+                                ctx.moreVisible = false
+                                ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPageNames.SETTINGS)
+                            }
+                            MoreRow("缓存列表", "正在缓存 / 已缓存") {
+                                ctx.moreVisible = false
+                                ctx.refreshCacheState()
+                                ctx.cachePanelVisible = true
+                            }
+                            MoreRow("关于", "Kuikly SFTP 0.1.0") {
+                                ctx.moreVisible = false
+                                Utils.bridgeModule(ctx).toast("Kuikly SFTP 0.1.0")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 缓存任务浮层（与浏览页共用 CacheManager）
+            vif({ ctx.cachePanelVisible }) {
+                CacheTasksOverlay(
+                    tasksProvider = { ctx.cacheTasks },
+                    onChanged = { ctx.refreshCacheState() },
+                    onClose = { ctx.cachePanelVisible = false },
+                )
             }
                     }
 }
@@ -278,7 +358,7 @@ internal class SftpHomePage : SftpBasePager() {
      */
     internal fun openTerminal(conn: com.tencent.kuikly.core.module.sftp.SftpConnection?) {
         val p = JSONObject()
-        p.put("renderer", "grid")   // 跨端统一走共享网格渲染（web 可用 xterm 加速，后续可切）
+        // 渲染器交给页面自选：Web/桌面优先 xterm.js，其它端回退共享网格（renderer=grid 可强制网格）
         if (conn == null) {
             p.put("local", true)
         } else {
@@ -300,6 +380,18 @@ internal class SftpHomePage : SftpBasePager() {
     /** 本端是否支持终端（决定是否显示入口；未实现端不显示、也不调用其原生方法） */
     private fun terminalSupported(): Boolean =
         runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsTerminal() }.getOrDefault(false)
+
+    /** 删除一条播放历史（✕） */
+    internal fun deleteHistory(rec: com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) {
+        sftpPlaybackHistoryModule().remove(rec.id) { _, err ->
+            if (err != null) {
+                Utils.bridgeModule(this).toast("删除失败：" + err.msg)
+            } else {
+                Utils.bridgeModule(this).toast("已删除历史：" + rec.name)
+                reloadHistory()
+            }
+        }
+    }
 
     /** 默认入口：只开本地栏（远端栏由用户在页内选择主机）。 */
     internal fun openLocalFileManager() {
@@ -349,6 +441,29 @@ internal class SftpHomePage : SftpBasePager() {
     override fun created() {
         super.created()
         refresh()
+        refreshCacheState()
+        scheduleCachePoll()
+    }
+
+    override fun pageWillDestroy() {
+        super.pageWillDestroy()
+        cachePollRef?.let { clearTimeout(it) }
+    }
+
+    private fun scheduleCachePoll() {
+        cachePollRef = setTimeout(400) {
+            refreshCacheState()
+            scheduleCachePoll()
+        }
+    }
+
+    private fun refreshCacheState() {
+        if (CacheManager.version != cacheVersionSeen) {
+            cacheVersionSeen = CacheManager.version
+            val snap = CacheManager.snapshot()
+            cacheTasks.clear()
+            cacheTasks.addAll(snap)
+        }
     }
 
     /**
@@ -601,7 +716,8 @@ internal fun ViewContainer<*, *>.SftpFavoritesList(
 /** 历史列表渲染（可点击进入播放页） */
 internal fun ViewContainer<*, *>.SftpHistoryList(
     itemsProvider: () -> ObservableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>,
-    onClick: (com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) -> Unit
+    onClick: (com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) -> Unit,
+    onDelete: ((com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) -> Unit)? = null
 ) {
     Scroller {
         attr {
@@ -634,6 +750,19 @@ internal fun ViewContainer<*, *>.SftpHistoryList(
                         text(formatDuration(rec.position))
                         fontSize(12f)
                         color(SftpColorTokens.textSecondary)
+                    }
+                }
+                if (onDelete != null) {
+                    // 每条历史记录右侧的删除按钮（独立格：避免嵌套点击冒泡到行）
+                    View {
+                        attr {
+                            width(34f)
+                            height(34f)
+                            allCenter()
+                            accessibility("history_delete_btn")
+                        }
+                        event { click { onDelete(rec) } }
+                        Text { attr { text("✕"); fontSize(14f); color(SftpColorTokens.danger) } }
                     }
                 }
             }
@@ -678,5 +807,19 @@ internal fun ViewContainer<*, *>.SftpLocalFileManagerEntry(
             }
         }
         Text { attr { text("›"); fontSize(20f); color(SftpColorTokens.textSecondary) } }
+    }
+}
+
+/** 「更多」抽屉里的一行 */
+private fun ViewContainer<*, *>.MoreRow(title: String, subtitle: String, onClick: () -> Unit) {
+    View {
+        attr {
+            width(pagerData.pageViewWidth - 32f)
+            padding(14f, 10f, 14f, 10f)
+            flexDirectionColumn()
+        }
+        event { click { onClick() } }
+        Text { attr { text(title); fontSize(15f); color(SftpColorTokens.textPrimary) } }
+        Text { attr { text(subtitle); fontSize(12f); color(SftpColorTokens.textSecondary); marginTop(2f) } }
     }
 }

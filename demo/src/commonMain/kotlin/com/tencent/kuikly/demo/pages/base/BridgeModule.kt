@@ -66,6 +66,69 @@ internal class BridgeModule : Module() {
             .getOrDefault(res.trim() == "true")
     }
 
+    /**
+     * 本地缓存根目录（用于「缓存整个目录」的落盘位置）。
+     * Web/桌面返回宿主本地目录（如 `<home>/.kuikly_cache`）；其它端返回空串（走各端沙盒默认目录）。
+     */
+    fun cacheRoot(): String {
+        val res = syncToNativeMethod(CACHE_ROOT, JSONObject(), null)
+        return runCatching { JSONObject(res).optString("path") }.getOrDefault("")
+    }
+
+    /**
+     * 本端是否支持 xterm.js 加速渲染（Web/桌面）。
+     * 其它端 false → 终端页回退共享网格渲染（`TerminalGridView`，六端共用）。
+     */
+    fun supportsXterm(): Boolean {
+        val res = syncToNativeMethod(SUPPORTS_XTERM, JSONObject(), null)
+        return runCatching { JSONObject(res).optBoolean("supported", false) }.getOrDefault(res.trim() == "true")
+    }
+
+    /** 在宿主挂载 xterm 终端（绝对定位到给定矩形），同步返回 termId 与行列数。仅 [supportsXterm] 为 true 时调用。 */
+    fun xtermMount(x: Float, y: Float, width: Float, height: Float, fontSize: Float, callback: (termId: String, cols: Int, rows: Int) -> Unit) {
+        val args = JSONObject()
+        args.put("x", x.toDouble())
+        args.put("y", y.toDouble())
+        args.put("width", width.toDouble())
+        args.put("height", height.toDouble())
+        args.put("fontSize", fontSize.toDouble())
+        val res = syncToNativeMethod(XTERM_MOUNT, args, null)
+        val obj = runCatching { JSONObject(res) }.getOrDefault(JSONObject())
+        callback(obj.optString("termId"), obj.optInt("cols", 80), obj.optInt("rows", 24))
+    }
+
+    /** 把终端输出（base64 字节）写入 xterm */
+    fun xtermWrite(termId: String, base64Data: String) {
+        val args = JSONObject()
+        args.put("termId", termId)
+        args.put("data", base64Data)
+        callNativeMethod(XTERM_WRITE, args, null)
+    }
+
+    /** 重新定位/缩放 xterm（容器尺寸变化时） */
+    fun xtermResize(termId: String, width: Float, height: Float) {
+        val args = JSONObject()
+        args.put("termId", termId)
+        args.put("width", width.toDouble())
+        args.put("height", height.toDouble())
+        callNativeMethod(XTERM_RESIZE, args, null)
+    }
+
+    /** 销毁 xterm（页面退出时） */
+    fun xtermDispose(termId: String) {
+        val args = JSONObject()
+        args.put("termId", termId)
+        callNativeMethod(XTERM_DISPOSE, args, null)
+    }
+
+    /** 显示/隐藏 xterm（Kuikly 浮层需要盖在终端之上时） */
+    fun xtermSetVisible(termId: String, visible: Boolean) {
+        val args = JSONObject()
+        args.put("termId", termId)
+        args.put("visible", visible)
+        callNativeMethod(XTERM_SET_VISIBLE, args, null)
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -220,6 +283,13 @@ internal class BridgeModule : Module() {
         const val OPEN_PLAYER_WINDOW = "openPlayerWindow"
         const val SAVE_TEMP_FILE = "saveTempFile"
         const val SUPPORTS_TERMINAL = "supportsTerminal"
+        const val CACHE_ROOT = "cacheRoot"
+        const val SUPPORTS_XTERM = "supportsXterm"
+        const val XTERM_MOUNT = "xtermMount"
+        const val XTERM_WRITE = "xtermWrite"
+        const val XTERM_RESIZE = "xtermResize"
+        const val XTERM_DISPOSE = "xtermDispose"
+        const val XTERM_SET_VISIBLE = "xtermSetVisible"
 
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"

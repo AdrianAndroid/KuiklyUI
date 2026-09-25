@@ -77,6 +77,15 @@ class SftpPlaybackHistoryModule : Module() {
         }
     }
 
+    /** 设置播放历史容量（追加语义：超限丢最旧；默认 1000）。Web 端由网关持久化。 */
+    fun setLimit(limit: Int, callback: ((limit: Int) -> Unit)? = null) {
+        val params = JSONObject()
+        params.put("limit", limit)
+        asyncToNativeMethod("setLimit", params) { data ->
+            callback?.invoke(data?.optInt("limit", limit) ?: limit)
+        }
+    }
+
     fun remove(id: String, callback: (success: Boolean, error: SftpError?) -> Unit) {
         val params = JSONObject()
         params.put("id", id)

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('kuiklyHost', {
 // 本地文件系统（双栏「本地栏」用；仅限用户主目录之下）
 contextBridge.exposeInMainWorld('localFs', {
   home: () => ipcRenderer.invoke('localfs:home'),
+  // 同步取主目录（Kuikly 的 cacheRoot 是同步通道，异步 home() 拿不到值）
+  homeSync: () => ipcRenderer.sendSync('localfs:homeSync'),
   list: (dir) => ipcRenderer.invoke('localfs:list', dir),
   stat: (p) => ipcRenderer.invoke('localfs:stat', p),
   mkdir: (p) => ipcRenderer.invoke('localfs:mkdir', p),

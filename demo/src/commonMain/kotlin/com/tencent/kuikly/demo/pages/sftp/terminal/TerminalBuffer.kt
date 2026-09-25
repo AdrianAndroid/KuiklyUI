@@ -27,9 +27,13 @@ package com.tencent.kuikly.demo.pages.sftp.terminal
  * - 退格、回车覆盖、自动换行、滚动
  * - 忽略其余 ESC 序列（不崩、不乱码）
  */
-internal class TerminalBuffer(val cols: Int = 80, val rows: Int = 24) {
+internal class TerminalBuffer(var cols: Int = 80, var rows: Int = 24) {
 
-    private val grid: Array<CharArray> = Array(rows) { CharArray(cols) { ' ' } }
+    private var grid: Array<CharArray> = Array(rows) { CharArray(cols) { ' ' } }
+
+    /** 回滚缓冲（历史行，环形上限）：容量 = 保留最近 [SCROLLBACK_MAX] 行 */
+    private val scrollback = ArrayDeque<String>()
+    private val cap = SCROLLBACK_MAX
     var cx: Int = 0
         private set
     var cy: Int = 0
@@ -40,13 +44,39 @@ internal class TerminalBuffer(val cols: Int = 80, val rows: Int = 24) {
         private set
 
     private var state = 0 // 0=普通 1=ESC 2=CSI
+
+    companion object {
+        /** 回滚缓冲上限（行）：限制内存占用 */
+        const val SCROLLBACK_MAX = 2000
+    }
     private val csi = StringBuilder()
 
+    /**
+     * 调整尺寸（跟随窗口）。保留已有可见内容的上部，按新尺寸重建网格；
+     * 交互式 shell 会收到 SIGWINCH 并自行重绘。
+     */
     fun resize(newCols: Int, newRows: Int) {
-        // 简化处理：尺寸变化时清屏重画（交互式 shell 会自行重绘）
         if (newCols == cols && newRows == rows) return
+        val keep = ArrayList<String>(newRows)
+        for (r in 0 until minOf(rows, newRows)) keep.add(line(r))
+        cols = newCols
+        rows = newRows
+        grid = Array(rows) { CharArray(cols) { ' ' } }
+        keep.forEachIndexed { i, l -> l.forEachIndexed { j, c -> if (j < cols) grid[i][j] = c } }
+        cx = cx.coerceIn(0, cols - 1)
+        cy = cy.coerceIn(0, rows - 1)
         version++
     }
+
+    /** 可见行 + 回滚行（总数上限保护，供渲染层滚动查看） */
+    fun linesWithScrollback(): List<String> {
+        val out = ArrayList<String>(scrollback.size + rows)
+        out.addAll(scrollback)
+        for (r in 0 until rows) out.add(line(r))
+        return out
+    }
+
+    fun scrollbackSize(): Int = scrollback.size
 
     fun line(row: Int): String = if (row in 0 until rows) grid[row].concatToString() else ""
 
@@ -114,6 +144,9 @@ internal class TerminalBuffer(val cols: Int = 80, val rows: Int = 24) {
 
     private fun scrollIfNeeded() {
         while (cy >= rows) {
+            // 顶部行进入回滚缓冲（超上限丢最旧）
+            scrollback.addLast(grid[0].concatToString().trimEnd())
+            while (scrollback.size > cap) scrollback.removeFirst()
             for (r in 1 until rows) {
                 grid[r - 1].copyInto(grid[r])
             }

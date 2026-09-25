@@ -49,6 +49,53 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 if (ok) "{\"supported\":true}" else "{\"supported\":true}"   // 网关可用即可（网格渲染不依赖 xterm）
             }
 
+            // xterm.js 加速（Web/桌面）：挂载/写入/缩放/销毁，见 resources/lib/kr-terminal.js
+            "supportsXterm" -> {
+                val ok = js("(typeof window !== 'undefined' && typeof window.__krTerm !== 'undefined' && typeof window.__krTerm.mount === 'function')") as Boolean
+                if (ok) "{\"supported\":true}" else "{\"supported\":false}"
+            }
+
+            "xtermMount" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val res = js("window.__krTerm.mount({ x: q.x, y: q.y, width: q.width, height: q.height, fontSize: q.fontSize })")
+                val id = ((res.termId as? String) ?: "").replace("\"", "")
+                val cols = (res.cols as? Number)?.toInt() ?: 80
+                val rows = (res.rows as? Number)?.toInt() ?: 24
+                "{\"termId\":\"$id\",\"cols\":$cols,\"rows\":$rows}"
+            }
+
+            "xtermWrite" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                js("window.__krTerm.write(q.termId, q.data)")
+                Unit
+            }
+
+            "xtermResize" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                js("window.__krTerm.resize(q.termId, q.width, q.height)")
+                Unit
+            }
+
+            "xtermDispose" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                js("window.__krTerm.dispose(q.termId)")
+                Unit
+            }
+
+            "xtermSetVisible" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                js("window.__krTerm.setVisible(q.termId, q.visible)")
+                Unit
+            }
+
+            // 本地缓存根目录（缓存整个目录时作为落盘根）
+            // 必须**同步**返回：Kuikly 的 cacheRoot 走同步通道，异步 home() 拿不到值（会恒为空）。
+            // 桌面壳 preload 暴露 homeSync（sendSync）；纯浏览器无 window.localFs → 空串（不支持缓存）。
+            "cacheRoot" -> {
+                val home = js("(typeof window !== 'undefined' && window.localFs && typeof window.localFs.homeSync === 'function') ? String(window.localFs.homeSync()) : ''") as String
+                if (home.isNotEmpty()) "{\"path\":\"" + home + "/.kuikly_cache\"}" else "{\"path\":\"\"}"
+            }
+
             "openPlayerWindow" -> {
                 val q = js("JSON").parse(params ?: "{}")
                 js("window.kuiklyHost.openPlayerWindow(q)")

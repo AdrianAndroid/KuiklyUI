@@ -60,24 +60,27 @@ async function attach(wsUrl) {
 const listTargets = async () => { try { return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === 'page'); } catch (e) { return []; } };
 const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() - t0 > ms) return null; await sleep(step); } };
 
+/** 读取 xterm 缓冲区文本（xterm 渲染到 canvas，DOM 取不到；用宿主测试钩子） */
+async function xtermText(view, maxLines = 400) {
+  return String(await view.ev("(()=>{try{return (window.__krTerm&&window.__krTerm.lastId())?window.__krTerm.text(window.__krTerm.lastId()," + maxLines + "):'';}catch(e){return '';}})()"));
+}
+async function waitXterm(view, ms) {
+  return waitFor(async () => { const id = await view.ev("(()=>{try{return window.__krTerm?window.__krTerm.lastId():'';}catch(e){return '';}})()"); return id || null; }, ms, 400);
+}
+
 /**
- * 发送命令：优先走宿主输入通道（与 xterm.js onData 同一条：window.__kuiklySendEvent__('terminal_input')），
- * 若宿主通道不可用再退回「真实点击输入框 + 输入 + 点发送」。
+ * 发送命令：真实文本输入到 xterm 的隐藏 textarea（xterm 处理方向键/退格/回车），
+ * 回车用 DOM KeyboardEvent（**避免 CDP 合成按键触发 macOS「听写」系统弹窗**）。
  */
 async function runCommand(view, cmd) {
-  const sent = await view.ev("(()=>{try{window.__kuiklySendEvent__('terminal_input', JSON.stringify({data:" + JSON.stringify(cmd + '\n') + "}));return true;}catch(e){return false;}})()");
-  if (sent === true) return true;
-  const findInput = "(()=>{const els=[...document.querySelectorAll('input')].filter(e=>{const r=e.getBoundingClientRect();return r.width>40&&r.height>8;});return els.length?els[els.length-1]:null;})()";
-  const pos = await view.ev("(()=>{const el=" + findInput + ";if(!el)return null;const r=el.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
-  if (!pos) return false;
-  const p = JSON.parse(pos);
-  await view.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
-  await view.mouse('mousePressed', p.x, p.y, 1); await view.mouse('mouseReleased', p.x, p.y, 0);
+  const id = await waitXterm(view, 20000);
+  if (!id) return false;
+  await view.ev("(()=>{const ta=document.querySelector('.xterm-helper-textarea');if(!ta)return false;ta.focus();return true;})()");
+  await sleep(150);
   await view.send('Input.insertText', { text: cmd });
-  await sleep(300);
-  await view.ev("(()=>{const el=" + findInput + ";if(!el)return false;if(!el.value)el.value=" + JSON.stringify(cmd) + ";el.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+  await sleep(250);
+  await view.ev("(()=>{const ta=document.querySelector('.xterm-helper-textarea');if(!ta)return false;for(const type of ['keydown','keyup']){ta.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));}return true;})()");
   await sleep(400);
-  await view.clickText('发送');
   return true;
 }
 
@@ -107,22 +110,19 @@ async function runCommand(view, cmd) {
     let localOut = '';
     if (w1) {
       const t1 = await attach(w1.webSocketDebuggerUrl);
-      localOut = (await waitFor(async () => { const t = await t1.body(); return t.includes('终端') && t.length > 90 ? t : null; }, 20000, 800)) || (await t1.body());
-      const hasLoginModal = localOut.includes('登录本机');
-      const hasGrid = localOut.length > 90;
-      check('T3 本地终端独立窗口（登录弹窗或网格渲染）', hasLoginModal || hasGrid,
-        `登录弹窗=${hasLoginModal} 网格内容长度=${localOut.length}`);
+      const hasLoginModal = !!(await waitFor(async () => ((await t1.body()).includes('登录本机') ? true : null), 12000, 700));
+      localOut = hasLoginModal ? '' : (await waitFor(async () => { const txt = await xtermText(t1); return txt.length > 20 ? txt : null; }, 25000, 800) || '');
+      check('T3 本地终端独立窗口（登录弹窗或 xterm 渲染）', hasLoginModal || localOut.length > 20,
+        `登录弹窗=${hasLoginModal} xterm内容长度=${localOut.length}`);
       await t1.shot('terminal-local.png');
 
-      // T4 执行命令并回显
-      const typed = await runCommand(t1, 'echo KR_TERM_OK');
-      const echoed = await waitFor(async () => { const t = await t1.body(); return t.includes('KR_TERM_OK') ? t : null; }, 15000, 700);
-      if (typed && !echoed) {
-        skip('T4 输入 echo KR_TERM_OK → 回显（已知缺陷：宿主输入已到网关，但页面轮询在输入后不刷新）',
-          `输入已发送=${typed}（网关侧已收到，页面未刷新）`);
-      } else {
-        check('T4 输入 echo KR_TERM_OK → 回显', typed && !!echoed, `输入=${typed} 回显=${!!echoed}`);
-      }
+      // T4 真实文本输入 + 回车执行命令并回显（输出值 42 不出现在输入里，避免自匹配假通过）
+      const typed = await runCommand(t1, 'echo TERM_$((6*7))');
+      const echoed = await waitFor(async () => {
+        const t = await xtermText(t1);
+        return new RegExp('(^|\\n)\\s*TERM_42\\s*($|\\n)').test(t) ? t : null;
+      }, 15000, 700);
+      check('T4 真实输入 echo TERM_$((6*7)) + 回车 → 回显 TERM_42', typed && !!echoed, `输入=${typed} 回显=${!!echoed}`);
       await t1.shot('terminal-local-echo.png');
       // 关掉本地终端窗口（standalone 的「<」= 关窗），避免后续 T6 抓错窗口
       await t1.clickText('<');
@@ -141,19 +141,20 @@ async function runCommand(view, cmd) {
       const w2 = await waitFor(async () => { const l = (await listTargets()).filter((t) => t.url.includes('SftpTerminalPage')); return l.length > 0 ? l[l.length - 1] : null; }, 25000);
       if (w2) {
         const t2 = await attach(w2.webSocketDebuggerUrl);
-        const prompt = await waitFor(async () => { const t = await t2.body(); return t.length > 90 ? t : null; }, 30000, 800);
+        const prompt = await waitFor(async () => { const txt = await xtermText(t2); return txt.length > 20 ? txt : null; }, 30000, 800);
         let who = null;
         for (let i = 0; i < 2 && !who; i++) {
           await runCommand(t2, 'whoami');
           who = await waitFor(async () => {
-            const t = await t2.body();
-            const ok = new RegExp('(^|\\n)\\s*' + USER + '\\s*($|\\n)').test(t) || t.includes(USER + '@') || t.includes('whoami');
+            const t = await xtermText(t2);
+            // 必须出现独立一行用户名（whoami 的输出）；不认 prompt 里的 user@（会假通过）
+            const ok = new RegExp('(^|\\n)\\s*' + USER + '\\s*($|\\n)').test(t);
             return ok ? t : null;
           }, 15000, 700);
         }
         remoteOut = who || prompt || '';
         check('T6 远程终端执行 whoami → 回显远端用户名（真实 SSH shell）', !!who,
-          who ? `含 ${USER}` : `未见用户名（prompt长度=${(prompt || '').length}）`);
+          who ? `含 ${USER}` : `未见用户名（xterm长度=${(prompt || '').length}）`);
         await t2.shot('terminal-remote.png');
         await t2.clickText('<');
         t2.close();
