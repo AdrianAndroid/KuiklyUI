@@ -79,6 +79,8 @@ internal class SftpBrowserPage : SftpBasePager() {
     private var cacheSupported: Boolean by observable(false)
     /** 本端是否支持复制路径（Web/桌面 true；其它端隐藏按钮） */
     private var clipboardSupported: Boolean by observable(false)
+    /** 本端是否支持本地文件系统（决定是否显示双栏入口） */
+    private var localFsSupported: Boolean by observable(false)
     /** 超过该体积先弹确认（可被路由参数 cacheConfirmBytes 覆盖，便于小体积验证） */
     private var cacheConfirmBytes: Long = CacheEngine.NEED_CONFIRM_BYTES
     private var cacheBarText: String by observable("")
@@ -120,6 +122,9 @@ internal class SftpBrowserPage : SftpBasePager() {
         cacheSupported = cacheRoot.isNotEmpty()
         clipboardSupported = runCatching {
             acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsClipboard()
+        }.getOrDefault(false)
+        localFsSupported = runCatching {
+            acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsLocalFs()
         }.getOrDefault(false)
         cacheConfirmBytes = params.optLong("cacheConfirmBytes", CacheEngine.NEED_CONFIRM_BYTES)
         doConnectAndList()

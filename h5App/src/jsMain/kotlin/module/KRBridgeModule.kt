@@ -114,6 +114,76 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 Unit
             }
 
+            // 本地文件系统（双栏本地栏）：转发到宿主 window.localFs（Electron preload 提供；纯 H5 无）
+            "supportsLocalFs" -> {
+                val ok = js("(typeof window !== 'undefined' && !!window.localFs && typeof window.localFs.list === 'function')") as Boolean
+                if (ok) "{\"supported\":true}" else "{\"supported\":false}"
+            }
+            "lfHome" -> {
+                val lf = js("(typeof window !== 'undefined' && window.localFs) ? window.localFs : null")
+                if (lf == null) {
+                    callback?.invoke(mapOf("error" to "本地文件不可用：请在桌面版（Electron）中使用"))
+                } else {
+                    lf.home().then(
+                        { p: dynamic -> callback?.invoke(mapOf("path" to (p as? String ?: ""))) },
+                        { e: dynamic -> callback?.invoke(mapOf("error" to ((e.message as? String) ?: "获取主目录失败"))) },
+                    )
+                }
+                Unit
+            }
+            "lfList" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val lf = js("(typeof window !== 'undefined' && window.localFs) ? window.localFs : null")
+                if (lf == null) {
+                    callback?.invoke(mapOf("error" to "本地文件不可用（非桌面宿主）"))
+                } else {
+                    lf.list(q.path).then(
+                        { r: dynamic -> callback?.invoke(mapOf("entries" to js("JSON.stringify(r.entries)"))) },
+                        { e: dynamic -> callback?.invoke(mapOf("error" to ((e.message as? String) ?: "读取目录失败"))) },
+                    )
+                }
+                Unit
+            }
+            "lfMkdir" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val lf = js("(typeof window !== 'undefined' && window.localFs) ? window.localFs : null")
+                if (lf == null) {
+                    callback?.invoke(mapOf("error" to "本地文件不可用"))
+                } else {
+                    lf.mkdir(q.path).then(
+                        { _: dynamic -> callback?.invoke(mapOf<String, Any>()) },
+                        { e: dynamic -> callback?.invoke(mapOf("error" to ((e.message as? String) ?: "创建失败"))) },
+                    )
+                }
+                Unit
+            }
+            "lfRename" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val lf = js("(typeof window !== 'undefined' && window.localFs) ? window.localFs : null")
+                if (lf == null) {
+                    callback?.invoke(mapOf("error" to "本地文件不可用"))
+                } else {
+                    lf.rename(q.from, q.to).then(
+                        { _: dynamic -> callback?.invoke(mapOf<String, Any>()) },
+                        { e: dynamic -> callback?.invoke(mapOf("error" to ((e.message as? String) ?: "重命名失败"))) },
+                    )
+                }
+                Unit
+            }
+            "lfRemove" -> {
+                val q = js("JSON").parse(params ?: "{}")
+                val lf = js("(typeof window !== 'undefined' && window.localFs) ? window.localFs : null")
+                if (lf == null) {
+                    callback?.invoke(mapOf("error" to "本地文件不可用"))
+                } else {
+                    lf.remove(q.path, true).then(
+                        { _: dynamic -> callback?.invoke(mapOf<String, Any>()) },
+                        { e: dynamic -> callback?.invoke(mapOf("error" to ((e.message as? String) ?: "删除失败"))) },
+                    )
+                }
+                Unit
+            }
+
             // 本地缓存根目录（缓存整个目录时作为落盘根）
             // 必须**同步**返回：Kuikly 的 cacheRoot 走同步通道，异步 home() 拿不到值（会恒为空）。
             // 桌面壳 preload 暴露 homeSync（sendSync）；纯浏览器无 window.localFs → 空串（不支持缓存）。

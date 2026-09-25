@@ -147,6 +147,65 @@ internal class BridgeModule : Module() {
         callNativeMethod(CLEAR_CACHE, JSONObject(), null)
     }
 
+    // ---------------- 本地文件系统（双栏文件管理的本地栏，跨端统一能力） ----------------
+
+    /** 本端是否支持本地文件系统（Web/桌面 & 各原生端 true；小程序 false → 双栏本地栏隐藏） */
+    fun supportsLocalFs(): Boolean {
+        val res = syncToNativeMethod(SUPPORTS_LOCAL_FS, JSONObject(), null)
+        return runCatching { JSONObject(res).optBoolean("supported", false) }.getOrDefault(res.trim() == "true")
+    }
+
+    /** 本地主目录（沙盒根） */
+    fun lfHome(callback: (path: String?, error: String?) -> Unit) {
+        callNativeMethod(LF_HOME, JSONObject()) { d ->
+            val err = d?.optString("error")
+            callback(d?.optString("path")?.takeIf { it.isNotEmpty() }, if (err.isNullOrEmpty()) null else err)
+        }
+    }
+
+    /** 列本地目录：回调 entries 为 name/type/size/mtime 的 JSON 数组（各端以 JSON 字符串返回，避免数组过桥丢失） */
+    fun lfList(path: String, callback: (entries: List<JSONObject>?, error: String?) -> Unit) {
+        val args = JSONObject()
+        args.put("path", path)
+        callNativeMethod(LF_LIST, args) { d ->
+            val err = d?.optString("error")
+            if (!err.isNullOrEmpty()) {
+                callback(null, err)
+                return@callNativeMethod
+            }
+            val out = ArrayList<JSONObject>()
+            val txt = d?.optString("entries")
+            if (!txt.isNullOrEmpty()) {
+                runCatching {
+                    val arr = com.tencent.kuikly.core.nvi.serialization.json.JSONArray(txt)
+                    for (i in 0 until arr.length()) {
+                        arr.optJSONObject(i)?.let { out.add(it) }
+                    }
+                }
+            }
+            callback(out, null)
+        }
+    }
+
+    fun lfMkdir(path: String, callback: (error: String?) -> Unit) =
+        callNativeMethod(LF_MKDIR, pathArgs(path)) { d -> callback(d?.optString("error")?.takeIf { it.isNotEmpty() }) }
+
+    fun lfRename(from: String, to: String, callback: (error: String?) -> Unit) {
+        val args = JSONObject()
+        args.put("from", from)
+        args.put("to", to)
+        callNativeMethod(LF_RENAME, args) { d -> callback(d?.optString("error")?.takeIf { it.isNotEmpty() }) }
+    }
+
+    fun lfRemove(path: String, callback: (error: String?) -> Unit) =
+        callNativeMethod(LF_REMOVE, pathArgs(path)) { d -> callback(d?.optString("error")?.takeIf { it.isNotEmpty() }) }
+
+    private fun pathArgs(path: String): JSONObject {
+        val args = JSONObject()
+        args.put("path", path)
+        return args
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -311,6 +370,13 @@ internal class BridgeModule : Module() {
         const val CLIPBOARD_SUPPORTED = "clipboardSupported"
         const val COPY_TO_CLIPBOARD = "copyToClipboard"
         const val CLEAR_CACHE = "clearCache"
+        // 本地文件系统（双栏本地栏）
+        const val SUPPORTS_LOCAL_FS = "supportsLocalFs"
+        const val LF_HOME = "lfHome"
+        const val LF_LIST = "lfList"
+        const val LF_MKDIR = "lfMkdir"
+        const val LF_RENAME = "lfRename"
+        const val LF_REMOVE = "lfRemove"
 
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"

@@ -403,6 +403,10 @@ internal class SftpHomePage : SftpBasePager() {
     private fun terminalSupported(): Boolean =
         runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsTerminal() }.getOrDefault(false)
 
+    /** 本端是否支持本地文件系统（双栏本地栏 / 本地文件管理入口） */
+    private fun localFsSupported(): Boolean =
+        runCatching { acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsLocalFs() }.getOrDefault(false)
+
     /** 删除一条播放历史（✕） */
     internal fun deleteHistory(rec: com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) {
         sftpPlaybackHistoryModule().remove(rec.id) { _, err ->

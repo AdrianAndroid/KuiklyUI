@@ -98,7 +98,7 @@
 | 目录/单文件缓存 | ✅ 网关直写 | ✅ 沙盒 `.kuikly_cache`（download 支持绝对路径） | ✅ Caches/.kuikly_cache | ✅ 同 iOS | ❌ 无宿主目录 | ✅ cacheDir/.kuikly_cache（ETS） |
 | 清空缓存 | ✅ | ✅ | ✅ | ✅ | ❌ | ✅（ETS） |
 | 独立窗口播放 | ✅ | ❌ 回退页内 | ❌ 回退页内 | ❌ 回退页内 | ❌ | ❌ |
-| 双栏文件管理 | ✅（JS 页 + localFs） | ❌（JS 页，非原生） | ❌ | ❌ | ❌ | ❌ |
+| 双栏文件管理 | ✅（JS 页 + localFs） | ❌ 待 `core/file-manager` 扩多端 target | ❌ 同 Android | ❌ 同 Android | ❌ | ❌ |
 
 本轮改动与验证（**原生端仅编译，不跑原生用例**）：
 
@@ -112,7 +112,12 @@
   （⚠️ **ETS 未在本机编译**：需要 DevEco/hvigor）；新增 C++ `KRTerminalModule`（复用 `KRSftpSession` 保存的凭据**单开一条独立 SSH 连接** + `openssh` shell/pty，读取线程阻塞式读取、输出偏移拉取；`libkuikly.so` **CMake 编译通过**）。
 - 编译结果：**Android `assembleDebug` ✅ / iOS `xcodebuild` ✅ / macOS `xcodebuild` ✅ / OHOS 渲染器 CMake `libkuikly.so` ✅ / `:demo`+`:h5App`+`:miniApp` JS ✅**（OHOS 的 ETS 需 DevEco 编译，本机未验）。
 - Electron 用例：`features 25/25`、`smoke 22/22`、`term 7/7`（S9l 在无自动化权限时用 CDP `Emulation` 改视口回退，仍验证同一条 resize 链路）。
-- **仍待办**：MiniApp 缓存/终端无底座（sandbox 无原始 socket/本地目录）；原生端双栏本地栏（需各端本地文件 Module）；OHOS ETS 需在 DevEco 内编译验证。
+- **仍待办（唯一较大项）：原生端「双栏文件管理」**。尝试把 `FilesDualPanePage` 迁到 commonMain 时发现它依赖 `core/file-manager`，
+  而该模块当前**只 target `jvm`+`js`**（`demo` 也只在 jsMain 依赖它）→ commonMain 引用会 Unresolved，Android/iOS/macOS 编不过，已回退（页面仍在 jsMain，入口仍限 Web/桌面）。
+  正确做法：给 `core/file-manager` 补齐 `androidTarget/ios/macos` 与**条件化 OHOS target**（避免破坏非 OHOS 构建），并把 `PlatformTime` 补 native actual；之后页面可迁 commonMain。
+  **已预置的脚手架**（本轮新增，编译通过、未被页面调用）：`BridgeModule.supportsLocalFs/lfHome/lfList/lfMkdir/lfRename/lfRemove`（commonMain）+
+  h5App（转发 `window.localFs`）+ Android（`filesDir/local` 沙盒，越界拒绝）实现。iOS/macOS/OHOS/MiniApp 未实现 → `supportsLocalFs=false` → 本地栏隐藏。
+  另：MiniApp 缓存/终端无底座（sandbox 无原始 socket/本地目录）；OHOS ETS 需在 DevEco 内编译验证。
 
 ---
 

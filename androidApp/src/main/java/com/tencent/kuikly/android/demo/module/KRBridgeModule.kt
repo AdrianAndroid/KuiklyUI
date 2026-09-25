@@ -118,6 +118,34 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             "cacheRoot" -> cacheRoot()
             // 清空本地缓存目录
             "clearCache" -> clearCache()
+            // 本地文件系统（双栏本地栏）：应用沙盒 filesDir/local，越界拒绝
+            "supportsLocalFs" -> "{\"supported\":true}"
+            "lfHome" -> {
+                callback?.invoke(mapOf("path" to localRoot().absolutePath))
+            }
+            "lfList" -> {
+                lfList(params, callback)
+            }
+            "lfMkdir" -> {
+                val f = resolveWithinLocal(JSONObject(params ?: "{}").optString("path"))
+                if (f == null) callback?.invoke(mapOf("error" to "路径越界")) else {
+                    if (!f.exists() && !f.mkdirs()) callback?.invoke(mapOf("error" to "创建失败")) else callback?.invoke(mapOf<String, Any>())
+                }
+            }
+            "lfRename" -> {
+                val o = JSONObject(params ?: "{}")
+                val from = resolveWithinLocal(o.optString("from"))
+                val to = resolveWithinLocal(o.optString("to"))
+                if (from == null || to == null) callback?.invoke(mapOf("error" to "路径越界"))
+                else if (!from.renameTo(to)) callback?.invoke(mapOf("error" to "重命名失败")) else callback?.invoke(mapOf<String, Any>())
+            }
+            "lfRemove" -> {
+                val f = resolveWithinLocal(JSONObject(params ?: "{}").optString("path"))
+                if (f == null) callback?.invoke(mapOf("error" to "路径越界")) else {
+                    f.deleteRecursively()
+                    callback?.invoke(mapOf<String, Any>())
+                }
+            }
 
             else -> callback?.invoke(mapOf(
                 "code" to -1,
@@ -130,6 +158,46 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
     private fun clearCache() {
         val base = context?.cacheDir ?: KRApplication.application.cacheDir
         File(base, ".kuikly_cache").takeIf { it.exists() }?.deleteRecursively()
+    }
+
+    /** 本地文件根目录：应用沙盒 filesDir/local（双栏本地栏） */
+    private fun localRoot(): File {
+        val base = context?.filesDir ?: KRApplication.application.filesDir
+        return File(base, "local").apply { if (!exists()) mkdirs() }
+    }
+
+    /** 解析路径并校验在 [localRoot] 内（防越界）；越界返回 null */
+    private fun resolveWithinLocal(path: String): File? {
+        val root = localRoot().canonicalFile
+        val target = if (path.isEmpty()) root else File(path).canonicalFile
+        val rootPath = root.path
+        return if (target.path == rootPath || target.path.startsWith(rootPath + File.separator)) target else null
+    }
+
+    private fun lfList(params: String?, callback: KuiklyRenderCallback?) {
+        val dir = resolveWithinLocal(JSONObject(params ?: "{}").optString("path"))
+        if (dir == null) {
+            callback?.invoke(mapOf("error" to "路径越界"))
+            return
+        }
+        if (!dir.isDirectory) {
+            callback?.invoke(mapOf("error" to "不是目录"))
+            return
+        }
+        val arr = JSONArray()
+        dir.listFiles()?.forEach { f ->
+            val o = JSONObject()
+            o.put("name", f.name)
+            o.put("type", when {
+                f.isDirectory -> "dir"
+                f.isFile -> "file"
+                else -> "other"
+            })
+            o.put("size", f.length())
+            o.put("mtime", f.lastModified())
+            arr.put(o)
+        }
+        callback?.invoke(mapOf("entries" to arr.toString()))
     }
 
     /** 复制文本到系统剪贴板（params.text） */
