@@ -77,3 +77,6 @@ sftp-gateway/data/
 
 # Electron 自动化测试截图产物（不入库）
 electron/test/artifacts/
+
+# 运行时产物（history.setLimit 在 cwd 落盘）
+sftp_history_limit.json
