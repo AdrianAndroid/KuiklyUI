@@ -219,7 +219,8 @@ internal class SftpHomePage : SftpBasePager() {
                                     onClick = { ctx.openLocalFileManager() },
                                     fillWidth = false,
                                 )
-                                if (ctx.terminalSupported()) {
+                                // 本地终端只存在于 Web/桌面（浏览器/Electron 有本地 shell）；原生端无本地 shell
+                                if (ctx.isWebLike && ctx.terminalSupported()) {
                                     View {
                                         attr {
                                             width(56f)
@@ -242,7 +243,8 @@ internal class SftpHomePage : SftpBasePager() {
                                 { ctx.connections },
                                 { conn -> ctx.openBrowser(conn) },
                                 if (ctx.isWebLike) { { conn -> ctx.openDualPane(conn) } } else null,
-                                if (ctx.isWebLike && ctx.terminalSupported()) { { conn -> ctx.openTerminal(conn) } } else null
+                                // 远程终端：所有端只要支持 shell（supportsTerminal）即显示入口
+                                if (ctx.terminalSupported()) { { conn -> ctx.openTerminal(conn) } } else null
                             )
                         }
                     }

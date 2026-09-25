@@ -105,14 +105,46 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             // 独立窗口播放仅桌面壳（Electron）支持；其它端返回 supported=false，业务侧回退页内路由
             "supportsPlayerWindow" -> "{\"supported\":false}"
             "openPlayerWindow" -> Unit
-            // 终端：待接入 libssh2 pty（当前返回 false，页面隐藏入口并提示）
-            "supportsTerminal" -> "{\"supported\":false}"
+            // 终端：已接入 KRTerminalModule（JSch shell）→ 支持
+            "supportsTerminal" -> "{\"supported\":true}"
+            // xterm 仅 Web/桌面；Android 走共享网格渲染
+            "supportsXterm" -> "{\"supported\":false}"
+            // 剪贴板：Android ClipboardManager
+            "clipboardSupported" -> "{\"supported\":true}"
+            "copyToClipboard" -> {
+                copyToClipboard(params)
+            }
+            // 本地缓存根目录（缓存整个目录时落盘到应用沙盒）
+            "cacheRoot" -> cacheRoot()
+            // 清空本地缓存目录
+            "clearCache" -> clearCache()
 
             else -> callback?.invoke(mapOf(
                 "code" to -1,
                 "message" to "方法不存在"
             ))
         }
+    }
+
+    /** 清空应用沙盒内的缓存目录 */
+    private fun clearCache() {
+        val base = context?.cacheDir ?: KRApplication.application.cacheDir
+        File(base, ".kuikly_cache").takeIf { it.exists() }?.deleteRecursively()
+    }
+
+    /** 复制文本到系统剪贴板（params.text） */
+    private fun copyToClipboard(params: String?) {
+        val text = JSONObject(params ?: "{}").optString("text")
+        (context?.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.also {
+            it.setPrimaryClip(ClipData.newPlainText(MODULE_NAME, text))
+        }
+    }
+
+    /** 缓存根目录：应用 cacheDir 下的 .kuikly_cache（缓存下载落盘根） */
+    private fun cacheRoot(): String {
+        val base = context?.cacheDir ?: KRApplication.application.cacheDir
+        val dir = File(base, ".kuikly_cache").apply { if (!exists()) mkdirs() }
+        return "{\"path\":\"" + dir.absolutePath + "\"}"
     }
 
     private fun reportRealtime(params: String?) {

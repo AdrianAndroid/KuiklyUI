@@ -539,6 +539,10 @@ open class KuiklyRenderViewBaseDelegator(private val delegate: KuiklyRenderViewB
             moduleExport(KRSftpModule.MODULE_NAME) {
                 KRSftpModule()
             }
+            // 终端 shell（KRTerminalModule，复用 KRSftpClient 会话）
+            moduleExport(com.tencent.kuikly.core.render.android.expand.module.KRTerminalModule.MODULE_NAME) {
+                com.tencent.kuikly.core.render.android.expand.module.KRTerminalModule()
+            }
             moduleExport(KRSftpFavoritesModule.MODULE_NAME) {
                 KRSftpFavoritesModuleHolder.instance
             }

@@ -108,6 +108,12 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 Unit
             }
 
+            // 清空本地缓存目录（Web/桌面：<home>/.kuikly_cache）
+            "clearCache" -> {
+                js("(function(){try{if(!window.localFs)return;window.localFs.home().then(function(h){return window.localFs.remove(h+'/.kuikly_cache',true);}).catch(function(e){});}catch(e){}})()")
+                Unit
+            }
+
             // 本地缓存根目录（缓存整个目录时作为落盘根）
             // 必须**同步**返回：Kuikly 的 cacheRoot 走同步通道，异步 home() 拿不到值（会恒为空）。
             // 桌面壳 preload 暴露 homeSync（sendSync）；纯浏览器无 window.localFs → 空串（不支持缓存）。

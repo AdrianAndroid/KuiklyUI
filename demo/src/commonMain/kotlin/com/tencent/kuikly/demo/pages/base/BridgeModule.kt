@@ -142,6 +142,11 @@ internal class BridgeModule : Module() {
         callNativeMethod(COPY_TO_CLIPBOARD, args, null)
     }
 
+    /** 清空本地缓存目录（各端按 [cacheRoot] 删除；未提供本地目录的端为 no-op） */
+    fun clearCache() {
+        callNativeMethod(CLEAR_CACHE, JSONObject(), null)
+    }
+
     fun toast(content: String) {
         val methodArgs = JSONObject()
         methodArgs.put("content", content)
@@ -305,6 +310,7 @@ internal class BridgeModule : Module() {
         const val XTERM_SET_VISIBLE = "xtermSetVisible"
         const val CLIPBOARD_SUPPORTED = "clipboardSupported"
         const val COPY_TO_CLIPBOARD = "copyToClipboard"
+        const val CLEAR_CACHE = "clearCache"
 
         const val MODULE_NAME = "HRBridgeModule"
         const val OPEN_PAGE = "openPage"

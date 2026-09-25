@@ -166,12 +166,17 @@ object KRSftpClient {
         val sessionId = params.optString("sessionId")
         val remotePath = params.optString("remotePath")
         val localName = params.optString("localName").ifEmpty { remotePath.substringAfterLast('/') }
-        val cacheDir = params.optString("cacheDir").ifEmpty {
-            throw IllegalStateException("cacheDir required")
-        }
+        val cacheDir = params.optString("cacheDir")
         val session = sessions[sessionId] ?: throw IllegalStateException("invalid sessionId")
-        val dir = java.io.File(cacheDir).apply { if (!exists()) mkdirs() }
-        val dest = java.io.File(dir, localName.ifEmpty { "download" })
+        // localName 为绝对路径时直接使用（缓存功能传 `<cacheRoot>/<任务>/<文件>`），并建好父目录；
+        // 否则视为相对 cacheDir 的文件名（旧语义）。
+        val dest = if (localName.startsWith("/")) {
+            java.io.File(localName)
+        } else {
+            if (cacheDir.isEmpty()) throw IllegalStateException("cacheDir required")
+            java.io.File(java.io.File(cacheDir).apply { if (!exists()) mkdirs() }, localName.ifEmpty { "download" })
+        }
+        dest.parentFile?.mkdirs()
         session.withChannel { channel -> channel.get(remotePath, dest.absolutePath) }
         return dest.absolutePath
     }
@@ -417,9 +422,21 @@ object KRSftpClient {
             .krLogAdapter?.e("KRSftpClient", "cancelBatchTask($taskId) no-op: 同步执行无法中断")
     }
 
+    /**
+     * 在既有 SFTP 会话上打开一个 **shell channel**（终端用，`KRTerminalModule`）。
+     * 复用已认证的 JSch Session，避免终端另建连接/重复认证。
+     * 返回 null 表示 sessionId 无效。
+     */
+    fun openShellChannel(sessionId: String, cols: Int, rows: Int): com.jcraft.jsch.ChannelShell? {
+        val s = sessions[sessionId] ?: return null
+        val ch = s.session.openChannel("shell") as com.jcraft.jsch.ChannelShell
+        ch.setPtyType("xterm-256color", cols.coerceIn(20, 400), rows.coerceIn(5, 200), 0, 0)
+        ch.connect(15000)
+        return ch
+    }
+
     /** 关闭所有 session（应用退出时调） */
-    fun shutdownAll() {
-        sessions.values.forEach { it.disconnect() }
+    fun shutdownAll() {        sessions.values.forEach { it.disconnect() }
         sessions.clear()
         fileHandles.values.forEach { it.close() }
         fileHandles.clear()

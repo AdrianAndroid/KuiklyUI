@@ -78,7 +78,6 @@
 - 截图证据：`electron/test/artifacts/`。
 
 ### 0.7 踩坑速查（勿回退）
-
 - **响应式**：状态必须 provider + 在 `attr{}`/`vif` 条件 lambda 内读取；结构层 `if/when` 只算首帧（设置项文案曾因此不刷新）。
 - **浮层**必须放在内容区之后且 `positionAbsolute()`；**快照/列表用页内浮层**，不要为页内状态新增路由页（宿主对新增页名解析在 Web 下曾 `PagerNotFoundException`）。
 - **不要用 kuikly core 的 `GlobalScope.launch + delay`** 做续跑/节流（依赖 `currentPageId`，异步回调里可能不恢复）；用 kotlinx.coroutines 或页面 `setTimeout`。
@@ -86,6 +85,32 @@
 - **网关绝对路径写入**要向上找最近存在祖先目录做校验（否则新建多级目录被 `LOCAL_PATH_DENIED` 误拒）。
 - **CDP 合成按键会触发 macOS「听写」**：测试用 `Input.insertText` + DOM `KeyboardEvent`，不要用 `Input.dispatchKeyEvent`。
 - **Kotlin/JS 禁正则**解析 Markdown（unicode 模式抛 `Lone quantifier brackets`）。
+
+### 0.8 跨端功能对齐（2026-09-25，以 Electron 为基准）
+
+目标：Electron 已实现的能力在各端同步（编译通过即可；Electron 跑用例）。
+
+| 能力 | Web/Electron | Android | iOS | macOS | MiniApp | OHOS |
+|---|---|---|---|---|---|---|
+| 远程终端 | ✅ xterm + 网关 shell | ✅ JSch `ChannelShell`（`KRTerminalModule`） | ❌ 待接 NMSSH pty | ❌ 待接 | ❌ 显式不支持 | ❌ 待接 libssh2 |
+| 本地终端 | ✅ 网关本地 pty | ❌ 无本地 shell（显式失败） | ❌ | ❌ | ❌ | ❌ |
+| 剪贴板复制路径 | ✅ | ✅ ClipboardManager | ✅ UIPasteboard | ✅ NSPasteboard | ❌ 显式不支持 | ❌ 待接 |
+| 目录/单文件缓存 | ✅ 网关直写 | ✅ 沙盒 `.kuikly_cache`（download 支持绝对路径） | ✅ Caches/.kuikly_cache | ✅ 同 iOS | ❌ 无宿主目录 | ❌ 待接 |
+| 清空缓存 | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 独立窗口播放 | ✅ | ❌ 回退页内 | ❌ 回退页内 | ❌ 回退页内 | ❌ | ❌ |
+| 双栏文件管理 | ✅（JS 页 + localFs） | ❌（JS 页，非原生） | ❌ | ❌ | ❌ | ❌ |
+
+本轮改动与验证（**原生端仅编译，不跑原生用例**）：
+
+- **修掉一个真实跨端阻断**：`SftpSettingsPage`（commonMain）里用了 `js()`/`dynamic` → Android/iOS/macOS 根本编不过。
+  已把「清空缓存」改为 `BridgeModule.clearCache()` 宿主能力，各端实现（Web 删 `<home>/.kuikly_cache`；Android/iOS/macOS 删沙盒缓存目录）。
+- `SftpHomePage`：远程终端入口不再限定 `isWebLike`（改由 `supportsTerminal()` 决定）；本地终端入口限定 Web/桌面（原生无本地 shell）。
+- Android：新增 `KRTerminalModule`（复用 `KRSftpClient` 会话的 JSch shell + pty，输出偏移轮询）、`clipboardSupported/copyToClipboard`、`cacheRoot/clearCache`；`KRSftpClient.download` 支持**绝对路径** localName（缓存落盘）。
+- iOS/macOS：`KRBridgeModule` 新增 `clipboardSupported/copyToClipboard/cacheRoot/clearCache/supportsXterm`。
+- MiniApp：`HRBridgeModule` 显式返回不支持/空（clipboard/terminal/cache 入口隐藏），绝不伪报。
+- 编译结果：**Android `assembleDebug` ✅ / iOS `xcodebuild` ✅ / macOS `xcodebuild` ✅ / `:demo`+`:h5App`+`:miniApp` JS ✅**。
+- Electron 用例：`features 25/25`、`smoke 22/22`、`term 7/7`（S9l 在无自动化权限时用 CDP `Emulation` 改视口回退，仍验证同一条 resize 链路）。
+- 仍待办：iOS/macOS/OHOS 的**终端**（NMSSH / libssh2 pty）；OHOS 剪贴板/缓存；MiniApp 剪贴板（需 wx 渲染层公开接口）；原生端双栏本地栏（本地文件 Module）。
 
 ---
 

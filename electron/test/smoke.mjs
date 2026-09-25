@@ -378,21 +378,43 @@ setTimeout(() => {
 
       // S9l 视频随窗口自适应：真实改变**窗口**大小 → video 元素尺寸随之变化（可见）
       const sizeOf = async () => Number(await ev("(()=>{const v=" + VIS_VID + ";return v?Math.round(v.getBoundingClientRect().width):-1;})()"));
+      const vp = async () => String(await ev('JSON.stringify({w:innerWidth,h:innerHeight})'));
+      const activateApp = () => {
+        try { execFileSync('osascript', ['-e', 'tell application "System Events" to set frontmost of (first process whose name contains "Electron") to true'], { stdio: 'ignore' }); } catch (e) { }
+      };
       const setWinSize = (w, h) => {
-        const script = `tell application "System Events" to tell (first process whose name contains "Electron") to if (count of windows) > 0 then set size of window 1 to {${w}, ${h}}`;
+        // 播放页是独立窗口：把所有 Electron 窗口都改到目标尺寸，确保被测窗口一定被改到
+        const script = `tell application "System Events" to tell (first process whose name contains "Electron") to repeat with win in windows\nset size of win to {${w}, ${h}}\nend repeat`;
         try { execFileSync('osascript', ['-e', script], { stdio: 'ignore' }); return true; } catch (e) { return false; }
       };
-      const vp = async () => String(await ev('JSON.stringify({w:innerWidth,h:innerHeight})'));
+      const resizeAndWait = async (w, h) => {
+        // 1) 先试真实窗口（osascript 需 macOS 自动化权限，环境不稳时可能失败）
+        activateApp();
+        setWinSize(w, h);
+        await sleep(1000);
+        let v = JSON.parse(await vp());
+        if (Math.abs(v.w - w) < 60) return 'window';
+        // 2) 回退：CDP 改渲染视口（同样触发 window.resize → 页面重排，验证同一条 resize 链路）
+        try { await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 0, mobile: false }); } catch (e) { }
+        const t0 = Date.now();
+        while (Date.now() - t0 < 2000) {
+          v = JSON.parse(await vp());
+          if (Math.abs(v.w - w) < 60) return 'metrics';
+          await sleep(200);
+        }
+        return false;
+      };
       const vp0 = await vp();
       const w0 = await sizeOf();
-      const resized1 = setWinSize(760, 560);
-      await sleep(2500);
+      const resized1 = await resizeAndWait(760, 560);
+      await sleep(1200);
       const w1 = await sizeOf();
       const vp1 = await vp();
-      const resized2 = setWinSize(1180, 792);
-      await sleep(2500);
+      const resized2 = await resizeAndWait(1180, 792);
+      await sleep(1200);
       const w2 = await sizeOf();
       const vp2 = await vp();
+      try { await send('Emulation.clearDeviceMetricsOverride'); } catch (e) { }
       const follows = w0 > 0 && w1 > 0 && Math.abs(w1 - 760) < 120 && w1 !== w0;
       // 窗口 resize 链路已修复（h5App 在 SPA 前安装监听 + core 尺寸变化即重排），此处为硬断言
       check('S9l 视频随窗口自适应（改窗口大小→video 尺寸跟着变）', follows,

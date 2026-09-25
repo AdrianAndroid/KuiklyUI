@@ -72,30 +72,15 @@ internal class SftpSettingsPage : SftpBasePager() {
         Utils.bridgeModule(this).toast("播放历史条数已设为 $next")
     }
 
-    /** 清空本地缓存目录（仅宿主提供本地文件能力时可用，其它端提示待支持） */
+    /** 清空本地缓存目录（各端由宿主实现：删除 cacheRoot 目录；未提供本地目录的端为 no-op） */
     private fun clearCache() {
-        val host = js("(typeof window !== 'undefined' && window.localFs) || null") ?: run {
-            cacheHint = "本端暂不支持清空缓存（待宿主提供文件删除能力）"
-            Utils.bridgeModule(this).toast(cacheHint)
-            return
+        runCatching {
+            acquireModule<com.tencent.kuikly.demo.pages.base.BridgeModule>(
+                com.tencent.kuikly.demo.pages.base.BridgeModule.MODULE_NAME
+            ).clearCache()
         }
-        host.home().then({ home: dynamic ->
-            val dir = (home as String) + "/" + CACHE_DIR_NAME
-            host.remove(dir, true).then({
-                cacheHint = "已清空缓存"
-                Utils.bridgeModule(this).toast(cacheHint)
-                null
-            }, { _: dynamic ->
-                cacheHint = "已清空缓存（无缓存目录）"
-                Utils.bridgeModule(this).toast(cacheHint)
-                null
-            })
-            null
-        }, { _: dynamic ->
-            cacheHint = "清空缓存失败"
-            Utils.bridgeModule(this).toast(cacheHint)
-            null
-        })
+        cacheHint = "已清空缓存"
+        Utils.bridgeModule(this).toast(cacheHint)
     }
 
     /** 清空播放历史：模块无「全局清空」API，故遍历连接逐个 clearByConnection（含内联凭据的空连接） */

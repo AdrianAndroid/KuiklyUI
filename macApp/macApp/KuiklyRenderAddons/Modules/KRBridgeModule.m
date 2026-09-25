@@ -342,4 +342,36 @@ static NSViewController *GetViewControllerFromView(NSView *view) {
     return @{@"supported": @NO};
 }
 
+#pragma mark - 剪贴板 / 缓存 / xterm（跨端统一能力）
+
+- (NSDictionary *)supportsXterm:(NSDictionary *)args {
+    return @{@"supported": @NO};
+}
+
+- (NSDictionary *)clipboardSupported:(NSDictionary *)args {
+    return @{@"supported": @YES};
+}
+
+- (void)copyToClipboard:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] hr_stringToDictionary];
+    NSString *text = params[@"text"] ?: @"";
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:text forType:NSPasteboardTypeString];
+}
+
+/// 缓存根目录：Caches/.kuikly_cache（缓存下载落盘根）
+- (NSDictionary *)cacheRoot:(NSDictionary *)args {
+    NSString *base = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject ?: NSTemporaryDirectory();
+    NSString *dir = [base stringByAppendingPathComponent:@".kuikly_cache"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return @{@"path": dir ?: @""};
+}
+
+- (void)clearCache:(NSDictionary *)args {
+    NSString *base = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject ?: NSTemporaryDirectory();
+    NSString *dir = [base stringByAppendingPathComponent:@".kuikly_cache"];
+    [[NSFileManager defaultManager] removeItemAtPath:dir error:nil];
+}
+
 @end
