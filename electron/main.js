@@ -91,9 +91,17 @@ async function createWindow() {
   });
 
 
+  // 已知问题：Web 根视图尺寸/layout 在打包态首帧可能不触发，导致 #root 高 0、窗口空白。
+  // 页面加载完成后主动派发一次 resize，触发 Kuikly 重新 layout（幂等）。
+  const nudgeResize = () => {
+    try { mainWindow.webContents.executeJavaScript("try{window.dispatchEvent(new Event('resize'));}catch(e){}").catch(() => { }); } catch (e) { }
+  };
+  mainWindow.webContents.on('did-finish-load', () => { nudgeResize(); setTimeout(nudgeResize, 400); setTimeout(nudgeResize, 1200); });
+
   await mainWindow.loadFile(path.join(RES_DIR, 'index.html'), {
     query: { page_name: 'SftpHomePage' },
   });
+  nudgeResize();
 }
 
 /* ---- 桌面能力（IPC）：仅这些；业务页面应经 Kuikly host Module 调用 ---- */

@@ -140,6 +140,26 @@ internal class SftpHomePage : SftpBasePager() {
                         }
                     }
                 }
+                // 设置入口（直接可达；右下角「更多」FAB 在桌面端可能因根视图尺寸不跟随而落在可视区外）
+                View {
+                    attr {
+                        size(36f, 36f)
+                        allCenter()
+                        accessibility("home_settings_entry")
+                    }
+                    event {
+                        click {
+                            ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPageNames.SETTINGS)
+                        }
+                    }
+                    Text {
+                        attr {
+                            text("⚙")
+                            fontSize(19f)
+                            color(SftpColorTokens.primary)
+                        }
+                    }
+                }
                 View {
                     attr {
                         size(36f, 36f)

@@ -3,6 +3,7 @@ package com.tencent.kuikly.h5app.utils
 import com.tencent.kuikly.core.render.web.nvi.serialization.json.JSONObject
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlin.js.unsafeCast
 
 /**
  * Declare URL decode method for JS execution environment
@@ -28,7 +29,7 @@ object Ui {
             wrapDiv.classList.add("toast-wrapper")
             contentDiv.classList.add("toast-content")
             // 纯提示，不应拦截点击（否则会盖住其下可点元素，如终端/缓存悬浮条）
-            wrapDiv.style.pointerEvents = "none"
+            wrapDiv.unsafeCast<dynamic>().style.pointerEvents = "none"
             contentDiv.innerHTML = content
             wrapDiv.appendChild(contentDiv)
             // Add wrapper

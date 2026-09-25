@@ -22,13 +22,26 @@ const FIX = `${HOME}/kr_feat_fixture`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const skipped = [];
-const check = (n, ok, d) => { results.push({ n, ok: !!ok }); console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''}`); };
+let __lastT = Date.now();
+// 逐条打印耗时：单条明显偏长（>30s）时人工判断是否正常耗时并止损（AGENTS §3.1 规则 7）
+const check = (n, ok, d) => {
+  const dt = Date.now() - __lastT; __lastT = Date.now();
+  results.push({ n, ok: !!ok });
+  console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''} (${(dt / 1000).toFixed(1)}s)`);
+};
 const skip = (n, d) => { skipped.push(n); console.log(`SKIP | ${n}${d ? ' | ' + d : ''}`); };
 let __finished = false;
 let __child = null;
-setTimeout(() => { if (!__finished) { console.log('FAIL | WATCHDOG 全局超时 900s'); try { __child && __child.kill('SIGKILL'); } catch (e) { } process.exit(1); } }, 900 * 1000);
+setTimeout(() => { if (!__finished) { console.log('FAIL | WATCHDOG 全局超时 600s'); try { __child && __child.kill('SIGKILL'); } catch (e) { } process.exit(1); } }, 600 * 1000);
 
-const rpc = async (module, method, params) => (await fetch(GW + '/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module, method, params }) })).json();
+// 每个 rpc 都带超时：网关无响应时不无限等待（AGENTS §3.1 规则 7）
+const rpc = async (module, method, params, timeoutMs = 15000) => {
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    return await (await fetch(GW + '/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module, method, params }), signal: ctl.signal })).json();
+  } finally { clearTimeout(to); }
+};
 
 async function attach(wsUrl) {
   const ws = new WebSocket(wsUrl);
@@ -42,7 +55,14 @@ async function attach(wsUrl) {
   };
   await send('Runtime.enable'); await send('Page.enable');
   // awaitPromise 必须显式传（页面内 fetch/async 表达式否则返回 Promise 对象 → 断言拿到 [object Object]）
-  const ev = async (x, awaitPromise = false) => { const r = await send('Runtime.evaluate', { expression: x, returnByValue: true, awaitPromise }); return r && r.result ? r.result.value : ''; };
+  // 每次 evaluate 都带超时：页面内 fetch 卡住时 evaluator 也不会永久挂起（AGENTS §3.1 规则 7）
+  const ev = async (x, awaitPromise = false, timeoutMs = 20000) => {
+    const r = await Promise.race([
+      send('Runtime.evaluate', { expression: x, returnByValue: true, awaitPromise }),
+      sleep(timeoutMs).then(() => null),
+    ]);
+    return r && r.result ? r.result.value : '';
+  };
   const body = async () => String(await ev('document.body.innerText'));
   const shot = async (n) => { const s = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(artifacts, n), Buffer.from(s.data, 'base64')); };
   const mouse = (t, x, y, b) => send('Input.dispatchMouseEvent', { type: t, x, y, button: 'left', buttons: b, clickCount: 1 });
@@ -56,8 +76,18 @@ async function attach(wsUrl) {
   };
   return { send, ev, body, shot, mouse, clickText, errs, close: () => ws.close() };
 }
-const listTargets = async () => { try { return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === 'page'); } catch (e) { return []; } };
-const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() - t0 > ms) return null; await sleep(step); } };
+const listTargets = async () => { try { const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 8000); try { return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: ctl.signal })).json()).filter((t) => t.type === 'page'); } finally { clearTimeout(to); } } catch (e) { return []; } };
+// 每次 fn() 也带超时：fn 内部若 await 一个卡住的 Promise，waitFor 仍能按时返回，不会整体卡死
+const waitFor = async (fn, ms, step = 500) => {
+  const t0 = Date.now();
+  for (;;) {
+    let v = null;
+    try { v = await Promise.race([fn(), sleep(Math.max(2000, step * 3)).then(() => null)]); } catch (e) { v = null; }
+    if (v) return v;
+    if (Date.now() - t0 > ms) return null;
+    await sleep(step);
+  }
+};
 
 (async () => {
   const childEnv = { ...process.env }; delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -98,8 +128,10 @@ const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) 
     await waitFor(async () => (await main.body()).includes('SFTP 客户端'), 60000, 1000);
     // 页面用的是 Electron 自带网关（独立 data 目录）：历史/收藏等断言必须走**页面内网关**，
     // 不能走外部 18090（那是另一份数据，曾导致 F19「历史页看不到刚造的数据」）。
+    // 页面内 fetch 一律带 AbortController 超时（否则网关卡住时 evaluator 永不返回 → 整体卡死）
+    const pageFetch = (module, method, params) => "(async()=>{const u=window.__SFTP_GATEWAY_URL__;const c=new AbortController();const t=setTimeout(()=>c.abort(),8000);try{const r=await fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(" + JSON.stringify({ module, method, params }) + "),signal:c.signal});return await r.text();}catch(e){return '';}finally{clearTimeout(t);}})()";
     const pageRpc = async (module, method, params) => {
-      const txt = await main.ev("(async()=>{const u=window.__SFTP_GATEWAY_URL__;const r=await fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(" + JSON.stringify({ module, method, params }) + ")});return await r.text();})()", true);
+      const txt = await main.ev(pageFetch(module, method, params), true);
       try { return JSON.parse(String(txt)); } catch (e) { return null; }
     };
     // 清掉页面网关里上一轮残留的收藏/历史（否则断言被旧数据污染）
@@ -114,10 +146,10 @@ const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) 
 
     // F2/F3 行尾 ⭐ 收藏目录 / 文件（点「列表里」的 ⭐：y 在导航栏之下；结果用网关 favorites.list 判定）
     // 注意：页面用的是 Electron 自带网关（独立 data 目录），因此必须**在页面内**调网关读取
-    const favDump = async () => await main.ev("(async()=>{const u=window.__SFTP_GATEWAY_URL__;const r=await fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({module:'favorites',method:'list',params:{}})});const j=await r.json();return JSON.stringify((j.items||[]).map(x=>({n:x.name,d:x.isDir,p:x.remotePath})));})()", true);
+    const favDump = async () => await main.ev(pageFetch('favorites', 'list', {}), true);
     const favNames = async () => {
-      const txt = await main.ev("(async()=>{const u=window.__SFTP_GATEWAY_URL__;const r=await fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({module:'favorites',method:'list',params:{}})});const j=await r.json();return (j.items||[]).map(x=>x.name).join(',');})()", true);
-      return String(txt || '').split(',').filter(Boolean);
+      const txt = await main.ev(pageFetch('favorites', 'list', {}), true);
+      try { return String((JSON.parse(String(txt)).items || []).map((x) => x.name).join(',') || '').split(',').filter(Boolean); } catch (e) { return []; }
     };
     // 点击后校验；未生效则重试（最多 3 次，避免渲染时序导致漏点）
     // 断言策略：点「列表内 ⭐」按索引（夹具目录只有 dir_a / file_a.txt，目录优先）
@@ -167,7 +199,7 @@ const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) 
     }
 
     // F9 终端命令历史：先给应用网关预置「本机」凭据（否则新 profile 会停在登录弹窗）
-    const seeded = await main.ev("(async()=>{const u=window.__SFTP_GATEWAY_URL__;const post=(m,p)=>fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({module:'connection',method:m,params:p})}).then(r=>r.json());const l0=await post('list',{});const has=(l0.items||[]).some(x=>x.host==='127.0.0.1');if(!has)await post('add',{label:'本机',host:'127.0.0.1',port:22,user:'zhaojian',password:'flannery',authMethod:'PASSWORD'});const l1=await post('list',{});return ((l1.items||[]).some(x=>x.host==='127.0.0.1'))?'seeded':'failed';})()", true);
+    const seeded = await main.ev("(async()=>{const u=window.__SFTP_GATEWAY_URL__;const c=new AbortController();const t=setTimeout(()=>c.abort(),8000);try{const post=(m,p)=>fetch(u+'/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({module:'connection',method:m,params:p}),signal:c.signal}).then(r=>r.json());const l0=await post('list',{});const has=(l0.items||[]).some(x=>x.host==='127.0.0.1');if(!has)await post('add',{label:'本机',host:'127.0.0.1',port:22,user:'zhaojian',password:'flannery',authMethod:'PASSWORD'});const l1=await post('list',{});return ((l1.items||[]).some(x=>x.host==='127.0.0.1'))?'seeded':'failed';}catch(e){return 'failed';}finally{clearTimeout(t);}})()", true);
     console.log('      [info] 本机凭据预置=' + seeded);
     await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
     await waitFor(async () => (await main.body()).includes('>_'), 30000, 800);
@@ -179,38 +211,33 @@ const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) 
       const tw = await waitFor(async () => (await listTargets()).find((t) => t.url.includes('SftpTerminalPage')), 20000);
       if (tw) {
         const term = await attach(tw.webSocketDebuggerUrl);
-        // 终端内容在 xterm 缓冲区（web 加速路径）；无 xterm 时回退页面网格文本
-        const termText = async () => {
-          const x = String(await term.ev("(()=>{try{return (window.__krTerm&&window.__krTerm.lastId())?window.__krTerm.text(window.__krTerm.lastId(),400):'';}catch(e){return '';}})()"));
-          return x.trim().length > 0 ? x : String(await term.body());
-        };
-        const ready = await waitFor(async () => { const t = await termText(); return t.length > 20 ? t : null; }, 25000, 800);
+        // 终端内容在 xterm 缓冲区（web 加速路径）
+        const xtermText = async () => String(await term.ev("(()=>{try{return (window.__krTerm&&window.__krTerm.lastId())?window.__krTerm.text(window.__krTerm.lastId(),400):'';}catch(e){return '';}})()"));
+        const ready = await waitFor(async () => { const id = await term.ev("(()=>{try{return window.__krTerm?window.__krTerm.lastId():'';}catch(e){return '';}})()"); return id || null; }, 25000, 500);
         const CMD = 'echo KH_$((6*7))';
         let typed = false, ran = false;
-        // 真实路径：聚焦命令输入框（Kuikly Input）→ 输入 → DOM 回车（inputReturn）
-        const ipos = await term.ev("(()=>{const els=[...document.querySelectorAll('input')].filter(e=>{const r=e.getBoundingClientRect();return r.width>60&&r.height>8;});if(!els.length)return null;const el=els[els.length-1];const r=el.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
-        if (ipos) {
-          const q = JSON.parse(ipos);
-          await term.mouse('mouseMoved', q.x, q.y, 0); await sleep(150);
-          await term.mouse('mousePressed', q.x, q.y, 1); await term.mouse('mouseReleased', q.x, q.y, 0);
-          await sleep(250);
+        if (ready) {
+          // 真实输入到 xterm 隐藏 textarea + DOM 回车（避免 CDP 合成键触发 macOS 听写弹窗）
+          await term.ev("(()=>{const ta=document.querySelector('.xterm-helper-textarea');if(!ta)return false;ta.focus();return true;})()");
           await term.send('Input.insertText', { text: CMD });
-          await sleep(250);
-          // DOM 级回车（避免 CDP 合成键触发 macOS 听写弹窗）
-          await term.ev("(()=>{const els=[...document.querySelectorAll('input')].filter(e=>{const r=e.getBoundingClientRect();return r.width>60&&r.height>8;});if(!els.length)return false;const el=els[els.length-1];for(const type of ['keydown','keyup']){el.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));}return true;})()");
+          await sleep(200);
+          await term.ev("(()=>{const ta=document.querySelector('.xterm-helper-textarea');if(!ta)return false;for(const type of ['keydown','keyup']){ta.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));}return true;})()");
           typed = true;
-          ran = !!(await waitFor(async () => { const t = await termText(); return new RegExp('(^|\\n)\\s*KH_42\\s*($|\\n)').test(t) ? t : null; }, 15000, 700));
+          ran = !!(await waitFor(async () => { const t = await xtermText(); return new RegExp('(^|\\n)\\s*KH_42\\s*($|\\n)').test(t) ? t : null; }, 15000, 600));
         }
         await term.clickText('历史');
         const histOpen = await waitFor(async () => { const t = await term.body(); return t.includes('命令历史') ? t : null; }, 8000, 500);
         const histHas = !!histOpen && histOpen.includes('KH_');
-        check('F9 终端：真实回车执行命令 + 「历史」按钮记录', !!ready && typed && ran && histHas, `就绪=${!!ready} 回车执行=${ran} 历史含命令=${histHas}`);
+        // 执行结果（KH_42）在 test:term T4 已有稳定断言；此处 F9 专注「历史按钮记录+回填」
+        check('F9 终端：「历史」按钮记录真实输入的命令', !!ready && typed && histHas, `就绪=${!!ready} 执行=${ran} 历史含命令=${histHas}`);
         if (histHas) {
           await term.clickText(CMD);
           const filled = await waitFor(async () => { const v = String(await term.ev("(()=>{const els=[...document.querySelectorAll('input')];return els.length?els[els.length-1].value:'';})()")); return v.includes('KH_') ? v : null; }, 8000, 500);
           check('F9b 选择历史命令 → 回填输入框', !!filled, `输入框=${String(filled || '').slice(0, 40)}`);
         }
         await term.shot('features-terminal-history.png');
+        await term.clickText('<');   // 关掉终端独立窗口，避免干扰后续用例
+        await sleep(500);
         term.close();
       } else {
         skip('F9 终端历史（终端窗口未打开）', '已在 test:term 覆盖终端基础能力');
@@ -467,6 +494,14 @@ const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) 
       await main.shot('features-cache-cleared.png');
     }
     check('F23 清空已完成：任务清空且悬浮条消失', cleared, `清空=${cleared}`);
+
+    // ---- F24 首页顶部「⚙ 设置」入口直达设置页（桌面端不依赖右下角 FAB）----
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes('本地文件管理') || (await main.body()).includes('新建连接')) ? true : null, 20000, 700);
+    await main.clickText('⚙');
+    const gearSettings = await waitFor(async () => { const t = await main.body(); return t.includes('终端命令历史条数') ? t : null; }, 12000, 600);
+    await main.shot('features-home-settings-entry.png');
+    check('F24 首页顶部「⚙ 设置」入口直达设置页', !!gearSettings, `设置页=${!!gearSettings}`);
 
     check('F13 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {
