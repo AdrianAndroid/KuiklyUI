@@ -25,7 +25,12 @@
     "pretest:player": "node scripts/pretest-kill.js",
     "pretest:text": "node scripts/pretest-kill.js",
     "pretest:term": "node scripts/pretest-kill.js",
-    "posttest": "node scripts/pretest-kill.js"
+    "posttest": "node scripts/pretest-kill.js",
+    "posttest:features": "node scripts/pretest-kill.js",
+    "posttest:dual": "node scripts/pretest-kill.js",
+    "posttest:player": "node scripts/pretest-kill.js",
+    "posttest:text": "node scripts/pretest-kill.js",
+    "posttest:term": "node scripts/pretest-kill.js"
   },
   "devDependencies": {
     "electron": "33.4.11",

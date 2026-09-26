@@ -137,6 +137,13 @@ const waitFor = async (fn, ms, step = 500) => {
     // 清掉页面网关里上一轮残留的收藏/历史（否则断言被旧数据污染）
     await pageRpc('favorites', 'clearByConnection', { connectionId: '' });
     await pageRpc('history', 'clearByConnection', { connectionId: '' });
+    // 清理应用网关里历次测试残留的「测试连接」（否则列表越积越长、行落到屏幕外导致点击失败）
+    {
+      const lc = await pageRpc('connection', 'list', {});
+      for (const it of (lc?.items || [])) {
+        if (/^(Fav|F27|Feat|DelMe|CDel)/.test(it.label || '')) { await pageRpc('connection', 'remove', { id: it.id }); }
+      }
+    }
     const base = page.url.split('?')[0];
     await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=22&user=${USER}&password=${PASS}&remotePath=${FIX}` });
     // 清掉应用网关里上一轮残留的收藏（必须在 main 就绪后执行；否则断言会被旧数据污染）
@@ -198,10 +205,26 @@ const waitFor = async (fn, ms, step = 500) => {
     check('F4 收藏 Tab 显示刚收藏的目录与文件', !!favTab, favTab ? '含收藏条目' : '收藏为空');
     if (favTab) {
       await main.shot('features-favorites-tab.png');
-      const rowPos = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>(o.e.textContent||'').includes('dir_a')&&o.r.width>0&&o.r.top>150);if(!a.length)return null;a.sort((p,q)=>p.r.width*p.r.height-q.r.width*q.r.height);const r=a[0].e.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
-      if (rowPos) { const q = JSON.parse(rowPos); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(150); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
-      const opened = await waitFor(async () => { const t = await main.body(); return (t.includes('目录不存在') || t.includes('file_a.txt') || (t.includes('dir_a') && t.includes('/home/'))) ? true : null; }, 20000, 700);
-      check('F5 点收藏（目录）→ 打开浏览页', !!opened, `opened=${!!opened}`);
+      // 有效连接的目录收藏 → 打开浏览页（收藏只存 connectionId，需从连接库补凭据）
+      const fdConn = await pageRpc('connection', 'add', { label: 'FavDirConn', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
+      const fdId = fdConn?.id || '';
+      await pageRpc('favorites', 'add', { connectionId: fdId, connectionLabel: 'FavDirConn', remotePath: HOME, name: 'FavDir', isDir: true });
+      await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+      await waitFor(async () => ((await main.body()).includes('收藏') ? true : null), 20000, 700);
+      await main.clickText('收藏');
+      await waitFor(async () => { const t = await main.body(); return t.includes('FavDir') ? t : null; }, 15000, 600);
+      const fdPos = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return t.includes('FavDir')&&o.r.width>100&&o.r.height>20&&o.r.height<90;});if(!a.length)return null;a.sort((p,q)=>p.r.width*p.r.height-q.r.width*q.r.height);const r=a[0].r;return JSON.stringify({x:r.left+40,y:r.top+r.height/2});})()");
+      if (fdPos) { const q = JSON.parse(fdPos); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(150); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+      const openedBrowser = !!(await waitFor(async () => { const t = await main.body(); return (t.includes('⧉') && t.includes('✕')) ? t : null; }, 40000, 800));
+      check('F5 从收藏打开远程目录 → 进入浏览页并列出', openedBrowser, `浏览页=${openedBrowser}`);
+      // F27（合并）：紧接点最前「✕」应直接退出列表回首页
+      let listExited = false;
+      if (openedBrowser) {
+        await main.clickText('✕');
+        listExited = !!(await waitFor(async () => { const t = await main.body(); return (t.includes('SFTP 客户端') && !t.includes('⧉')) ? true : null; }, 15000, 500));
+        await main.shot('features-browser-exit.png');
+      }
+      check('F27 文件列表标题栏最前「✕」直接退出列表（回首页）', openedBrowser && listExited, `进入列表=${openedBrowser} 退出=${listExited}`);
     }
 
     // （终端能力/历史按钮由独立套件 `npm run test:term` 覆盖，这里不再重复，避免拖慢与重复；见 AGENTS §3.1 规则 9/10）
@@ -528,20 +551,45 @@ const waitFor = async (fn, ms, step = 500) => {
     }
     check('F26 连接行「✕」删除（二级确认；可取消；确认后移除）', !!dlg && cancelKeeps && removed, `弹窗=${!!dlg} 取消保留=${cancelKeeps} 已删除=${removed}`);
 
-    // ---- F27 文件列表标题栏最前「✕」直接退出列表（回首页）----
-    // 从首页「收藏」点目录进入浏览页（页内路由 push，关闭才有上一页可回），再点最前「✕」
+    // （F27 已合并到 F5 之后，避免二次打开的不稳定）
+
+    // ---- F28 从收藏打开：连接存在但远端文件不存在 → 明确提示（不再打不开/静默）----
+    const favConn = await pageRpc('connection', 'add', { label: 'FavSrv', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
+    const favConnId = favConn?.id || '';
+    await pageRpc('favorites', 'clearByConnection', { connectionId: favConnId });
+    await pageRpc('favorites', 'add', { connectionId: favConnId, connectionLabel: 'FavSrv', remotePath: `${HOME}/__no_such_file__.mp4`, name: '__no_such_file__.mp4', isDir: false, size: 0 });
     await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
-    await waitFor(async () => ((await main.body()).includes('SFTP 客户端') ? true : null), 20000, 700);
+    await waitFor(async () => ((await main.body()).includes('收藏') ? true : null), 20000, 700);
     await main.clickText('收藏');
-    const favRow = await waitFor(async () => { const t = await main.body(); return t.includes('dir_a') ? t : null; }, 15000, 600);
-    if (favRow) {
-      const rp = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return t.includes('dir_a')&&o.r.width>100&&o.r.height>20&&o.r.height<90;});if(!a.length)return null;a.sort((p,q)=>p.r.width*p.r.height-q.r.width*q.r.height);const r=a[0].r;return JSON.stringify({x:r.left+40,y:r.top+r.height/2});})()");
-      if (rp) { const q = JSON.parse(rp); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(150); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+    await waitFor(async () => ((await main.body()).includes('__no_such_file__') ? true : null), 15000, 600);
+    // 点该收藏 → 打开播放页（web 为独立窗口）
+    const favRowPos = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return t.includes('__no_such_file__')&&o.r.width>100&&o.r.height>20&&o.r.height<90;});if(!a.length)return null;a.sort((p,q)=>p.r.width*p.r.height-q.r.width*q.r.height);const r=a[0].r;return JSON.stringify({x:r.left+40,y:r.top+r.height/2});})()");
+    const beforeN = (await listTargets()).length;
+    if (favRowPos) { const q = JSON.parse(favRowPos); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(150); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+    // 可能开独立窗口；也可能回退页内。两种情况都检查「文件不存在」提示
+    let notFound = false;
+    const pw = await waitFor(async () => { const ts = await listTargets(); return ts.find((t) => t.url.includes('SftpPlayerPage')) || null; }, 20000, 600);
+    if (pw) {
+      const t2 = await attach(pw.webSocketDebuggerUrl);
+      notFound = !!(await waitFor(async () => { const b = await t2.body(); return (b.includes('不存在') || b.includes('文件不存在')) ? true : null; }, 15000, 600));
+      await t2.close();
+    } else {
+      notFound = !!(await waitFor(async () => { const b = await main.body(); return b.includes('不存在') ? true : null; }, 8000, 500));
     }
-    const inBrowser = !!(await waitFor(async () => { const t = await main.body(); return (t.includes('⧉') && t.includes('✕')) ? t : null; }, 40000, 800));
-    if (inBrowser) await main.clickText('✕');
-    const exited = !!(await waitFor(async () => { const t = await main.body(); return (t.includes('SFTP 客户端') && !t.includes('⧉')) ? true : null; }, 15000, 500));
-    check('F27 文件列表标题栏最前「✕」直接退出列表（回首页）', inBrowser && exited, `进入列表=${inBrowser} 退出=${exited}`);
+    await main.shot('features-fav-nonexistent.png');
+    check('F28 收藏打开不存在的远端文件 → 提示「文件不存在」', notFound, `提示=${notFound}`);
+
+    // ---- F29 收藏指向的连接已被删除 → 提示「连接不存在」----
+    await pageRpc('favorites', 'add', { connectionId: 'ghost-conn-id', connectionLabel: 'Ghost', remotePath: `${HOME}/x.mp4`, name: 'x.mp4', isDir: false, size: 0 });
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes('收藏') ? true : null), 20000, 700);
+    await main.clickText('收藏');
+    await waitFor(async () => { const b = await main.body(); return (b.includes('ghost') || b.includes('x.mp4')) ? true : null; }, 15000, 600);
+    const ghostPos = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return t.includes('x.mp4')&&o.r.width>100&&o.r.height>20&&o.r.height<90;});if(!a.length)return null;a.sort((p,q)=>p.r.width*p.r.height-q.r.width*q.r.height);const r=a[0].r;return JSON.stringify({x:r.left+40,y:r.top+r.height/2});})()");
+    if (ghostPos) { const q = JSON.parse(ghostPos); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(150); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+    const ghostHint = !!(await waitFor(async () => { const b = await main.body(); return b.includes('连接不存在') ? true : null; }, 8000, 400));
+    await pageRpc('favorites', 'remove', { id: (await pageRpc('favorites', 'list', {})).items?.find((x) => x.connectionId === 'ghost-conn-id')?.id || '' });
+    check('F29 收藏指向的连接已删除 → 提示「连接不存在」', ghostHint, `提示=${ghostHint}`);
 
     check('F13 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {

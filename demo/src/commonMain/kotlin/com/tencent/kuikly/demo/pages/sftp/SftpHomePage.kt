@@ -492,8 +492,31 @@ internal class SftpHomePage : SftpBasePager() {
     }
 
     /** 首页收藏 Tab 点击进入：目录→浏览页；文件→播放页（与收藏详情页一致，只传 connectionId，目标页自行解析凭据） */
+    /**
+     * 用连接库里的凭据补全 params（收藏/历史只持久化了 connectionId，没有 host/user/password）。
+     * 连接不存在（已删除）返回 false。
+     */
+    private fun fillConnectParams(params: com.tencent.kuikly.core.nvi.serialization.json.JSONObject, connectionId: String): Boolean {
+        val conn = connections.firstOrNull { it.id == connectionId } ?: return false
+        val cp = conn.toConnectParam().toJson()
+        params.put("host", cp.optString("host"))
+        params.put("port", cp.optInt("port", 22))
+        params.put("user", cp.optString("user"))
+        val pwd = cp.optString("password"); if (pwd.isNotEmpty()) params.put("password", pwd)
+        val pk = cp.optString("privateKey"); if (pk.isNotEmpty()) params.put("privateKey", pk)
+        val pp = cp.optString("passphrase"); if (pp.isNotEmpty()) params.put("passphrase", pp)
+        val kh = cp.optString("knownHosts"); if (kh.isNotEmpty()) params.put("knownHosts", kh)
+        params.put("authMethod", cp.optString("authMethod", "PASSWORD"))
+        return true
+    }
+
     private fun openFavorite(favorite: com.tencent.kuikly.core.module.sftp.SftpFavorite) {
         val params = com.tencent.kuikly.core.nvi.serialization.json.JSONObject()
+        // 收藏只存 connectionId：从连接库补全 host/user/password，否则目标页连不上（打开失败）
+        if (!fillConnectParams(params, favorite.connectionId)) {
+            Utils.bridgeModule(this).toast("连接不存在，可能已被删除")
+            return
+        }
         params.put("connectionId", favorite.connectionId)
         params.put("connectionLabel", favorite.connectionLabel)
         params.put("remotePath", favorite.remotePath)
@@ -510,6 +533,11 @@ internal class SftpHomePage : SftpBasePager() {
     /** 首页历史 Tab 点击进入播放页（与历史详情页一致） */
     private fun openHistory(record: com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord) {
         val params = com.tencent.kuikly.core.nvi.serialization.json.JSONObject()
+        // 历史同样只存 connectionId：补全凭据；连接不存在时提示
+        if (!fillConnectParams(params, record.connectionId)) {
+            Utils.bridgeModule(this).toast("连接不存在，可能已被删除")
+            return
+        }
         params.put("connectionId", record.connectionId)
         params.put("connectionLabel", record.connectionLabel)
         params.put("remotePath", record.remotePath)

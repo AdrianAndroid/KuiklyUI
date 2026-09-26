@@ -98,6 +98,9 @@
    必要功能的关键路径要 `Page.captureScreenshot` 留证。不允许「只改代码不补用例」。
 11. **每次构建 dmg 都要在 `~/Downloads` 留一份带构建时间的副本**：`npm run dist`/`dist:release` 已内置
    `node scripts/copy-dmg.mjs`，把 `electron/dist/*.dmg` 另存为 `~/Downloads/Kuikly SFTP-<版本>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）。
+12. **每回结束（一次测试/开发会话收尾）都要关闭自己启动的 SFTP 客户端/网关进程**：跑完用例或调试后执行
+   `pkill -f "Kuikly SFTP.app" || true; pkill -f "remote-debugging-port=" || true; pkill -f "electron ." || true`，
+   不要留下后台客户端/网关占资源。`posttest`/`posttest:*` 钩子已自动做这件事。
 
 ---
 
