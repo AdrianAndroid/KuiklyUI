@@ -24,26 +24,36 @@
     input:focus {
       outline: none;
     }
-    /* toast提示框的样式 */
+    /* toast提示框的样式：窗口底部、宽度自适应文字（不占满整行） */
     .toast-wrapper {
         position: fixed;
         z-index: 100000;
-        height: 30px;
-        width: 100%;
+        height: auto;
+        width: auto;
+        max-width: 80vw;
         display: flex;
         justify-content: center;
         align-items: center;
-        top: 70px;
-        background-color: white;
+        left: 50%;
+        bottom: 28px;
+        transform: translateX(-50%);
+        background-color: transparent;
     }
     .toast-content {
         display: flex;
-        font-size: 12px;
-        line-height: 30px;
-        min-width: 150px;
-        border: 1px solid gray;
-        border-radius: 5px;
+        font-size: 13px;
+        line-height: 20px;
+        padding: 8px 14px;
+        width: auto;
+        border: none;
+        border-radius: 8px;
+        background-color: rgba(0, 0, 0, 0.82);
+        color: #ffffff;
         justify-content: center;
+        white-space: nowrap;
+        max-width: 80vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     /* 隐藏滚动条的样式 */
     .list-no-scrollbar {
