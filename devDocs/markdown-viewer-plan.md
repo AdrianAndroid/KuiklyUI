@@ -67,7 +67,9 @@ Web/Electron 可在宿主用现成 JS 库增强，但其它端不能空白。因
 | 改动 | 位置 | 效果 |
 |---|---|---|
 | 行内片段**解析期预计算**（`Paragraph.runs` / `Quote.runs` / `MdItem.runs`） | `MarkdownParser` | 渲染期不再 `parseInline`，消除重复解析与临时对象 |
-| **增量渲染**：首屏 40 块，滚动到「已渲染底部 − 240px」再追加 40 | `SftpMarkdownViewer` + `SftpReaderScaffold.onScroll` + 宿主 `mdRenderLimit` | 存活视图数从最多 700 块降到 ~40 块 → 拖动窗口/切换行只重排这一批 |
+| **增量渲染**：首屏 40 块，滚动到「已渲染底部 − 240px」（Web 用底部「点此加载更多」）再追加 200 块 | `SftpMarkdownViewer` + `SftpReaderScaffold.onScroll` + 宿主 `mdRenderLimit` | 存活视图数从「全部块」降到 ~40 块 → 拖动窗口/切换行只重排这一批 |
+| **增量渲染同样用于纯文本/源码视图**：首屏 300 行，每次追加 800 行，可一直加载到全文 | `SftpTextViewer` + 宿主 `textRenderLimit` / `textVisibleLines` | 修掉旧实现「硬截 1500 行」的看不全，以及切换源码时一次建 ~4500 视图的卡死 |
+| `MAX_MD_BLOCKS` 只作**病态输入的内存防御**（20000），不再是显示上限 | `parseCapped` | 大文档预览可完整加载到末尾（旧值 700 会让后半段永远不可见） |
 | 目录跳转前**先把窗口撑到覆盖目标块** | `jumpToOutline` | 避免跳到未渲染的占位区 |
 
 > 为什么不用 `ListView` 虚拟列表：正文块高不固定，且需要与 TOC 近似跳转、块编辑高亮共存；
@@ -114,8 +116,12 @@ Web/Electron 可在宿主用现成 JS 库增强，但其它端不能空白。因
 
 ## 5. 测试
 
-- 用例文件：`electron/test/text-viewer.mjs`（`npm run test:text`）→ **T0–T14 21/21**。
-- 本轮新增：
+- 用例文件：`electron/test/text-viewer.mjs`（`npm run test:text`）→ **T0–T16 25/25**。
+- 最近新增：
+  - **T15 代码块语法高亮**（≥3 种 token 颜色）：夹具 `f_code.md`（多语言代码块）。
+  - **T16 大文档可加载到末尾**（回归：预览硬截 700 块 / 源码硬截 1500 行 / 切源码卡死）：
+    `T16a` 预览总块 > 700 且可追加渲染超过 700 块；`T16b` 源码总行数 = 全文行数、可追加超过 1500 行直到末尾，
+    并给出切源码耗时（实测 ~1s，不再卡死）。夹具 `g_large_doc.md`（500 节 / 2002 行 / 约 1001 块）。
   - **T14 超过 96KB 的 Markdown 分块读取 offset 回归**（浏览器 `read` 把 Kotlin `Long` 当 `Number` 解析失败 →
     offset 恒 0 → 重复前缀损坏正文/末尾围栏被截断 → Markdown 解析越界退回源码、点「预览」空白）。
     断言：渲染态（非源码回退）+ 目录 > 0 + 行数与远端一致。

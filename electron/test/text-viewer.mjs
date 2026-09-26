@@ -40,6 +40,7 @@ const FIX_MD_DIAGRAM = 'c_diagram.md';   // mermaid 流程图夹具
 const FIX_MD_BIG = 'd_big_doc.md';       // 大文档夹具（增量渲染）
 const FIX_MD_BIG96 = 'e_big_over_96k.md'; // 超过 96KB 分块大小的回归夹具（验证读取 offset）
 const FIX_MD_CODE = 'f_code.md';          // 多语言代码块夹具（验证语法高亮）
+const FIX_MD_LARGE = 'g_large_doc.md';    // 大文档回归：预览 >700 块 / 源码 >1500 行都能加载到末尾
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -208,8 +209,16 @@ setTimeout(() => {
     const big96Lines = big96Md.split('\n').length;
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_BIG96}`, content: Buffer.from(big96Md, 'utf8').toString('base64') });
 
+    // 大文档回归夹具（T16）：块数 > 700 且行数 > 1500，
+    // 覆盖「预览被永久截断在 700 块 / 源码被永久截断在 1500 行 / 切源码卡死」三个问题。
+    const largeMd = '# 预览大文档\n\n' + Array.from({ length: 500 }, (_, i) =>
+      `## 章节 ${i + 1}\n\n这是第 ${i + 1} 节内容，用于验证大文档能完整加载到末尾。\n`).join('\n');
+    const largeLines = largeMd.split('\n').length;
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_LARGE}`, content: Buffer.from(largeMd, 'utf8').toString('base64') });
+
     check('T0a 夹具就绪（样例 md + txt + 图表 + 大文档）', !!mdB64, `${FIX_DIR}（md ${Math.round(mdB64.length / 1024)}KB）`);
     check('T0c 超过 96KB 分块的 Markdown 夹具就绪', big96Bytes > 96 * 1024, `${FIX_MD_BIG96} ${Math.round(big96Bytes / 1024)}KB / ${big96Lines} 行`);
+    check('T0d 大文档夹具就绪（>700 块 / >1500 行）', largeLines > 1500, `${FIX_MD_LARGE} ${largeLines} 行 / 约 ${1 + 500 * 2} 块`);
 
     const page = await waitFor(async () => (await listTargets())[0], 40000);
     if (!page) { check('T0b 渲染进程启动', false); return; }
@@ -436,7 +445,9 @@ setTimeout(() => {
           await sleep(700);
           const b = await bv.body();
           const m = /已渲染 (\d+)\//.exec(b);
+          // 追加后要么计数增长，要么一次追加即加载完（提示消失，内容含末尾小节）
           if (m && Number(m[1]) > 40) incGrew = true;
+          else if (!b.includes('点此加载更多') && b.includes('小节 90')) incGrew = true;
         }
       }
       await bv.shot('text-viewer-incremental.png');
@@ -496,6 +507,58 @@ setTimeout(() => {
       go.close();
     }
     check('T14 超过 96KB 的 Markdown 分块读取 offset 正确（不退源码/无重复前缀）', big96Ok, big96Info);
+
+    // ---- T16 大文档可完整加载到末尾 ----
+    // 回归：预览曾硬截 700 块、源码曾硬截 1500 行（拉到底也看不全）；切源码时一次建 1500 行视图导致卡死。
+    const lg = await openFixture(FIX_MD_LARGE);
+    let previewTotal = 0, previewBeyond = false, srcTotal = 0, srcBeyond = false, toggleMs = -1;
+    if (lg.win) {
+      const lv = await attach(lg.win.webSocketDebuggerUrl);
+      await lv.send('Page.enable');
+      // 预览：总量必须 > 700（旧实现永久截断），且能追加渲染超过 700 块
+      const p1 = await waitFor(async () => {
+        const b = await lv.body();
+        const m = /已渲染 (\d+)\/(\d+) 块/.exec(b);
+        return (b.includes('源码') && m) ? { b, m } : null;
+      }, 30000, 600);
+      if (p1) {
+        previewTotal = Number(p1.m[2]);
+        for (let k = 0; k < 6 && !previewBeyond; k++) {
+          await lv.clickText('点此加载更多');
+          await sleep(700);
+          const b = await lv.body();
+          const m = /已渲染 (\d+)\//.exec(b);
+          if (m && Number(m[1]) > 700) previewBeyond = true;
+          if (!b.includes('点此加载更多') && b.includes('章节 500')) previewBeyond = true;
+        }
+      }
+      // 源码：总量应等于全文行数（旧实现硬截 1500 行），且切换耗时可接受（不再一次建 1500 行视图）
+      const t0 = Date.now();
+      await lv.clickText('源码');
+      const s1 = await waitFor(async () => {
+        const b = await lv.body();
+        const m = /已渲染 (\d+)\/(\d+) 行/.exec(b);
+        return (m && b.includes('点此加载更多')) ? { b, m } : null;
+      }, 20000, 500);
+      toggleMs = Date.now() - t0;
+      if (s1) {
+        srcTotal = Number(s1.m[2]);
+        for (let k = 0; k < 6 && !srcBeyond; k++) {
+          await lv.clickText('点此加载更多');
+          await sleep(700);
+          const b = await lv.body();
+          const m = /已渲染 (\d+)\//.exec(b);
+          if (m && Number(m[1]) > 1500) srcBeyond = true;
+          if (!b.includes('点此加载更多') && b.includes('章节 500')) srcBeyond = true;
+        }
+      }
+      await lv.shot('text-viewer-large-source.png');
+      lv.close();
+    }
+    check('T16a 大文档预览不再按 700 块永久截断（可追加到 700 块以上）',
+      previewTotal > 700 && previewBeyond, `预览总块=${previewTotal} 追加超过700=${previewBeyond}`);
+    check('T16b 大文档源码总量=全文行数且可加载到末尾（旧实现硬截 1500 行）',
+      srcTotal === largeLines && srcBeyond, `源码总行=${srcTotal}/${largeLines} 追加超过1500=${srcBeyond} 切源码耗时=${toggleMs}ms`);
 
     // T5 独立窗口返回：点「<」关闭查看器窗口，主窗口仍在文件列表（主界面不受影响）
     const backToList = await (async () => {
