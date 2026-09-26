@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
-import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -85,6 +85,7 @@ setTimeout(() => {
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const electronBin = require('electron');
   const child = spawn(electronBin, ['.', ...cdpArgs('dual', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+  const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
 
   let failures = 0;
   try {
@@ -331,7 +332,7 @@ setTimeout(() => {
 
     check('D16 无 JS 未捕获异常', errs.length === 0, errs.slice(0, 2).join('; '));
   } finally {
-    try { child.kill('SIGTERM'); } catch (e) {}
+    cleanupChild();   // 测试结束立即杀掉本实例应用（双保险：pre/post hook）
     await cleanRemote();
     for (const f of localFixtures) { try { fs.unlinkSync(f); } catch (e) {} }   // 删除测试文件
     const fail = results.filter((r) => !r.ok).length;

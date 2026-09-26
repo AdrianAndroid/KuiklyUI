@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, SFTP_HOME } from './env.mjs';
+import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, SFTP_HOME } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -90,6 +90,7 @@ async function runCommand(view, cmd) {
   ensureDirs();
   const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(require('electron'), ['.', ...cdpArgs('terminal', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
   try {
     const page = await waitFor(async () => (await listTargets())[0], 40000);
     if (!page) { check('T0 渲染进程启动', false); return; }
@@ -171,7 +172,7 @@ async function runCommand(view, cmd) {
     console.log('ERROR | ' + String((e && e.stack) || e).slice(0, 400));
     results.push({ n: '意外异常', ok: false, d: String(e).slice(0, 100) });
   } finally {
-    try { child.kill('SIGTERM'); } catch (e) { }
+    cleanupChild();   // 测试结束立即杀掉本实例应用（双保险：pre/post hook）
     const fail = results.filter((r) => !r.ok).length;
     console.log(`\n[terminal] ${results.length - fail}/${results.length} 通过${skipped.length ? `；SKIP ${skipped.length}（已知缺陷：${skipped.join('、')}）` : ''}；截图目录 ${artifacts}`);
     setTimeout(() => process.exit(fail ? 1 : 0), 150);

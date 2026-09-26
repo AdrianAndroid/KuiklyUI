@@ -8,7 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance } from './env.mjs';
+import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -70,6 +70,7 @@ setTimeout(() => {
   const child = binOverride
     ? spawn(binOverride, cdpArgs('smoke', PORT), { stdio: 'inherit', env: childEnv })
     : spawn(electronBin, ['.', ...cdpArgs('smoke', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+  const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
   try {
     check('S1 Electron 启动 + CDP 可用', await waitCdp());
     // 等待渲染进程页面出现（窗口创建/首帧可能晚于 CDP 就绪）
@@ -430,7 +431,7 @@ setTimeout(() => {
   } catch (e) {
     check('S0 冒烟执行异常', false, String(e && e.message));
   } finally {
-    try { child.kill(); } catch (e) {}
+    cleanupChild();   // 测试结束立即杀掉本实例应用（双保险：pre/post hook）
   }
   const pass = results.filter((r) => r.ok).length;
   const slow = results.filter((r) => (r.cost || 0) > 8).map((r) => `${r.n.split(' ')[0]}(${r.cost}s)`);

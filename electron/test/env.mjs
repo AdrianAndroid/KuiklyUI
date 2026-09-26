@@ -20,6 +20,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 export const ELECTRON_DIR = path.resolve(here, '..');
@@ -113,4 +114,34 @@ export function cdpArgs(suite, port) {
 /** 打印一次实例信息，便于并行时定位 */
 export function logInstance(suite) {
   console.log(`[kr-test] instance=${INSTANCE} slot=${SLOT} suite=${suite} cdp=${cdpPort(suite)} gateway=${GATEWAY_PORT} userData=${USER_DATA_DIR}`);
+}
+
+/**
+ * 立即清掉本实例的测试应用（SIGKILL 主进程 + 按 userData 标记兜底 pkill）。
+ * 供用例 finally 显式调用；`registerCleanup` 也会在进程退出/信号时自动调用。
+ */
+export function killInstanceApp(child) {
+  try { if (child && child.pid && !child.killed) child.kill('SIGKILL'); } catch (e) { /* ignore */ }
+  // 兜底：Chromium 的 renderer/GPU/utility 子进程即使主进程被 SIGKILL 也要清干净，
+  // 否则多 worktree 并行会累积大量 Electron 进程把机器拖卡（AGENTS.md §3.1 规则 13）。
+  try { execFileSync('pkill', ['-f', `ud-${INSTANCE}`], { stdio: 'ignore' }); } catch (e) { /* no match */ }
+}
+
+/**
+ * 给测试套件挂「退出/信号兜底清理」：即使用例被 watchdog/ctrl-c 强杀、或异常退出，
+ * 也会杀掉本实例的 Electron，绝不留下后台客户端占 CPU。
+ * 返回一个可显式调用的清理函数（用例 finally 里调用，形成双保险：pre hook + 用例 + post hook）。
+ */
+export function registerCleanup(child) {
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    killInstanceApp(child);
+  };
+  process.on('exit', cleanup);
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => { cleanup(); process.exit(0); });
+  }
+  return cleanup;
 }

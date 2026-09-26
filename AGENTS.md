@@ -139,11 +139,15 @@
    必要功能的关键路径要 `Page.captureScreenshot` 留证。不允许「只改代码不补用例」。
 11. **每次构建 dmg 都要在 `~/Downloads` 留一份带构建时间的副本**：`npm run dist`/`dist:release` 已内置
    `node scripts/copy-dmg.mjs`，把 `electron/dist/*.dmg` 另存为 `~/Downloads/Kuikly SFTP-<版本>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）。
-12. **每回结束（一次测试/开发会话收尾）都要关闭自己启动的 SFTP 客户端/网关进程**：跑完用例或调试后执行
-   `cd electron && node scripts/pretest-kill.js`（**只清理本 worktree 实例**：按实例 userData 标记杀 Electron +
-   释放本实例网关端口），不要留下后台客户端/网关占资源。`pretest`/`posttest` 钩子已自动做这件事。
-   ⚠️ **禁止**用无差别的 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` /
-   `osascript -e 'quit app "Kuikly SFTP"'` —— 会把其它并行 worktree 正在跑的用例一并杀掉（见规则 13）。
+12. **测试应用在「开始前」和「结束后」都必须 kill 掉（否则多 worktree 累积会把机器卡死）**：
+   - **开始前**：`pretest`/`pretest:*` 钩子自动执行 `cd electron && node scripts/pretest-kill.js`（按本实例
+     userData 标记杀 Electron + 释放本实例网关端口），清掉上次残留再启动。
+   - **结束后**：① 每个套件在 `finally` 调用 `registerCleanup(child)` 返回的清理函数（SIGKILL 主进程 +
+     `pkill -f ud-<instance>` 兜底清 Chromium 子进程）；② `posttest`/`posttest:*` 钩子再兜底一次。
+     `registerCleanup` 同时挂在进程 `exit`/`SIGINT`/`SIGTERM`/`SIGHUP` 上——**即使用例被 watchdog 或 ctrl-c 强杀也保证清理**。
+   - 手工调试后同样执行 `node scripts/pretest-kill.js` 收尾；**绝不留下后台客户端/网关占 CPU**。
+   - ⚠️ **禁止**用无差别的 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` /
+     `osascript -e 'quit app "Kuikly SFTP"'` —— 会杀掉其它并行 worktree 正在跑的用例（见规则 13）。
 13. **多 worktree 并行开发时，测试必须按实例隔离，禁止再用写死的端口/全局路径**：
    - **唯一事实来源**：`electron/test/env.mjs`。所有测试的 CDP 端口、userData、外部网关地址、本地文件根、
      远端夹具命名一律从这里取，不得在各套件里另行写死。

@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -96,6 +96,7 @@ const waitFor = async (fn, ms, step = 500) => {
   const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawn(require('electron'), ['.', ...cdpArgs('features', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   __child = child;
+  const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
   const conn = await rpc('sftp', 'connect', { host: HOST, port: 22, user: USER, password: PASS });
   const sid = conn.sessionId;
   const cleanup = async () => {
@@ -653,7 +654,7 @@ const waitFor = async (fn, ms, step = 500) => {
     results.push({ n: '意外异常', ok: false });
   } finally {
     try { await cleanup(); } catch (e) { }
-    try { child.kill('SIGTERM'); } catch (e) { }
+    cleanupChild();   // 测试结束立即杀掉本实例应用（双保险：pre/post hook）
     const fail = results.filter((r) => !r.ok).length;
     console.log(`\n[features] ${results.length - fail}/${results.length} 通过${skipped.length ? `；SKIP ${skipped.length}` : ''}；截图目录 ${artifacts}`);
     __finished = true;
