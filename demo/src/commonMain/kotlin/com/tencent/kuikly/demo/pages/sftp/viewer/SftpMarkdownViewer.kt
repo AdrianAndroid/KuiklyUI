@@ -17,7 +17,9 @@ package com.tencent.kuikly.demo.pages.sftp.viewer
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
+import com.tencent.kuikly.core.directives.vforIndex
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.views.RichText
 import com.tencent.kuikly.core.views.Span
 import com.tencent.kuikly.core.views.Text
@@ -37,23 +39,24 @@ import com.tencent.kuikly.demo.pages.sftp.viewer.md.MdRun
  */
 internal fun ViewContainer<*, *>.SftpMarkdownViewer(
     blocksProvider: () -> List<MdBlock>,
+    /** 已渲染窗口（ObservableList）：增量追加时由 vforIndex 只重建新增的块 */
+    visibleBlocksProvider: () -> ObservableList<MdBlock>,
     fontScaleProvider: () -> Float,
     wrapProvider: () -> Boolean,
     onLink: (String) -> Unit,
     editingProvider: () -> Boolean = { false },
     editTargetProvider: () -> Int = { -1 },
     onBlockTap: (Int) -> Unit = { },
-    /**
-     * 已渲染块数上限（增量渲染/窗口化）：默认不限。
-     * 目的：拖动窗口/切换换行时只重排已渲染的少量块，而不是整篇（最多 700 块）。
-     */
-    renderLimitProvider: () -> Int = { Int.MAX_VALUE },
+    /** 追加一批块（点击底部提示触发；原生端若上报滚动偏移也会自动触发） */
+    onLoadMore: (() -> Unit)? = null,
 ) {
-    // 条件里同时读 renderLimitProvider，保证 limit 变化时依赖被收集并重渲染
-    vif({ blocksProvider().isNotEmpty() && renderLimitProvider() >= 0 }) {
+    vif({ blocksProvider().isNotEmpty() }) {
         SftpMarkdownBody(
-            blocksProvider(), fontScaleProvider, wrapProvider, onLink,
-            editingProvider, editTargetProvider, onBlockTap, renderLimitProvider
+            visibleBlocksProvider,
+            totalCountProvider = { blocksProvider().size },
+            renderedCountProvider = { visibleBlocksProvider().size },
+            fontScaleProvider, wrapProvider, onLink,
+            editingProvider, editTargetProvider, onBlockTap, onLoadMore
         )
     }
     velse {
@@ -65,17 +68,17 @@ internal fun ViewContainer<*, *>.SftpMarkdownViewer(
 }
 
 private fun ViewContainer<*, *>.SftpMarkdownBody(
-    blocks: List<MdBlock>,
+    visibleBlocksProvider: () -> ObservableList<MdBlock>,
+    totalCountProvider: () -> Int,
+    renderedCountProvider: () -> Int,
     fontScaleProvider: () -> Float,
     wrapProvider: () -> Boolean,
     onLink: (String) -> Unit,
     editingProvider: () -> Boolean,
     editTargetProvider: () -> Int,
     onBlockTap: (Int) -> Unit,
-    renderLimitProvider: () -> Int,
+    onLoadMore: (() -> Unit)?,
 ) {
-    val limit = renderLimitProvider().coerceAtLeast(1)
-    val shown = if (blocks.size > limit) blocks.subList(0, limit) else blocks
     View {
         attr {
             flex(1f)
@@ -84,7 +87,8 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
             borderRadius(8f)
             padding(14f, 14f, 14f, 14f)
         }
-        shown.forEachIndexed { index, block ->
+        // 用 vforIndex 驱动：增量窗口变化时只重建/追加变化的块（依赖能被正确收集）
+        vforIndex({ visibleBlocksProvider() }) { block, index, _ ->
             // 编辑模式：每个块可点（进来改这一块的 Markdown 源码，完成即重渲染 = 即时渲染）
             View {
                 attr {
@@ -109,13 +113,20 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
                 }
             }
         }
-        // 增量渲染占位：还有未渲染的块时给出提示（继续下滑会自动追加）
-        if (shown.size < blocks.size) {
+        // 增量渲染占位：还有未渲染的块时给出提示（点按或原生端滚动自动追加）
+        vif({ totalCountProvider() > renderedCountProvider() }) {
             View {
                 attr { height(40f); allCenter() }
+                if (onLoadMore != null) { event { click { onLoadMore.invoke() } } }
                 Text {
                     attr {
-                        text("继续下滑加载 · 已渲染 ${shown.size}/${blocks.size} 块")
+                        text(
+                            if (onLoadMore != null) {
+                                "点此加载更多 · 已渲染 ${renderedCountProvider()}/${totalCountProvider()} 块"
+                            } else {
+                                "已渲染 ${renderedCountProvider()}/${totalCountProvider()} 块"
+                            }
+                        )
                         fontSize(11f)
                         color(SftpColorTokens.textSecondary)
                         accessibility("md_more")

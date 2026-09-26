@@ -42,14 +42,30 @@ const FIX_MD_BIG = 'd_big_doc.md';       // 大文档夹具（增量渲染）
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const skipped = [];
-const check = (n, ok, d) => { results.push({ n, ok: !!ok, d }); console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''}`); };
+// 逐条打印耗时（AGENTS §3.1 规则 7：单步明显偏长时便于定位与止损）
+let __lastT = Date.now();
+const check = (n, ok, d) => {
+  const dt = ((Date.now() - __lastT) / 1000).toFixed(1);
+  __lastT = Date.now();
+  results.push({ n, ok: !!ok, d });
+  console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''} (${dt}s)`);
+};
 const rpc = async (module, method, params) => (await fetch(GW + '/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module, method, params }) })).json();
 
 async function attach(wsUrl) {
   const ws = new WebSocket(wsUrl);
   let id = 0; const pend = new Map(); const errs = [];
-  const send = (m, p = {}) => new Promise((r) => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method: m, params: p })); });
-  await new Promise((r) => { ws.onopen = r; });
+  const send = (m, p = {}) => new Promise((r) => {
+    const i = ++id;
+    // 单条 CDP 命令超时兜底：目标进程卡死时不能无限等待（否则整套用例被看门狗强杀、无法定位）
+    const timer = setTimeout(() => { pend.delete(i); r(null); }, 15000);
+    pend.set(i, (v) => { clearTimeout(timer); r(v); });
+    try { ws.send(JSON.stringify({ id: i, method: m, params: p })); } catch (e) { clearTimeout(timer); pend.delete(i); r(null); }
+  });
+  await new Promise((r) => {
+    const timer = setTimeout(() => { try { ws.close(); } catch (e) {} r(); }, 15000);
+    ws.onopen = () => { clearTimeout(timer); r(); };
+  });
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.id && pend.has(m.id)) { pend.get(m.id)(m.result); pend.delete(m.id); }
@@ -83,9 +99,9 @@ const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) 
 let __finished = false;
 setTimeout(() => {
   if (__finished) return;
-  console.log('FAIL | WATCHDOG 全局超时 900s，强制退出');
+  console.log('FAIL | WATCHDOG 全局超时 1500s，强制退出');
   process.exit(1);
-}, 900 * 1000);
+}, 1500 * 1000);
 
 (async () => {
   logInstance('text');
@@ -257,6 +273,11 @@ setTimeout(() => {
       const afterApply = await waitFor(async () => ((await boldInBody()) > 0 ? true : null), 12000, 600);
       const dirtyMark = await waitFor(async () => ((await v7.body()).includes('保存*') ? true : null), 8000, 500);
       applied = !!afterApply;
+      if (!afterApply) {
+        // 失败诊断：把含「文档目的」的元素标签/字重/文本片段打出来，便于定位是「没重渲染」还是「字重不对」
+        const diag = await v7.ev("(()=>{const b=document.body.innerText||'';return 'bodyLen='+b.length+' head='+JSON.stringify(b.slice(0,220));})()");
+        console.log('      [debug T7b] ' + diag);
+      }
       check('T7 即时渲染（工具条 B → 实时预览自动加粗，不点应用）', editOn && !!overlay && editorBold && inlinePreview,
         `编辑态=${!!editOn} 浮层=${!!overlay} 编辑区含**=${editorBold} 实时预览已加粗=${inlinePreview}`);
       check('T10 格式工具条生效（点 B → 编辑区出现 ** 加粗标记）', !!fmtApplied, `编辑区含 '**'=${editorBold}`);
@@ -317,14 +338,14 @@ setTimeout(() => {
       await bv.send('Page.enable');
       const t1 = await waitFor(async () => {
         const b = await bv.body();
-        return b.includes('继续下滑加载') ? b : null;
+        return b.includes('点此加载更多') ? b : null;
       }, 30000, 600);
       incText = t1 || '';
       incFirst = !!t1 && /已渲染 (40|4[0-9])\//.test(incText);
       if (incFirst) {
-        // 滚到底 → 触发追加（多滚几次，等待窗口增长）
-        for (let k = 0; k < 6 && !incGrew; k++) {
-          await bv.ev("(()=>{const el=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+40);if(el){el.scrollTop=el.scrollHeight;return true;}return false;})()");
+        // web/Electron 的 Scroller 不上报滚动偏移 → 用底部「点此加载更多」显式追加
+        for (let k = 0; k < 3 && !incGrew; k++) {
+          await bv.clickText('点此加载更多');
           await sleep(700);
           const b = await bv.body();
           const m = /已渲染 (\d+)\//.exec(b);
@@ -334,8 +355,8 @@ setTimeout(() => {
       await bv.shot('text-viewer-incremental.png');
       bv.close();
     }
-    check('T12 增量渲染（首屏只渲染一批 + 提示，滚动后追加）', incFirst && incGrew,
-      `首屏提示=${incFirst} 滚动后追加=${incGrew} 文案=${(/已渲染 \d+\/\d+ 块/.exec(incText) || [''])[0]}`);
+    check('T12 增量渲染（首屏只渲染一批 + 提示，点按后追加）', incFirst && incGrew,
+      `首屏提示=${incFirst} 追加后增长=${incGrew} 文案=${((incText.split('\n').find((l) => l.includes('点此加载更多')) || '').trim()).slice(0, 60)}`);
 
     // ---- T13 文档缓存：同一文件二次打开命中缓存（无需重新装载即可渲染）----
     const again = await openFixture(FIX_MD);

@@ -16,6 +16,8 @@ package com.tencent.kuikly.demo.pages.sftp.viewer
 
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
+import com.tencent.kuikly.core.reactive.collection.ObservableList
+import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.velseif
@@ -84,8 +86,10 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private var textTruncated: Boolean by observable(false)
     private var mdBlocks: List<MdBlock> by observable(emptyList())
     private var mdOutline: List<Pair<Int, String>> by observable(emptyList())
-    /** 已渲染的 Markdown 块数上限（增量渲染；滚动到接近已渲染底部时按批追加） */
+    /** 已渲染的 Markdown 块数上限（增量渲染；滚动/点按后按批追加） */
     private var mdRenderLimit: Int by observable(INITIAL_MD_BLOCKS)
+    /** 已渲染窗口（vforIndex 的数据源：追加时只渲染新增块，避免整篇重建） */
+    private var mdVisibleBlocks: ObservableList<MdBlock> by observableList()
     private var textLines: List<String> by observable(emptyList())
     private var mdSourceView: Boolean by observable(false)
     private var wrapLines: Boolean by observable(true)
@@ -101,6 +105,8 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private var saveMsg: String by observable("")
     /** 编辑区的「实时预览」块（输入后防抖刷新 = Vditor 即时渲染） */
     private var editPreviewBlocks: List<MdBlock> by observable(emptyList())
+    /** 编辑浮层实时预览的 vforIndex 数据源 */
+    private var editPreviewVisibleBlocks: ObservableList<MdBlock> by observableList()
     private var editDebounceRef: String? = null
 
     /** 文档缓存键（连接 + 路径 + 大小）：同一文件重复打开直接复用缓存 */
@@ -243,6 +249,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
             mdOutline = outline
             textLines = text.split('\n')
             mdRenderLimit = minOf(maxOf(mdRenderLimit, INITIAL_MD_BLOCKS), blocks.size)
+            refreshVisibleBlocks()
             if (mdBlocks.isEmpty()) mdSourceView = true   // 解析失败 → 显示源码，避免空白
         } else {
             textLines = text.split('\n')
@@ -307,7 +314,49 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         } catch (e: Throwable) {
             emptyList()
         }
+        editPreviewVisibleBlocks.clear()
+        editPreviewVisibleBlocks.addAll(editPreviewBlocks)
     }
+
+    /** 拆出块级前缀（引用 / 列表 / 任务 / 标题），返回 (前缀, 正文) */
+    private fun splitBlockPrefix(line: String): Pair<String, String> {
+        if (line.startsWith("- [ ] ")) return "- [ ] " to line.substring(6)
+        if (line.startsWith("- [x] ") || line.startsWith("- [X] ")) return line.substring(0, 6) to line.substring(6)
+        if (line.startsWith("> ")) return "> " to line.substring(2)
+        if (line == ">") return "> " to ""
+        if (line.startsWith("- ") || line.startsWith("* ") || line.startsWith("+ ")) {
+            return line.substring(0, 2) to line.substring(2)
+        }
+        var i = 0
+        while (i < line.length && line[i].isDigit()) i++
+        if (i in 1..9 && i + 1 < line.length && (line[i] == '.' || line[i] == ')') && line[i + 1] == ' ') {
+            return line.substring(0, i + 2) to line.substring(i + 2)
+        }
+        for (h in 6 downTo 1) {
+            val p = "#".repeat(h) + " "
+            if (line.startsWith(p)) return p to line.substring(p.length)
+        }
+        return "" to line
+    }
+
+    /**
+     * 行内包裹：**逐行保留块级前缀**，只把正文包进 open/close。
+     *
+     * 修复：原先直接 `"**$t**"` 会把引用块的 `> ` 一起包进去（`**> 文本**`），
+     * 破坏块结构 → 引用/列表里加粗后正文不再按 Markdown 渲染。
+     */
+    private fun wrapInline(text: String, open: String, close: String): String =
+        text.split('\n').joinToString("\n") { line ->
+            val (prefix, body) = splitBlockPrefix(line)
+            when {
+                body.isEmpty() -> line
+                // 幂等：正文已含该标记就不再包裹。
+                // 否则对「> **文档目的**：…」再点 B 会变成 `****文档目的**…**` →
+                // 解析出空 Bold + 纯文本，表现就是「点了加粗却没变粗」。
+                body.contains(open) -> line
+                else -> prefix + open + body + close
+            }
+        }
 
     /**
      * 格式工具条（对齐 Vditor 的工具栏按钮：标题/加粗/斜体/删除线/行内代码/代码块/引用/列表/任务/链接/表格/分隔线）。
@@ -321,16 +370,17 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
             "h1" -> lines.mapIndexed { i, l -> if (i == 0) "# " + stripHeading(l) else l }.joinToString("\n")
             "h2" -> lines.mapIndexed { i, l -> if (i == 0) "## " + stripHeading(l) else l }.joinToString("\n")
             "h3" -> lines.mapIndexed { i, l -> if (i == 0) "### " + stripHeading(l) else l }.joinToString("\n")
-            "bold" -> "**$t**"
-            "italic" -> "*$t*"
-            "strike" -> "~~$t~~"
-            "code" -> "`$t`"
+            // 行内格式：保留块前缀（> / - / 1. / # ），避免破坏引用与列表结构
+            "bold" -> wrapInline(t, "**", "**")
+            "italic" -> wrapInline(t, "*", "*")
+            "strike" -> wrapInline(t, "~~", "~~")
+            "code" -> wrapInline(t, "`", "`")
             "codeblock" -> "```\n$t\n```"
             "quote" -> lines.joinToString("\n") { if (it.startsWith("> ")) it else "> $it" }
             "ul" -> lines.joinToString("\n") { if (it.startsWith("- ")) it else "- $it" }
             "ol" -> lines.mapIndexed { i, l -> "${i + 1}. " + l.removePrefix("- ") }.joinToString("\n")
             "task" -> lines.joinToString("\n") { if (it.startsWith("- [ ] ")) it else "- [ ] $it" }
-            "link" -> "[$t](https://)"
+            "link" -> wrapInline(t, "[", "](https://)")
             "table" -> "| 列1 | 列2 |\n| --- | --- |\n| $t |  |"
             "hr" -> "$t\n\n---"
             else -> t
@@ -355,6 +405,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         textLines = body.split('\n')
         // 已渲染窗口至少保持初始批量，且不超过总块数（编辑后不塌回顶部）
         mdRenderLimit = minOf(maxOf(mdRenderLimit, INITIAL_MD_BLOCKS), capped.size)
+        refreshVisibleBlocks()
         // 编辑/保存后缓存与远端保持一致
         SftpDocCache.put(
             cacheKey,
@@ -369,13 +420,43 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         )
     }
 
-    /** 滚动到接近「已渲染底部」时追加一批块，避免一次性建出全部块视图 */
+    /**
+     * 按当前窗口上限刷新 mdVisibleBlocks。
+     *
+     * - 前缀一致（只是窗口变大）→ 增量 `addAll`，vforIndex 只渲染新增块；
+     * - 内容变化（编辑/重新解析）→ 换一个**新实例**，走 vforIndex 明确支持的「整体替换」路径。
+     *   不用 `clear()+addAll()`：同一帧内两个操作与 vforIndex 的惰性同步存在竞态，曾导致正文偶发空白。
+     */
+    private fun refreshVisibleBlocks() {
+        val limit = mdRenderLimit.coerceAtLeast(1)
+        val want = if (mdBlocks.size > limit) mdBlocks.subList(0, limit) else mdBlocks
+        val canAppend = mdVisibleBlocks.size <= want.size &&
+            (0 until mdVisibleBlocks.size).all { mdVisibleBlocks[it] == want[it] }
+        if (canAppend) {
+            if (want.size > mdVisibleBlocks.size) {
+                mdVisibleBlocks.addAll(want.subList(mdVisibleBlocks.size, want.size))
+            }
+            return
+        }
+        mdVisibleBlocks = ObservableList(want.toMutableList())
+    }
+
+    /** 点击底部提示：追加一批块（web/Electron 的 Scroller 不上报滚动偏移，故显式触发） */
+    private fun loadMoreBlocks() {
+        if (mdRenderLimit < mdBlocks.size) {
+            mdRenderLimit = minOf(mdRenderLimit + INITIAL_MD_BLOCKS, mdBlocks.size)
+            refreshVisibleBlocks()
+        }
+    }
+
+    /** 滚动到接近「已渲染底部」时追加一批块（原生端上报偏移时自动生效） */
     private fun onReaderScroll(offsetY: Float) {
         if (mdBlocks.isEmpty() || mdRenderLimit >= mdBlocks.size) return
         val renderedBottom = mdRenderLimit * AVG_MD_BLOCK_H
         val viewport = pagerData.pageViewHeight
         if (offsetY + viewport >= renderedBottom - MD_LOAD_MARGIN) {
             mdRenderLimit = minOf(mdRenderLimit + INITIAL_MD_BLOCKS, mdBlocks.size)
+            refreshVisibleBlocks()
         }
     }
 
@@ -447,6 +528,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         // 目标块可能还没渲染（增量渲染）：先把窗口撑到覆盖它，再滚动，避免跳到占位区
         if (blockIndex + 1 > mdRenderLimit) {
             mdRenderLimit = minOf(blockIndex + INITIAL_MD_BLOCKS, mdBlocks.size)
+            refreshVisibleBlocks()
         }
         // 块高不固定，按平均块高近似定位
         readerScrollTo?.invoke(blockIndex * AVG_MD_BLOCK_H)
@@ -537,12 +619,12 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                                 }
                                 velse {
                                     SftpMarkdownViewer(
-                                        { ctx.mdBlocks }, { ctx.fontScale }, { ctx.wrapLines },
+                                        { ctx.mdBlocks }, { ctx.mdVisibleBlocks }, { ctx.fontScale }, { ctx.wrapLines },
                                         onLink = { /* 链接暂不外跳 */ },
                                         editingProvider = { ctx.editing },
                                         editTargetProvider = { ctx.editTargetBlock },
                                         onBlockTap = { ctx.onBlockTap(it) },
-                                        renderLimitProvider = { ctx.mdRenderLimit },
+                                        onLoadMore = { ctx.loadMoreBlocks() },
                                     )
                                 }
                             }
@@ -647,7 +729,8 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                         Scroller {
                             attr { flex(1f); flexDirectionColumn(); backgroundColor(SftpColorTokens.bg); borderRadius(6f); padding(6f, 6f, 6f, 6f) }
                             SftpMarkdownViewer(
-                                { ctx.editPreviewBlocks }, { ctx.fontScale }, { ctx.wrapLines },
+                                { ctx.editPreviewBlocks }, { ctx.editPreviewVisibleBlocks },
+                                { ctx.fontScale }, { ctx.wrapLines },
                                 onLink = { },
                             )
                         }
