@@ -76,11 +76,9 @@ internal class SftpHomePage : SftpBasePager() {
     private var cachePollRef: String? = null
     // 收藏 Tab 状态
     internal var favorites by observableList<com.tencent.kuikly.core.module.sftp.SftpFavorite>()
-    internal var favoritesLoaded: Boolean by observable(false)
     internal var favoritesError: String? by observable(null)
     // 历史 Tab 状态
     internal var history by observableList<com.tencent.kuikly.core.module.sftp.SftpPlaybackRecord>()
-    internal var historyLoaded: Boolean by observable(false)
     internal var historyError: String? by observable(null)
 
     override fun body(): ViewBuilder {
@@ -425,7 +423,6 @@ internal class SftpHomePage : SftpBasePager() {
     }
 
     internal fun reloadFavorites() {
-        favoritesLoaded = true
         favoritesError = null
         sftpFavoritesModule().list { items, error ->
             favorites.clear()
@@ -435,7 +432,6 @@ internal class SftpHomePage : SftpBasePager() {
     }
 
     internal fun reloadHistory() {
-        historyLoaded = true
         historyError = null
         sftpPlaybackHistoryModule().listByConnection("") { items, error ->
             history.clear()
@@ -567,9 +563,11 @@ internal class SftpHomePage : SftpBasePager() {
 
     private fun onTabChange(newTab: Int) {
         currentTab = newTab
+        // 每次进入 Tab 都重新拉取：收藏/历史可能在浏览页、播放页被改动，
+        // 用 loaded 标志做一次性加载会导致「收藏后回首页切到收藏 Tab 仍是旧列表」。
         when (newTab) {
-            1 -> if (!favoritesLoaded) reloadFavorites()
-            2 -> if (!historyLoaded) reloadHistory()
+            1 -> reloadFavorites()
+            2 -> reloadHistory()
         }
     }
 

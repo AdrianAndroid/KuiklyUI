@@ -251,6 +251,23 @@ const waitFor = async (fn, ms, step = 500) => {
       check('F27 文件列表标题栏最前「✕」直接退出列表（回首页）', openedBrowser && listExited, `进入列表=${openedBrowser} 退出=${listExited}`);
     }
 
+    // ---- F4b 已访问过收藏 Tab 后再新增收藏，切回收藏 Tab 须刷新 ----
+    // 回归：旧实现 onTabChange 用 favoritesLoaded 一次性门控，导致第二次进入收藏 Tab 不再拉取，
+    // 「收藏后回首页切收藏 Tab」看到的是旧列表。此处先确保 Tab 已加载过（F4/F5 已加载），
+    // 再模拟“在别处新增收藏”，切走再切回，断言列表包含新收藏。
+    {
+      const REFRESH_NAME = '__fav_refresh__.md';
+      await pageRpc('favorites', 'add', { connectionId: '', connectionLabel: '', remotePath: `${HOME}/${REFRESH_NAME}`, name: REFRESH_NAME, isDir: false, size: 1 });
+      await main.clickText('连接');
+      await waitFor(async () => ((await main.body()).includes('SFTP 客户端') ? true : null), 8000, 400);
+      await main.clickText('收藏');
+      const refreshed = !!(await waitFor(async () => { const t = await main.body(); return t.includes(REFRESH_NAME) ? true : null; }, 12000, 600));
+      await main.shot('features-favorites-refresh.png');
+      check('F4b 新增收藏后切回收藏 Tab 列表刷新', refreshed, `含新收藏=${refreshed}`);
+      const fl = await pageRpc('favorites', 'list', {});
+      for (const it of (fl?.items || [])) { if (it.name === REFRESH_NAME) await pageRpc('favorites', 'remove', { id: it.id }); }
+    }
+
     // ---- F26 连接行右侧「✕」删除：先二级确认，可取消；确认后移除 ----
     const delLabel = 'DelMe_' + Date.now().toString().slice(-6);
     await pageRpc('connection', 'add', { label: delLabel, host: '10.0.0.9', port: 22, user: 'x', password: 'y', authMethod: 'PASSWORD' });
