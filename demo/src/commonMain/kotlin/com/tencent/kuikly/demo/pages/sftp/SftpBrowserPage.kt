@@ -278,8 +278,8 @@ internal class SftpBrowserPage : SftpBasePager() {
                     event { click { ctx.toggleFavoriteDir() } }
                     Text { attr { text("⭐"); fontSize(17f); color(SftpColorTokens.primary) } }
                 }
-                // 右上角：切到双栏（本地 ↔ 当前远端目录）—— 仅 Web/桌面
-                vif({ ctx.isWebLike }) {
+                // 右上角：切到双栏（本地 ↔ 当前远端目录）—— 需宿主本地文件能力
+                vif({ ctx.localFsSupported }) {
                     View {
                         attr { size(36f, 36f); allCenter(); accessibility("dual_pane_entry") }
                         event { click { ctx.openDualPane() } }

@@ -38,6 +38,7 @@ kotlin {
     iosSimulatorArm64()
     macosX64()
     macosArm64()
+    ohosArm64()
 
     sourceSets {
         val commonMain by getting {

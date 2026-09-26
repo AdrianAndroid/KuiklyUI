@@ -39,6 +39,7 @@ import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
+import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
 
 /**
@@ -879,11 +880,6 @@ private fun fmtSize(bytes: Long): String = when {
     else -> "${bytes / (1024 * 1024 * 1024)}G"
 }
 
-// ==================== 宿主本地文件（window.localFs）====================
-// 仅 Electron 宿主注入；H5 下为 null，本地栏会提示不可用。
-
-private val localFsHost: dynamic
-    get() = js("(typeof window !== 'undefined' ? (window.localFs || null) : null)")
 
 private fun mapEntryType(t: String): EntryType = when (t) {
     "dir" -> EntryType.Dir
@@ -892,61 +888,46 @@ private fun mapEntryType(t: String): EntryType = when (t) {
     else -> EntryType.Other
 }
 
-private fun lfHome(cb: (String?, String?) -> Unit) {
-    val h = localFsHost
-    if (h == null) {
-        cb(null, "本地文件不可用：请在桌面版（Electron）中使用双栏管理")
-        return
+// ==================== 本地文件系统（跨端 BridgeModule 能力）====================
+// Web/桌面：宿主 window.localFs；Android/iOS/macOS/OHOS：各端沙盒本地文件实现；
+// MiniApp：supportsLocalFs=false → 本地栏不可用（远端栏仍可用）。
+
+internal fun FilesDualPanePage.localFsBridge(): BridgeModule =
+    acquireModule(BridgeModule.MODULE_NAME)
+
+internal fun FilesDualPanePage.lfHome(cb: (String?, String?) -> Unit) {
+    localFsBridge().lfHome(cb)
+}
+
+internal fun FilesDualPanePage.lfList(dir: String, cb: (List<BackendEntry>?, String?) -> Unit) {
+    localFsBridge().lfList(dir) { entries, err ->
+        if (entries == null) {
+            cb(null, err)
+            return@lfList
+        }
+        val out = ArrayList<BackendEntry>(entries.size)
+        for (e in entries) {
+            out.add(
+                BackendEntry(
+                    name = e.optString("name"),
+                    type = mapEntryType(e.optString("type")),
+                    size = e.optLong("size", 0L),
+                    mtime = e.optLong("mtime", 0L),
+                ),
+            )
+        }
+        cb(out, null)
     }
-    val p = h.home()
-    p.then(
-        { r: dynamic -> cb(r as? String, null) },
-        { e: dynamic -> cb(null, (e?.message as? String) ?: "获取主目录失败") },
-    )
 }
 
-private fun lfList(dir: String, cb: (List<BackendEntry>?, String?) -> Unit) {
-    val h = localFsHost
-    if (h == null) {
-        cb(null, "本地文件不可用（非桌面宿主）")
-        return
-    }
-    val p = h.list(dir)
-    p.then(
-        { r: dynamic ->
-            val arr = r.entries as Array<dynamic>
-            val out = ArrayList<BackendEntry>(arr.size)
-            for (i in arr.indices) {
-                val e = arr[i]
-                out.add(
-                    BackendEntry(
-                        name = e.name as String,
-                        type = mapEntryType(e.type as String),
-                        size = (e.size as? Number)?.toLong() ?: 0L,
-                        mtime = (e.mtime as? Number)?.toLong() ?: 0L,
-                    ),
-                )
-            }
-            cb(out, null)
-        },
-        { e: dynamic -> cb(null, (e?.message as? String) ?: "读取目录失败") },
-    )
+internal fun FilesDualPanePage.lfMkdir(path: String, cb: (String?) -> Unit) {
+    localFsBridge().lfMkdir(path, cb)
 }
 
-private fun lfMkdir(path: String, cb: (String?) -> Unit) {
-    val h = localFsHost ?: return cb("本地文件不可用")
-    val p = h.mkdir(path)
-    p.then({ _: dynamic -> cb(null) }, { e: dynamic -> cb((e?.message as? String) ?: "创建失败") })
+internal fun FilesDualPanePage.lfRename(from: String, to: String, cb: (String?) -> Unit) {
+    localFsBridge().lfRename(from, to, cb)
 }
 
-private fun lfRename(from: String, to: String, cb: (String?) -> Unit) {
-    val h = localFsHost ?: return cb("本地文件不可用")
-    val p = h.rename(from, to)
-    p.then({ _: dynamic -> cb(null) }, { e: dynamic -> cb((e?.message as? String) ?: "重命名失败") })
-}
-
-private fun lfRemove(path: String, cb: (String?) -> Unit) {
-    val h = localFsHost ?: return cb("本地文件不可用")
-    val p = h.remove(path, true)
-    p.then({ _: dynamic -> cb(null) }, { e: dynamic -> cb((e?.message as? String) ?: "删除失败") })
+internal fun FilesDualPanePage.lfRemove(path: String, cb: (String?) -> Unit) {
+    localFsBridge().lfRemove(path, cb)
 }

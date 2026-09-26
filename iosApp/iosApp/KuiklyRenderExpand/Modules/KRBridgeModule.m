@@ -225,4 +225,96 @@
     [[NSFileManager defaultManager] removeItemAtPath:dir error:nil];
 }
 
+#pragma mark - 本地文件系统（双栏本地栏，沙盒 Documents/local）
+
+static NSString *KRLocalRoot(void) {
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject ?: NSTemporaryDirectory();
+    NSString *dir = [docs stringByAppendingPathComponent:@"local"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return dir;
+}
+
+static NSString *KRLocalResolve(NSString *path) {
+    NSString *root = KRLocalRoot();
+    NSString *target = (path.length == 0) ? root : path;
+    NSString *std = [target stringByStandardizingPath];
+    if ([std isEqualToString:root] || [std hasPrefix:[root stringByAppendingString:@"/"]]) {
+        return std;
+    }
+    return nil;
+}
+
+- (NSDictionary *)supportsLocalFs:(NSDictionary *)args {
+    return @{@"supported": @YES};
+}
+
+- (void)lfHome:(NSDictionary *)args {
+    KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
+    if (callback) callback(@{@"path": KRLocalRoot()});
+}
+
+- (void)lfList:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] rij_stringToDictionary];
+    KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
+    NSString *dir = KRLocalResolve(params[@"path"]);
+    if (!dir) { if (callback) callback(@{@"error": @"路径越界"}); return; }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL isDir = NO;
+    if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) {
+        if (callback) callback(@{@"error": @"不是目录"});
+        return;
+    }
+    NSMutableArray *arr = [NSMutableArray array];
+    for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:nil]) {
+        NSString *full = [dir stringByAppendingPathComponent:name];
+        NSDictionary *st = [fm attributesOfItemAtPath:full error:nil];
+        BOOL childDir = [st[NSFileType] isEqual:NSFileTypeDirectory];
+        [arr addObject:@{
+            @"name": name,
+            @"type": childDir ? @"dir" : @"file",
+            @"size": @([st[NSFileSize] longLongValue]),
+            @"mtime": @((long long)([st[NSFileModificationDate] timeIntervalSince1970] * 1000.0)),
+        }];
+    }
+    NSData *data = [NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
+    NSString *json = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"[]";
+    if (callback) callback(@{@"entries": json ?: @"[]"});
+}
+
+- (void)lfMkdir:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] rij_stringToDictionary];
+    KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
+    NSString *path = KRLocalResolve(params[@"path"]);
+    if (!path) { if (callback) callback(@{@"error": @"路径越界"}); return; }
+    NSError *e = nil;
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:&e]) {
+        if (callback) callback(@{@"error": e.localizedDescription ?: @"创建失败"});
+        return;
+    }
+    if (callback) callback(@{});
+}
+
+- (void)lfRename:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] rij_stringToDictionary];
+    KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
+    NSString *from = KRLocalResolve(params[@"from"]);
+    NSString *to = KRLocalResolve(params[@"to"]);
+    if (!from || !to) { if (callback) callback(@{@"error": @"路径越界"}); return; }
+    NSError *e = nil;
+    if (![[NSFileManager defaultManager] moveItemAtPath:from toPath:to error:&e]) {
+        if (callback) callback(@{@"error": e.localizedDescription ?: @"重命名失败"});
+        return;
+    }
+    if (callback) callback(@{});
+}
+
+- (void)lfRemove:(NSDictionary *)args {
+    NSDictionary *params = [args[KR_PARAM_KEY] rij_stringToDictionary];
+    KuiklyRenderCallback callback = args[KR_CALLBACK_KEY];
+    NSString *path = KRLocalResolve(params[@"path"]);
+    if (!path) { if (callback) callback(@{@"error": @"路径越界"}); return; }
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    if (callback) callback(@{});
+}
+
 @end

@@ -112,8 +112,8 @@ internal class SftpHomePage : SftpBasePager() {
                         flex(1f)
                     }
                 }
-                // 双栏文件管理器入口（仅 Web/桌面：依赖宿主 window.localFs 提供本地栏）
-                vif({ ctx.isWebLike }) {
+                // 双栏文件管理器入口（需宿主本地文件能力：Web/桌面 & 原生端沙盒）
+                vif({ ctx.localFsSupported() }) {
                     View {
                         attr {
                             size(36f, 36f)
@@ -206,8 +206,8 @@ internal class SftpHomePage : SftpBasePager() {
                 velseif({ ctx.currentTab == 0 }) {
                     View {
                         attr { flex(1f); flexDirectionColumn(); width(pagerData.pageViewWidth) }
-                        // 本地文件管理（双栏；远端栏可随时选主机）—— 仅 Web/桌面
-                        if (ctx.isWebLike) {
+                        // 本地文件管理（双栏；远端栏可随时选主机）—— 需宿主本地文件能力
+                        if (ctx.localFsSupported()) {
                             // 本地那一栏：本地文件管理 + 右侧「终端」格（各自独立点击，避免冒泡）
                             View {
                                 attr {
@@ -242,7 +242,7 @@ internal class SftpHomePage : SftpBasePager() {
                             SftpConnectionListView(
                                 { ctx.connections },
                                 { conn -> ctx.openBrowser(conn) },
-                                if (ctx.isWebLike) { { conn -> ctx.openDualPane(conn) } } else null,
+                                if (ctx.localFsSupported()) { { conn -> ctx.openDualPane(conn) } } else null,
                                 // 远程终端：所有端只要支持 shell（supportsTerminal）即显示入口
                                 if (ctx.terminalSupported()) { { conn -> ctx.openTerminal(conn) } } else null
                             )

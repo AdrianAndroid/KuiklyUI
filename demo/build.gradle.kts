@@ -80,14 +80,14 @@ kotlin {
             // Chat Demo 相关依赖
             implementation("com.tencent.kuiklybase:markdown:0.4.0")
             implementation("io.ktor:ktor-client-core:2.3.10")
+            // 双栏文件管理器核心（纯状态机，KMP 公共层；六端共享）
+            implementation(project(":core:file-manager"))
         }
     }
 
     val jsMain by sourceSets.getting {
         dependsOn(commonMain)
         dependencies {
-            // 双栏文件管理器核心（纯状态机，KMP 公共层；当前仅 js 端页面使用）
-            implementation(project(":core:file-manager"))
         }
 //        kotlin.srcDir(
 //            "build/generated/ksp/js/jsMain/kotlin"

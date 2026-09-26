@@ -49,5 +49,9 @@ project(":core-wx").buildFileName = buildFileName
 include(":demo")
 project(":demo").buildFileName = buildFileName
 
+// 双栏文件管理器核心（纯状态机）：OHOS 变体单独 build 文件，额外加 ohosArm64
+include(":core:file-manager")
+project(":core:file-manager").buildFileName = "build.ohos.gradle.kts"
+
 // include(":androidApp")
 
