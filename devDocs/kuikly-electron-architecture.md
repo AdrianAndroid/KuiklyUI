@@ -151,6 +151,10 @@ flowchart LR
 
 ## 9. 构建 / 打包 / 安装 / 清理
 
+> **② 打包 + ③ 覆盖安装仅 `zhaojian` 分支执行**（见 `AGENTS.md` §3.1 规则 11 / §14.1）。
+> 其它分支（feature/agent/`.kilo/worktrees/*`）**只验证**：① debug web 构建 + 跑受影响用例 + 编译通过即可，
+> **不构建 dmg、不覆盖安装 `/Applications`**；需新构建时先把成果同步到 `zhaojian`，由 `zhaojian` 侧统一打包安装。
+
 ```bash
 cd electron
 # ① 开发：构建 Web 产物（debug）+ 同步 + 启动
@@ -259,7 +263,7 @@ npm test                     # 终端 B：本实例测试（自动用本实例�
 **清理**：`node scripts/pretest-kill.js` 只杀带 `ud-<instance>` 标记的 Electron（**不杀外部网关**，否则套件 fixture 会 ECONNREFUSED）；
 **禁止**无差别 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` / `osascript quit`（会误杀其它 worktree）。
 
-**全局动作串行**：`npm run dist*` / 覆盖安装 `/Applications/Kuikly SFTP.app` / 发布推送，一次只在一个 worktree 执行。
+**全局动作串行**：`npm run dist*` / 覆盖安装 `/Applications/Kuikly SFTP.app` / 发布推送，**仅在 `zhaojian` 分支执行**（其它分支只验证，见 §3.1 规则 11），一次只在一个 worktree 执行。
 
 ---
 
