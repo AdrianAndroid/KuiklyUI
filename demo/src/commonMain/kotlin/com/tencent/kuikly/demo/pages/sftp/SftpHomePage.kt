@@ -296,57 +296,60 @@ internal class SftpHomePage : SftpBasePager() {
                     }
                 }
 
-                // 「更多」抽屉（绝对定位；必须放在内容区之后，避免被盖住）
-                vif({ ctx.moreVisible }) {
-                    // 半模态：全屏透明遮罩（点它关闭）+ 底部卡片（顶部带关闭按钮）
+            }
+
+            // 「更多」半模态：必须挂在**根容器**下，遮罩才能覆盖整屏、卡片才能贴到屏幕底部。
+            // 之前挂在内容区 View（flex 1）内，遮罩从内容区顶部起算并向下溢出，表现为
+            // 「顶部导航/标签不被遮罩盖住 + 底部卡片被推到屏幕外、最后一行显示不全」。
+            vif({ ctx.moreVisible }) {
+                View {
+                    attr {
+                        positionAbsolute(); left(0f); top(0f)
+                        width(pagerData.pageViewWidth)
+                        height(pagerData.pageViewHeight)
+                        zIndex(100)   // 高于右下角 FAB（99），半模态展开时遮罩把它一起盖住
+                        backgroundColor(Color(0x66000000))
+                        flexDirectionColumn()
+                    }
+                    event { click { ctx.moreVisible = false } }
+                    // 占位撑满：把卡片压到底部；卡片高度随内容自适应（不写死，避免内容变高被裁）
+                    View { attr { flex(1f) } }
                     View {
                         attr {
-                            positionAbsolute(); left(0f); top(0f)
                             width(pagerData.pageViewWidth)
-                            height(pagerData.pageViewHeight)
-                            zIndex(98)
-                            backgroundColor(Color(0x66000000))
+                            backgroundColor(SftpColorTokens.cardBg)
+                            borderRadius(14f)
+                            padding(16f, 12f, 16f, 16f)
+                            flexDirectionColumn()
                         }
-                        event { click { ctx.moreVisible = false } }
+                        event { click { } }   // 吞掉卡片内点击，避免穿透关闭
+                        // 顶部：标题 + 关闭按钮
                         View {
-                            attr {
-                                positionAbsolute(); left(0f); bottom(0f)
-                                width(pagerData.pageViewWidth)
-                                height(260f)
-                                backgroundColor(SftpColorTokens.cardBg)
-                                borderRadius(14f)
-                                padding(16f, 12f, 16f, 16f)
-                                flexDirectionColumn()
+                            attr { flexDirectionRow(); alignItemsCenter(); marginBottom(8f) }
+                            Text {
+                                attr {
+                                    text("更多"); fontSize(15f); fontWeightBold(); color(SftpColorTokens.textPrimary)
+                                    flex(1f)
+                                }
                             }
-                            event { click { } }   // 吞掉卡片内点击，避免穿透关闭
-                            // 顶部：标题 + 关闭按钮
                             View {
-                                attr { flexDirectionRow(); alignItemsCenter(); marginBottom(8f) }
-                                Text {
-                                    attr {
-                                        text("更多"); fontSize(15f); fontWeightBold(); color(SftpColorTokens.textPrimary)
-                                        flex(1f)
-                                    }
-                                }
-                                View {
-                                    attr { size(34f, 34f); allCenter(); accessibility("more_close") }
-                                    event { click { ctx.moreVisible = false } }
-                                    Text { attr { text("✕"); fontSize(18f); color(SftpColorTokens.textSecondary) } }
-                                }
+                                attr { size(34f, 34f); allCenter(); accessibility("more_close") }
+                                event { click { ctx.moreVisible = false } }
+                                Text { attr { text("✕"); fontSize(18f); color(SftpColorTokens.textSecondary) } }
                             }
-                            MoreRow("设置", "历史条数 / 清空缓存 / 清空播放历史") {
-                                ctx.moreVisible = false
-                                ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPageNames.SETTINGS)
-                            }
-                            MoreRow("缓存列表", "正在缓存 / 已缓存") {
-                                ctx.moreVisible = false
-                                ctx.refreshCacheState()
-                                ctx.cachePanelVisible = true
-                            }
-                            MoreRow("关于", "Kuikly SFTP 0.1.0") {
-                                ctx.moreVisible = false
-                                Utils.bridgeModule(ctx).toast("Kuikly SFTP 0.1.0")
-                            }
+                        }
+                        MoreRow("设置", "历史条数 / 清空缓存 / 清空播放历史") {
+                            ctx.moreVisible = false
+                            ctx.acquireModule<RouterModule>(RouterModule.MODULE_NAME).openPage(SftpPageNames.SETTINGS)
+                        }
+                        MoreRow("缓存列表", "正在缓存 / 已缓存") {
+                            ctx.moreVisible = false
+                            ctx.refreshCacheState()
+                            ctx.cachePanelVisible = true
+                        }
+                        MoreRow("关于", "Kuikly SFTP 0.1.0") {
+                            ctx.moreVisible = false
+                            Utils.bridgeModule(ctx).toast("Kuikly SFTP 0.1.0")
                         }
                     }
                 }

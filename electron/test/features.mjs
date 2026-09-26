@@ -553,14 +553,15 @@ const waitFor = async (fn, ms, step = 500) => {
       await main.shot('features-cache-file.png');
       fileCached = !!fdone;
       if (fdone) {
-        // 直接在本机文件系统读取（测试与 Electron 同机；LOCAL_ROOT = app.getPath('home')）
-        const localPath = require('node:os').homedir() + '/.kuikly_cache/cachebytes.bin';
+        // 直接在本机文件系统读取（测试与 Electron 同机；缓存根 = LOCAL_ROOT/.kuikly_cache，
+        // LINKED worktree 下 KR_LOCAL_ROOT 会隔离到 .kr-test/local-<instance>，不能再写死 os.homedir()）
+        const localPath = LOCAL_ROOT + '/.kuikly_cache/cachebytes.bin';
         try { got = fs.readFileSync(localPath).toString('base64'); } catch (e) { got = 'ERR:' + e.message; }
         const exp = FILE_BYTES.toString('base64');
         bytesOk = got === exp;
         let tree = '';
         try {
-          const root = require('node:os').homedir() + '/.kuikly_cache';
+          const root = LOCAL_ROOT + '/.kuikly_cache';
           tree = fs.readdirSync(root).slice(0, 10).join(',');
           if (fs.existsSync(root + '/cachedir')) tree += ' | cachedir=' + fs.readdirSync(root + '/cachedir').length;
         } catch (e) { tree = 'ERR:' + e.message; }
@@ -642,6 +643,19 @@ const waitFor = async (fn, ms, step = 500) => {
     if (fabMoreDrawer) { const q = JSON.parse(fabMoreDrawer); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(120); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
     const drawer2 = await waitFor(async () => { const t = await main.body(); return (t.includes('更多') && t.includes('清空播放历史')) ? t : null; }, 8000, 400);
     const hasClose = !!drawer2 && drawer2.includes('✕');
+    // 半模态几何：卡片最后一行须完整在屏内 + 遮罩须覆盖整屏（含顶部导航区）
+    let cardFullyVisible = false, maskCoversTop = false;
+    if (drawer2) {
+      const geo = await main.ev(`(()=>{
+        const els=[...document.querySelectorAll('*')];
+        let aboutBottom=null;
+        for(const e of els){const t=(e.textContent||'').trim();if(!t.includes('Kuikly SFTP 0.1.0')||t.length>40)continue;const r=e.getBoundingClientRect();if(r.width>200&&r.height>10&&r.height<80){aboutBottom=r.bottom;}}
+        let mt=null,mh=null;
+        for(const e of els){const s=getComputedStyle(e);const r=e.getBoundingClientRect();if(s.backgroundColor==='rgba(0, 0, 0, 0.4)'&&r.width>=innerWidth-2&&r.height>50){mt=r.top;mh=r.height;break;}}
+        return JSON.stringify({aboutBottom, innerH:innerHeight, maskTop:mt, maskH:mh});
+      })()`);
+      try { const g = JSON.parse(geo); cardFullyVisible = g.aboutBottom != null && g.aboutBottom <= g.innerH + 1; maskCoversTop = g.maskTop != null && g.maskTop <= 1 && g.maskH >= g.innerH - 1; } catch (e) { }
+    }
     let closedByBtn = false, closedByMask = false;
     if (drawer2) {
       await main.clickText('✕');
@@ -653,6 +667,7 @@ const waitFor = async (fn, ms, step = 500) => {
       closedByMask = !!(await waitFor(async () => { const t = await main.body(); return !t.includes('清空播放历史') ? true : null; }, 8000, 400));
     }
     check('F30 「更多」半模态：有关闭按钮且可点遮罩关闭', !!drawer2 && hasClose && closedByBtn && closedByMask, `抽屉=${!!drawer2} 关闭按钮=${hasClose} 按钮关闭=${closedByBtn} 遮罩关闭=${closedByMask}`);
+    check('F30b 「更多」半模态：卡片末行完整可见且遮罩覆盖整屏', cardFullyVisible && maskCoversTop, `末行在屏内=${cardFullyVisible} 遮罩盖满=${maskCoversTop}`);
 
     check('F13 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {
