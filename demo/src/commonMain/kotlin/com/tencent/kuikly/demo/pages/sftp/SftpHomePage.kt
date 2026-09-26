@@ -66,6 +66,9 @@ internal class SftpHomePage : SftpBasePager() {
     private var currentTab: Int by observable(0)  // 0 连接 / 1 收藏 / 2 历史
     /** 右下角「更多」抽屉（设置 / 缓存列表 / 关于） */
     private var moreVisible: Boolean by observable(false)
+    /** 删除连接的二级确认弹窗 */
+    private var deleteConnVisible: Boolean by observable(false)
+    private var pendingDeleteConn: SftpConnection? = null
     /** 缓存任务浮层（与浏览页共用同一 CacheManager） */
     private var cachePanelVisible: Boolean by observable(false)
     private var cacheTasks by observableList<CacheTask>()
@@ -244,7 +247,9 @@ internal class SftpHomePage : SftpBasePager() {
                                 { conn -> ctx.openBrowser(conn) },
                                 if (ctx.localFsSupported()) { { conn -> ctx.openDualPane(conn) } } else null,
                                 // 远程终端：所有端只要支持 shell（supportsTerminal）即显示入口
-                                if (ctx.terminalSupported()) { { conn -> ctx.openTerminal(conn) } } else null
+                                if (ctx.terminalSupported()) { { conn -> ctx.openTerminal(conn) } } else null,
+                                // 删除连接（二级确认后执行）
+                                { conn -> ctx.askDeleteConnection(conn) }
                             )
                         }
                     }
@@ -338,6 +343,63 @@ internal class SftpHomePage : SftpBasePager() {
                     onChanged = { ctx.refreshCacheState() },
                     onClose = { ctx.cachePanelVisible = false },
                 )
+            }
+
+            // 删除连接：二级确认弹窗（放最后，避免被内容盖住）
+            vif({ ctx.deleteConnVisible }) {
+                View {
+                    attr {
+                        positionAbsolute(); left(0f); top(0f)
+                        width(pagerData.pageViewWidth)
+                        height(pagerData.pageViewHeight)
+                        backgroundColor(Color(0x99000000))
+                        allCenter()
+                        zIndex(90)
+                        accessibility("connection_delete_dialog")
+                    }
+                    View {
+                        attr {
+                            width(300f)
+                            padding(24f, 20f, 24f, 20f)
+                            backgroundColor(SftpColorTokens.cardBg)
+                            borderRadius(12f)
+                            flexDirectionColumn()
+                        }
+                        Text {
+                            attr {
+                                text("删除连接")
+                                fontSize(16f); fontWeightBold(); color(SftpColorTokens.textPrimary); marginBottom(8f)
+                            }
+                        }
+                        Text {
+                            attr {
+                                text("确定删除「${ctx.pendingDeleteConn?.label?.ifEmpty { ctx.pendingDeleteConn?.host ?: "" } ?: ""}」？删除后不可恢复。")
+                                fontSize(13f); color(SftpColorTokens.textSecondary); marginBottom(16f)
+                            }
+                        }
+                        View {
+                            attr { flexDirectionRow(); width(252f) }
+                            View {
+                                attr {
+                                    flex(1f); height(40f); allCenter()
+                                    backgroundColor(SftpColorTokens.divider); borderRadius(8f); marginRight(8f)
+                                    accessibility("connection_delete_cancel")
+                                }
+                                event { click { ctx.dismissDeleteConnection() } }
+                                Text { attr { text("取消"); fontSize(14f); color(SftpColorTokens.textPrimary) } }
+                            }
+                            View {
+                                attr {
+                                    flex(1f); height(40f); allCenter()
+                                    backgroundColor(SftpColorTokens.danger); borderRadius(8f)
+                                    accessibility("connection_delete_confirm")
+                                }
+                                event { click { ctx.confirmDeleteConnection() } }
+                                Text { attr { text("删除"); fontSize(14f); color(Color(0xFFFFFFFF.toInt())) } }
+                            }
+                        }
+                    }
+                }
             }
                     }
 }
@@ -524,6 +586,31 @@ internal class SftpHomePage : SftpBasePager() {
         }
     }
 
+    /** 请求删除连接：先弹二级确认弹窗 */
+    internal fun askDeleteConnection(conn: SftpConnection) {
+        pendingDeleteConn = conn
+        deleteConnVisible = true
+    }
+
+    internal fun dismissDeleteConnection() {
+        deleteConnVisible = false
+        pendingDeleteConn = null
+    }
+
+    /** 确认删除连接（网关会级联清理该连接的历史/收藏/持久化） */
+    internal fun confirmDeleteConnection() {
+        val conn = pendingDeleteConn
+        deleteConnVisible = false
+        pendingDeleteConn = null
+        if (conn == null) return
+        sftpConnectionModule().remove(conn.id) { ok, err ->
+            val msg = if (ok) "已删除连接：${conn.label.ifEmpty { conn.host }}"
+            else "删除失败：" + (err?.msg ?: "未知错误")
+            Utils.bridgeModule(this).toast(msg)
+            refresh()
+        }
+    }
+
     companion object {
         const val PAGE_NAME = "SftpHomePage"
     }
@@ -631,7 +718,8 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
     connectionsProvider: () -> ObservableList<SftpConnection>,
     onClick: (SftpConnection) -> Unit,
     onDualPane: ((SftpConnection) -> Unit)? = null,
-    onTerminal: ((SftpConnection) -> Unit)? = null
+    onTerminal: ((SftpConnection) -> Unit)? = null,
+    onDelete: ((SftpConnection) -> Unit)? = null
 ) {
     Scroller {
         attr {
@@ -689,6 +777,19 @@ internal fun ViewContainer<*, *>.SftpConnectionListView(
                             marginLeft(10f)
                         }
                         event { click { onTerminal(conn) } }
+                    }
+                }
+                if (onDelete != null) {
+                    // 每条连接右侧的删除按钮（独立格；删除前由页面弹二级确认）
+                    View {
+                        attr {
+                            width(34f)
+                            height(34f)
+                            allCenter()
+                            accessibility("connection_delete_btn")
+                        }
+                        event { click { onDelete(conn) } }
+                        Text { attr { text("✕"); fontSize(14f); color(SftpColorTokens.danger) } }
                     }
                 }
             }

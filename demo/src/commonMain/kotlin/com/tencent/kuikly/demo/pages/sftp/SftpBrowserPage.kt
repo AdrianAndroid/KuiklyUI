@@ -213,6 +213,18 @@ internal class SftpBrowserPage : SftpBasePager() {
         }
     }
 
+    /** 「✕」：无论当前在哪一级目录，直接退出文件列表（断开会话后关页） */
+    private fun closeSelf() {
+        val sid = sessionId
+        if (sid != null) {
+            sftpModule().disconnect(sid) {
+                acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+            }
+        } else {
+            acquireModule<RouterModule>(RouterModule.MODULE_NAME).closePage()
+        }
+    }
+
     /** 取上一级目录；"/" 或空串返回自身（表示已是顶层）。 */
     private fun parentOf(path: String): String {
         val p = path.trimEnd('/')
@@ -243,6 +255,12 @@ internal class SftpBrowserPage : SftpBasePager() {
                     alignItemsCenter()
                     padding(16f, 8f, 16f, 8f)
                     backgroundColor(SftpColorTokens.cardBg)
+                }
+                // 最前面的「✕」：直接退出文件列表（关页，回首页）
+                View {
+                    attr { size(36f, 36f); allCenter(); accessibility("browser_exit") }
+                    event { click { ctx.closeSelf() } }
+                    Text { attr { text("✕"); fontSize(20f); color(SftpColorTokens.textPrimary) } }
                 }
                 View {
                     attr { size(36f, 36f); allCenter(); accessibility(SftpAccessibility.BTN_BACK) }

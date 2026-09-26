@@ -91,6 +91,13 @@
    之前，必须先杀掉上一次的 Kuikly SFTP 客户端和带调试端口的进程（`pkill -f "Kuikly SFTP.app" || true; pkill -f "remote-debugging-port=" || true`），
    否则多个客户端会同时跑、占满 CPU、互相干扰（看门狗先挂的就是这种情形）。
    Electron 的 `test` 系脚本已加 `pretest` 钩子（`node scripts/pretest-kill.js`）做这件事；构建发布版前也必须先 `osascript -e 'quit app "Kuikly SFTP"'`。
+9. **按影响面选测，不做全量回归**：每次改动**只跑受影响的用例**（如改首页/浏览页/播放页 → 对应 `test:features`/`test:player`；
+   改打包/宿主桥 → `npm test`），不必每次跑齐 6 个套件；但**凡是改到的套件必须全绿**，且交付前（打包/发布）再跑一次相关套件。**除非用户明确要求全量，否则不要全量测试**（省时省 token）。
+10. **每开发一项功能，必须登记对应的测试用例**：新功能/修复都要在对应用例文件（`electron/test/*.mjs`）里补上**针对该功能全流程**的用例
+   （正向 + 关键分支/取消/失败），并在 `devDocs/kuikly-app-features-test-plan.md`（或对应测试规程）登记用例 ID 与断言；
+   必要功能的关键路径要 `Page.captureScreenshot` 留证。不允许「只改代码不补用例」。
+11. **每次构建 dmg 都要在 `~/Downloads` 留一份带构建时间的副本**：`npm run dist`/`dist:release` 已内置
+   `node scripts/copy-dmg.mjs`，把 `electron/dist/*.dmg` 另存为 `~/Downloads/Kuikly SFTP-<版本>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）。
 
 ---
 

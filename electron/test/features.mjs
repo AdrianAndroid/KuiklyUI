@@ -165,20 +165,26 @@ const waitFor = async (fn, ms, step = 500) => {
       await sleep(1000); return true;
     };
     const starCount = async () => Number(await main.ev("(()=>[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()==='⭐'&&e.getBoundingClientRect().width>1&&e.getBoundingClientRect().top>60).length)()"));
-    // 按名字扫描：逐个 ⭐ 点，直到目标出现在收藏列表（不依赖行序/序号）
-    const clickAndExpect = async (name) => {
-      const n = await starCount();
-      for (let round = 0; round < 2; round++) {
-        for (let i = 0; i < n; i++) {
-          await clickListStar(i);
-          if (await waitFor(async () => ((await favHas(name)) ? true : null), 5000, 500)) return true;
-        }
+    // 按名字点「该行内」的 ⭐（不依赖行序/序号，避免多夹具时点到别的行）
+    const clickStarInRow = async (name) => {
+      // 名称文本 → 向上找含 ⭐ 的行 → 点行内 ⭐（与缓存按钮同款定位，避免误点导航栏 ⭐）
+      const pos = await main.ev("(()=>{const name=" + JSON.stringify(name) + ";const all=[...document.querySelectorAll('*')];const nameEl=all.find(e=>(e.textContent||'').trim()===name&&e.getBoundingClientRect().width>0);if(!nameEl)return null;let p=nameEl.parentElement;for(let i=0;i<8&&p;i++){const ss=[...p.querySelectorAll('*')].filter(c=>(c.textContent||'').trim()==='⭐');if(ss.length){const r=ss[0].getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});}p=p.parentElement;}return null;})()");
+      if (!pos) return false;
+      const p = JSON.parse(pos);
+      await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(150);
+      await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
+      await sleep(800); return true;
+    };
+    const favByRow = async (name) => {
+      for (let i = 0; i < 3; i++) {
+        await clickStarInRow(name);
+        if (await waitFor(async () => ((await favHas(name)) ? true : null), 5000, 500)) return true;
       }
       return false;
     };
-    const dirFav = await clickAndExpect('dir_a');
+    const dirFav = await favByRow('dir_a');
     check('F1 目录行 ⭐ 收藏（文件夹可收藏）', dirFav, `列表含 dir_a=${dirFav} 当前=${JSON.stringify(await favNames())}`);
-    const fileFav = await clickAndExpect('file_a.txt');
+    const fileFav = await favByRow('file_a.txt');
     check('F2 文件行 ⭐ 收藏（文件可收藏）', fileFav, `列表含 file_a.txt=${fileFav} 当前=${JSON.stringify(await favNames())}`);
     check('F3 收藏列表同时含目录与文件', (await favCount()) >= 2, `count=${await favCount()}`);
     await main.shot('features-favorite-add.png');
@@ -198,51 +204,7 @@ const waitFor = async (fn, ms, step = 500) => {
       check('F5 点收藏（目录）→ 打开浏览页', !!opened, `opened=${!!opened}`);
     }
 
-    // F9/F9b 终端「历史」按钮：预置到测试服务器的连接，走**远程终端**
-    // （原实现依赖本机 SSH + 硬编码密码 'flannery'，环境相关、不合理 → 已移除）
-    await pageRpc('connection', 'add', { label: 'FeatSrv', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
-    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
-    await waitFor(async () => { const t = await main.body(); return (t.includes('>_') && t.includes(HOST)) ? t : null; }, 30000, 800);
-    // 点「含该主机名的连接行」右侧的 >_（不要点到本地终端格）
-    const ce = await main.ev("(()=>{const all=[...document.querySelectorAll('*')];const btns=all.filter(e=>(e.textContent||'').trim()==='>_'&&e.getBoundingClientRect().width>0);for(const el of btns){let p=el.parentElement;for(let i=0;i<8&&p;i++){if((p.textContent||'').includes(" + JSON.stringify(HOST) + ")){const r=el.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});}p=p.parentElement;}}return null;})()");
-    if (ce) {
-      const p0 = JSON.parse(ce);
-      await main.mouse('mouseMoved', p0.x, p0.y, 0); await sleep(120);
-      await main.mouse('mousePressed', p0.x, p0.y, 1); await main.mouse('mouseReleased', p0.x, p0.y, 0);
-      const tw = await waitFor(async () => (await listTargets()).find((t) => t.url.includes('SftpTerminalPage')), 20000);
-      if (tw) {
-        const term = await attach(tw.webSocketDebuggerUrl);
-        // 终端内容在 xterm 缓冲区（web 加速路径）
-        const xtermText = async () => String(await term.ev("(()=>{try{return (window.__krTerm&&window.__krTerm.lastId())?window.__krTerm.text(window.__krTerm.lastId(),400):'';}catch(e){return '';}})()"));
-        const ready = await waitFor(async () => { const id = await term.ev("(()=>{try{return window.__krTerm?window.__krTerm.lastId():'';}catch(e){return '';}})()"); return id || null; }, 25000, 500);
-        const CMD = 'echo KH_$((6*7))';
-        let typed = false, ran = false;
-        if (ready) {
-          // 真实输入到 xterm 隐藏 textarea + DOM 回车（避免 CDP 合成键触发 macOS 听写弹窗）
-          await term.ev("(()=>{const ta=document.querySelector('.xterm-helper-textarea');if(!ta)return false;ta.focus();return true;})()");
-          await term.send('Input.insertText', { text: CMD });
-          await sleep(200);
-          await term.ev("(()=>{const ta=document.querySelector('.xterm-helper-textarea');if(!ta)return false;for(const type of ['keydown','keyup']){ta.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));}return true;})()");
-          typed = true;
-          ran = !!(await waitFor(async () => { const t = await xtermText(); return new RegExp('(^|\\n)\\s*KH_42\\s*($|\\n)').test(t) ? t : null; }, 15000, 600));
-        }
-        await term.clickText('历史');
-        const histOpen = await waitFor(async () => { const t = await term.body(); return t.includes('命令历史') ? t : null; }, 8000, 500);
-        const histHas = !!histOpen && histOpen.includes('KH_');
-        check('F9 终端：远程真实回车执行 + 「历史」记录', !!ready && typed && ran && histHas, `就绪=${!!ready} 执行=${ran} 历史含命令=${histHas}`);
-        if (histHas) {
-          await term.clickText(CMD);
-          const filled = await waitFor(async () => { const v = String(await term.ev("(()=>{const els=[...document.querySelectorAll('input')];return els.length?els[els.length-1].value:'';})()")); return v.includes('KH_') ? v : null; }, 8000, 500);
-          check('F9b 选择历史命令 → 回填输入框', !!filled, `输入框=${String(filled || '').slice(0, 40)}`);
-        }
-        await term.shot('features-terminal-history.png');
-        await term.clickText('<');   // 关掉终端独立窗口，避免干扰后续用例
-        await sleep(500);
-        term.close();
-      } else {
-        check('F9 终端：远程终端窗口未打开', false, '未找到 SftpTerminalPage 窗口');
-      }
-    }
+    // （终端能力/历史按钮由独立套件 `npm run test:term` 覆盖，这里不再重复，避免拖慢与重复；见 AGENTS §3.1 规则 9/10）
 
     // ---- F12 首页右下角「更多」→ 抽屉（含截图）----
     await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
@@ -515,6 +477,71 @@ const waitFor = async (fn, ms, step = 500) => {
     const gearSettings = await waitFor(async () => { const t = await main.body(); return t.includes('终端命令历史条数') ? t : null; }, 12000, 600);
     await main.shot('features-home-settings-entry.png');
     check('F24 首页顶部「⚙ 设置」入口直达设置页', !!gearSettings, `设置页=${!!gearSettings}`);
+
+    // ---- F26 连接行右侧「✕」删除：先二级确认，可取消；确认后移除 ----
+    const delLabel = 'DelMe_' + Date.now().toString().slice(-6);
+    await pageRpc('connection', 'add', { label: delLabel, host: '10.0.0.9', port: 22, user: 'x', password: 'y', authMethod: 'PASSWORD' });
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes(delLabel) ? true : null), 20000, 700);
+    // 点「该连接所在行」的 ✕（每次现算坐标，避免布局变化导致失效）
+    const clickConnDelete = async () => {
+      // 连接列表可能很长：先把可滚动容器拉到底，确保该行在可视区
+      await main.ev("(()=>{const el=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+40);if(el)el.scrollTop=el.scrollHeight;return true;})()");
+      await sleep(300);
+      const pos = await main.ev("(()=>{const all=[...document.querySelectorAll('*')];const rows=all.filter(e=>(e.textContent||'').includes(" + JSON.stringify(delLabel) + ")&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='✕'));if(!rows.length)return null;rows.sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;});const row=rows[0];const x=[...row.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='✕');if(!x)return null;const r=x.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+      if (!pos) return false;
+      const p = JSON.parse(pos);
+      await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
+      await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
+      return true;
+    };
+    // 打开确认弹窗（可重试）
+    const openDelDialog = async () => { await clickConnDelete(); return !!(await waitFor(async () => ((await main.body()).includes('删除连接') ? true : null), 6000, 300)); };
+    let dlg = await openDelDialog();
+    await main.shot('features-connection-delete-confirm.png');
+    // 取消：弹窗消失、连接仍在
+    let cancelKeeps = false;
+    if (dlg) {
+      await main.clickText('取消');
+      cancelKeeps = !!(await waitFor(async () => { const t = await main.body(); return (!t.includes('删除连接') && t.includes(delLabel)) ? true : null; }, 8000, 400));
+    }
+    // 重新打开 → 点弹窗内「删除」；未移除则重试一次
+    let removed = false;
+    for (let attempt = 0; attempt < 2 && !removed; attempt++) {
+      if (!(await openDelDialog())) continue;
+      const delBtnPos = await main.ev("(()=>{const dlg=[...document.querySelectorAll('*')].find(e=>(e.textContent||'').includes('删除连接')&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='删除'));if(!dlg)return null;const btn=[...dlg.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='删除');if(!btn)return null;const r=btn.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+      if (delBtnPos) {
+        const p = JSON.parse(delBtnPos);
+        await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
+        await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
+      }
+      // 坐标点若未生效（浮层/布局），退化为直接对按钮 DOM 派发 click
+      await sleep(400);
+      const cur = await pageRpc('connection', 'list', {});
+      if ((cur?.items || []).some((x) => x.label === delLabel)) {
+        await main.ev("(()=>{const dlg=[...document.querySelectorAll('*')].find(e=>(e.textContent||'').includes('删除连接')&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='删除'));if(!dlg)return false;const btn=[...dlg.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='删除');if(!btn)return false;btn.click();return true;})()");
+      }
+      removed = !!(await waitFor(async () => {
+        const r = await pageRpc('connection', 'list', {});
+        return (r?.items || []).some((x) => x.label === delLabel) ? null : true;
+      }, 8000, 500));
+    }
+    check('F26 连接行「✕」删除（二级确认；可取消；确认后移除）', !!dlg && cancelKeeps && removed, `弹窗=${!!dlg} 取消保留=${cancelKeeps} 已删除=${removed}`);
+
+    // ---- F27 文件列表标题栏最前「✕」直接退出列表（回首页）----
+    // 从首页「收藏」点目录进入浏览页（页内路由 push，关闭才有上一页可回），再点最前「✕」
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes('SFTP 客户端') ? true : null), 20000, 700);
+    await main.clickText('收藏');
+    const favRow = await waitFor(async () => { const t = await main.body(); return t.includes('dir_a') ? t : null; }, 15000, 600);
+    if (favRow) {
+      const rp = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>{const t=(o.e.textContent||'').trim();return t.includes('dir_a')&&o.r.width>100&&o.r.height>20&&o.r.height<90;});if(!a.length)return null;a.sort((p,q)=>p.r.width*p.r.height-q.r.width*q.r.height);const r=a[0].r;return JSON.stringify({x:r.left+40,y:r.top+r.height/2});})()");
+      if (rp) { const q = JSON.parse(rp); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(150); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+    }
+    const inBrowser = !!(await waitFor(async () => { const t = await main.body(); return (t.includes('⧉') && t.includes('✕')) ? t : null; }, 40000, 800));
+    if (inBrowser) await main.clickText('✕');
+    const exited = !!(await waitFor(async () => { const t = await main.body(); return (t.includes('SFTP 客户端') && !t.includes('⧉')) ? true : null; }, 15000, 500));
+    check('F27 文件列表标题栏最前「✕」直接退出列表（回首页）', inBrowser && exited, `进入列表=${inBrowser} 退出=${exited}`);
 
     check('F13 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {
