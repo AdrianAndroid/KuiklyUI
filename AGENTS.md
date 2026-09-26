@@ -91,8 +91,11 @@
 4. **Commit 格式**：Angular Convention — `feat:` / `fix:` / `docs:` / `refactor:` / `chore:`。
 5. **平台 API 差异**：跨端行为不一致时，必须在 `openspec` spec 中显式记录每端行为。
 6. **二进制通信**：`Module` 与原生通信支持 `String/Int/Float/ByteArray`；二进制走原子通道避免 base64 开销（见 `NetworkModule.httpRequestBinary`）。
-7. **主工作分支 = `zhaojian`，成果要及时同步回去**：主 clone `/Users/zhaojian/bin/macmini/KuiklyUI` 检出在 `zhaojian`；
+7. **主工作分支 = `zhaojian`，开发前先同步、成果要及时同步回去**：主 clone `/Users/zhaojian/bin/macmini/KuiklyUI` 检出在 `zhaojian`；
    各 worktree/feature 分支成果最终都合回 `zhaojian`。同步统一用 `node scripts/sync-main.mjs`：
+   - **开发前先同步（单独 worktree 必做）**：开始开发前先执行 `node scripts/sync-main.mjs --pull`，
+     把最新 `zhaojian`（本地主 clone 或 `origin/zhaojian` 中较新者）**rebase 合入当前分支**，基于最新主干开发；
+     冲突自动 abort 并报人工（绝不强行合并）。
    - **当前分支就是 `zhaojian`**：提交后**立即** `git push origin zhaojian`，保持远端同步。
    - **当前是单独分支（feature/agent）**：每当「功能实现且**受影响用例验证通过**」（或规则/文档节点）后，
      **立即**同步到 `zhaojian` —— 推到 `origin/zhaojian`，并在干净的主 clone 上快进本地 `zhaojian`。
