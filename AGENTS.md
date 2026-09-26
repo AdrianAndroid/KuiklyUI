@@ -91,6 +91,9 @@
 4. **Commit 格式**：Angular Convention — `feat:` / `fix:` / `docs:` / `refactor:` / `chore:`。
 5. **平台 API 差异**：跨端行为不一致时，必须在 `openspec` spec 中显式记录每端行为。
 6. **二进制通信**：`Module` 与原生通信支持 `String/Int/Float/ByteArray`；二进制走原子通道避免 base64 开销（见 `NetworkModule.httpRequestBinary`）。
+7. **主工作分支 = `zhaojian`**：主 clone `/Users/zhaojian/bin/macmini/KuiklyUI` 检出在 `zhaojian`；各 worktree 的
+   feature/agent 分支成果最终都合回 `zhaojian`。日常节点按规则 14 只本地提交到**当前 worktree 分支**，
+   `git push origin zhaojian` 仅在交付（§14.1）或用户明确要求时执行。
 
 详见 `openspec/config.yaml`。
 
