@@ -23,7 +23,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const MAIN_BRANCH = process.env.KR_MAIN_BRANCH || 'zhaojian';
-const WAIT_MIN = 30;
+const WAIT_MIN = Number(process.env.KR_SYNC_WAIT_MIN || 30);   // 可覆盖（测试用）
 const DRY = process.env.KR_SYNC_DRY === '1' || process.argv.includes('--dry-run');
 if (DRY) console.log('[sync-main] DRY-RUN：只检查与打印，不 push / 不 merge');
 
