@@ -104,7 +104,7 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
                 when (block) {
                     is MdBlock.Heading -> MdHeading(block, fontScaleProvider)
                     is MdBlock.Paragraph -> MdInlineText(block.runs, 14f, fontScaleProvider, wrapProvider, onLink, 6f)
-                    is MdBlock.Code -> MdCode(block, fontScaleProvider, wrapProvider)
+                    is MdBlock.Code -> MdCode(block, fontScaleProvider)
                     is MdBlock.Quote -> MdQuote(block.runs, fontScaleProvider, wrapProvider, onLink)
                     is MdBlock.ListBlock -> MdList(block.items, fontScaleProvider, wrapProvider, onLink)
                     is MdBlock.Diagram -> MdDiagram(block, fontScaleProvider)
@@ -196,7 +196,6 @@ private fun ViewContainer<*, *>.MdQuote(
 private fun ViewContainer<*, *>.MdCode(
     block: MdBlock.Code,
     fontScaleProvider: () -> Float,
-    wrapProvider: () -> Boolean,
 ) {
     View {
         attr {
@@ -218,6 +217,9 @@ private fun ViewContainer<*, *>.MdCode(
         }
         // 语法高亮（参考 MarkText / VS Code Dark+ 配色）：按 token 上色。
         // 每个源码行一个 RichText（保留换行与缩进），最多高亮 MAX_HIGHLIGHT_LINES 行。
+        // 代码正文**始终按宽度折行**（不做「不换行」）：不换行时每条长行会溢出后被父容器
+        // `overflow:hidden` 裁掉，而 Kuikly 文本给不出可靠本征宽度、横向 Scroller 滚不动
+        // → 用户看到「长的代码显示不全」。折行可保证六端都完整可见。
         val hlLines = CodeHighlighter.highlight(block.lang, block.code)
         hlLines.forEach { toks ->
             RichText {
@@ -226,7 +228,6 @@ private fun ViewContainer<*, *>.MdCode(
                     color(codeTokenColor(CodeTokenType.PLAIN))
                     lineHeight(18f * fontScaleProvider())
                     fontFamily("monospace")
-                    if (!wrapProvider()) lines(1)
                 }
                 toks.forEach { tk ->
                     Span {
@@ -245,7 +246,6 @@ private fun ViewContainer<*, *>.MdCode(
                     color(codeTokenColor(CodeTokenType.PLAIN))
                     lineHeight(18f * fontScaleProvider())
                     fontFamily("monospace")
-                    if (!wrapProvider()) lines(1)
                 }
             }
         }

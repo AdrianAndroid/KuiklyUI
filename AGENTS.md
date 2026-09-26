@@ -670,6 +670,13 @@ HEADLESS=0 SLOWMO=200 npm test   # 有头（可见浏览器，能直接看到自
     - 原生侧用 `krv_userWantsPlay`（由 `krv_play` / `krv_pause` 维护）记录意图；`krv_seekToTime`
       在"需要恢复暂停"时临时起播让 demuxer 拉数据，seek 后 `dispatch_after` 几百毫秒再
       `pause`（若期间用户改了意图就尊重新意图）。
+16. **Web 渲染器设 `borderRadius` 会强制 `overflow:hidden`**：`KuiklyRenderCSSKTX` 的 `BORDER_RADIUS`
+   对设了圆角的元素写 `style.overflow = "hidden"`。因此**输入类元素（`TextArea`/`Input`）不要直接设 `borderRadius`**，
+   否则 `<textarea>` 的 `overflowY` 变 hidden，内容超出时 `scrollHeight > clientHeight` 却**滚轮/滚动条都滚不动**
+    （症状：编辑区长代码只能看到前几行、拖不动）。修法：圆角与背景放**外层包裹 `View`**，输入框自身不设圆角。
+17. **Kuikly 文本没有可靠的本征宽度，别用横向 `Scroller` 展示 nowrap 长文本**：横向 Scroller 的内容宽度会等于视口宽度
+   （`scrollWidth == clientWidth`），`lines(1)` 的长行溢出后被父容器 `overflow:hidden` 裁掉且**无法横向滚动**
+   （症状：长代码/长行"显示不全"）。需要完整显示时**按宽度折行**。
 
 ### 13.5 macOS / iOS 端实操：构建 / 运行 / 调试 / 自动化
 
@@ -868,7 +875,13 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   ⚠️ 两个坑（勿回退）：① 浮层**必须放在内容区之后**（Web 上同级节点后渲染者在上，放前面会被正文盖住，表现为"只看到一条遮罩"）；
   ② 浮层里的按钮**不要与工具条同名**（曾把浮层「完成」和工具条「编辑/完成」撞名，自动化会点到开关）；
   ③ Kotlin/JS 下**不要用正则**解析 Markdown（unicode 模式会抛 `Lone quantifier brackets`）。
-  用例：`npm run test:text` → **16/16**（含 T7 即时渲染：工具条 B → 实时预览自动加粗**不点应用**；T8 保存后**读回远端**校验含加粗标记；T9 工具栏 51px 单行；T3d 目录弹窗）。
+  ⚠️ **长代码"显示不全/滚不动"（2026-09 已修，勿回退）**：
+  ① 块编辑区 `TextArea` **绝不能设 `borderRadius`** —— web 渲染器（`KuiklyRenderCSSKTX` 的 `BORDER_RADIUS`）
+     对设了圆角的元素强制 `overflow:hidden`，`<textarea>` 因此 `scrollHeight > clientHeight` 也**滚轮滚不动**；
+     圆角/背景放**外层包裹 `View`**，`TextArea` 自身不设圆角。
+  ② **代码块始终按宽度折行**：Kuikly 文本给不出可靠本征宽度，横向 `Scroller` 拿到的内容宽度 == 视口宽度 → nowrap 长行
+     溢出后被父容器裁掉且滚不动（用 `lines(1)` 更糟）。不要再把代码块切回「不换行」。
+  用例：`npm run test:text` → **27/27**（含 T7 即时渲染：工具条 B → 实时预览自动加粗**不点应用**；T8 保存后**读回远端**校验含加粗标记；T9 工具栏 51px 单行；T3d 目录弹窗；T15 代码块语法高亮；T16 大文档可加载到末尾；**T18 不换行下长代码折行不裁切**；**T19 编辑区滚轮滚动**）。
 - **文本文件查看器（含 Markdown，页内查看+修改，2026-09）**：参考 **MarkText**（MIT，Electron 富功能 Markdown 阅读/编辑器）
   的渲染范围 + **VS Code/Monaco** 的只读查看（行号/换行/字号/字数），实现子集：
   标题(左侧色条) / 段落行内(粗体·斜体·删除线·行内代码·链接，用 `RichText + Span` 单文本流保证跨行折行) /
@@ -902,10 +915,11 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
      预览/源码拉到底都看不全；切源码时还会一次建出 ~4500 个视图而卡死（6千行文档必现）。
      现改为**增量窗口**：Markdown 块与文本行各有 `ObservableList` + 底部「点此加载更多」，首屏小批量、可一直追加到全文；
      `MAX_MD_BLOCKS` 仅作病态输入的内存防御（20000），不再是显示截断。
-  用例：`cd electron && npm run test:text` → **T0–T16 25/25**（真实点击：Markdown 独立窗口打开/渲染+目录 46 项/
+  用例：`cd electron && npm run test:text` → **T0–T19 27/27**（真实点击：Markdown 独立窗口打开/渲染+目录 46 项/
   换行/源码⇄预览/字号/独立窗口返回/纯文本行号；**T14 超过 96KB 的大 Markdown 读取 offset 回归**；
   **T15 代码块语法高亮**（≥3 种 token 颜色）；**T16 大文档可加载到末尾**：预览不再按 700 块永久截断、
-  源码不再硬截 1500 行、切源码不再卡死），测试目录 `/home/zhaojian/ks-cr-doc`。
+  源码不再硬截 1500 行、切源码不再卡死；**T18 不换行下长代码折行不裁切**；**T19 编辑区滚轮滚动**），
+  测试目录 `/home/zhaojian/ks-cr-doc`。
 
 - **独立窗口播放（桌面壳，2026-09）**：视频在 Electron 下开**独立窗口**（可同时播多个、互不影响）。
   能力经 `BridgeModule.supportsPlayerWindow()/openPlayerWindow()`（Web 端读 preload 暴露的 `window.kuiklyHost`），

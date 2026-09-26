@@ -41,6 +41,7 @@ const FIX_MD_BIG = 'd_big_doc.md';       // 大文档夹具（增量渲染）
 const FIX_MD_BIG96 = 'e_big_over_96k.md'; // 超过 96KB 分块大小的回归夹具（验证读取 offset）
 const FIX_MD_CODE = 'f_code.md';          // 多语言代码块夹具（验证语法高亮）
 const FIX_MD_LARGE = 'g_large_doc.md';    // 大文档回归：预览 >700 块 / 源码 >1500 行都能加载到末尾
+const FIX_MD_LONGCODE = 'f_long_code.md'; // 超长代码行夹具（验证折行不裁切 + 编辑区可滚动）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -82,7 +83,16 @@ async function attach(wsUrl) {
   await send('Runtime.enable');
   const ev = async (x) => { const r = await send('Runtime.evaluate', { expression: x, returnByValue: true }); return r && r.result ? r.result.value : ''; };
   const body = async () => String(await ev('document.body.innerText'));
-  const shot = async (n) => { const s = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(artifacts, n), Buffer.from(s.data, 'base64')); };
+  const shot = async (n) => {
+    // CDP 偶发返回空（页面正忙/浮层重绘）时不能让整个套件崩溃：重试两次，仍失败只告警
+    for (let i = 0; i < 3; i++) {
+      const s = await send('Page.captureScreenshot', { format: 'png' });
+      if (s && s.data) { fs.writeFileSync(path.join(artifacts, n), Buffer.from(s.data, 'base64')); return true; }
+      await sleep(300);
+    }
+    console.log(`      [warn] 截图失败（CDP 返回空）: ${n}`);
+    return false;
+  };
   const mouseAt = (type, x, y, buttons) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
   // 真实点击：命中「包含该文本的最小可见元素」，先悬停再按下
   const clickText = async (txt, targetSelf = null) => {
@@ -215,6 +225,14 @@ setTimeout(() => {
       `## 章节 ${i + 1}\n\n这是第 ${i + 1} 节内容，用于验证大文档能完整加载到末尾。\n`).join('\n');
     const largeLines = largeMd.split('\n').length;
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_LARGE}`, content: Buffer.from(largeMd, 'utf8').toString('base64') });
+
+    // 超长代码行夹具：验证「不换行」下代码仍折行显示（不被横向裁切）与编辑区可滚轮滚动。
+    // 回归背景：块编辑 TextArea 曾因设了 borderRadius 被 web 渲染器强制 overflow:hidden → 滚轮滚不动；
+    // 代码块曾因 lines(1) 让长行溢出后被父容器裁掉且无法横向滚动 → 长代码显示不全。
+    const longCodeMd = '# 长代码回归\n\n' + '```js\n' +
+      Array.from({ length: 30 }, (_, i) =>
+        `const longLine${i} = "${'y'.repeat(220)}"; // LONGCODE_TAIL_${i}\n`).join('') + '```\n';
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_LONGCODE}`, content: Buffer.from(longCodeMd, 'utf8').toString('base64') });
 
     check('T0a 夹具就绪（样例 md + txt + 图表 + 大文档）', !!mdB64, `${FIX_DIR}（md ${Math.round(mdB64.length / 1024)}KB）`);
     check('T0c 超过 96KB 分块的 Markdown 夹具就绪', big96Bytes > 96 * 1024, `${FIX_MD_BIG96} ${Math.round(big96Bytes / 1024)}KB / ${big96Lines} 行`);
@@ -559,6 +577,48 @@ setTimeout(() => {
       previewTotal > 700 && previewBeyond, `预览总块=${previewTotal} 追加超过700=${previewBeyond}`);
     check('T16b 大文档源码总量=全文行数且可加载到末尾（旧实现硬截 1500 行）',
       srcTotal === largeLines && srcBeyond, `源码总行=${srcTotal}/${largeLines} 追加超过1500=${srcBeyond} 切源码耗时=${toggleMs}ms`);
+    // ---- T18/T19 超长代码行：显示折行不裁切 + 编辑区可滚轮滚动（用户报「长的代码显示不全」的回归）----
+    const lc = await openFixture(FIX_MD_LONGCODE);
+    if (lc.win) {
+      const lv = await attach(lc.win.webSocketDebuggerUrl);
+      await lv.send('Page.enable');
+      const lcLoaded = await waitFor(async () => { const b = await lv.body(); return b.includes('长代码回归') ? b : null; }, 30000, 600);
+      // T18「不换行」下代码仍按宽度折行：代码文本元素不应出现横向溢出（scrollWidth > clientWidth）
+      await lv.clickText('换行'); await sleep(700);
+      const nowrapOn = (await lv.body()).includes('不换行');
+      // 折行判据：含 marker 的元素中，横向溢出量（scrollWidth-clientWidth）不得超过 30px
+      // （15px 是纵向滚动条宽度，属正常；若长行不折行，溢出会是数百 px）。
+      const clipRaw = await lv.ev("(()=>{const marker='LONGCODE_TAIL';let max=0,tag='',h=0,n=0;for(const e of document.querySelectorAll('*')){if((e.textContent||'').indexOf(marker)<0)continue;if(e.clientWidth<=50)continue;const d=e.scrollWidth-e.clientWidth;n++;if(d>max){max=d;tag=e.tagName+'#'+String(e.className).slice(0,16);h=Math.round(e.getBoundingClientRect().height);}}return JSON.stringify({max,tag,h,n});})()");
+      let clip = null;
+      try { clip = clipRaw ? JSON.parse(clipRaw) : null; } catch (e) { clip = null; }
+      const noHOverflow = !!clip && clip.max <= 30;
+      check('T18 不换行下超长代码折行显示、无横向裁切（回归）', !!lcLoaded && nowrapOn && noHOverflow,
+        `不换行=${nowrapOn} 最大横向溢出=${clip ? clip.max : 'n/a'}px 元素=${clip ? clip.tag : 'n/a'}(h=${clip ? clip.h : '?'}) 候选=${clip ? clip.n : 0}`);
+      if (lcLoaded) await lv.shot('text-viewer-longcode-nowrap.png');
+
+      // T19 编辑区（TextArea）可用滚轮滚动：overflowY 不能是 hidden，且滚轮后 scrollTop > 0
+      await lv.clickText('编辑'); await sleep(400);
+      await lv.clickText('LONGCODE_TAIL'); await sleep(800);
+      const panelOpen = await waitFor(async () => ((await lv.body()).includes('输入即预览') ? true : null), 10000, 500);
+      const taInfo = await lv.ev("(()=>{const ts=[...document.querySelectorAll('textarea')].filter(e=>e.getBoundingClientRect().height>20);if(!ts.length)return 'none';const t=ts[ts.length-1];const r=t.getBoundingClientRect();return JSON.stringify({sh:t.scrollHeight,ch:t.clientHeight,ovf:getComputedStyle(t).overflowY,x:r.left+r.width/2,y:r.top+r.height/2});})()");
+      let scrolled = false, taDetail = '';
+      if (panelOpen && taInfo !== 'none') {
+        const o = JSON.parse(taInfo);
+        for (let i = 0; i < 6; i++) { await lv.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: o.x, y: o.y, deltaX: 0, deltaY: 220 }); await sleep(120); }
+        const st = await lv.ev("(()=>{const ts=[...document.querySelectorAll('textarea')].filter(e=>e.getBoundingClientRect().height>20);return ts.length?ts[ts.length-1].scrollTop:-1;})()");
+        scrolled = Number(st) > 0;
+        taDetail = `scrollHeight=${o.sh} clientHeight=${o.ch} overflowY=${o.ovf} scrollTop=${st}`;
+        if (o.ovf === 'hidden') console.log('      [debug T19] textarea overflowY=hidden → 滚轮不可滚');
+      } else {
+        taDetail = `panelOpen=${!!panelOpen} taInfo=${taInfo}`;
+      }
+      check('T19 块编辑区超长代码可用滚轮滚动（overflow 不再被隐藏）', !!panelOpen && scrolled, taDetail);
+      if (panelOpen) await lv.shot('text-viewer-edit-scroll.png');
+      lv.close();
+    } else {
+      check('T18 不换行下超长代码折行显示、无横向裁切（回归）', false, '未打开长代码查看器窗口');
+      check('T19 块编辑区超长代码可用滚轮滚动（overflow 不再被隐藏）', false, '未打开长代码查看器窗口');
+    }
 
     // T5 独立窗口返回：点「<」关闭查看器窗口，主窗口仍在文件列表（主界面不受影响）
     const backToList = await (async () => {

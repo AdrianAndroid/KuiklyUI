@@ -707,7 +707,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                     attr {
                         positionAbsolute(); left(0f); bottom(0f)
                         width(pagerData.pageViewWidth)
-                        height(pagerData.pageViewHeight * 0.62f)
+                        height(pagerData.pageViewHeight * 0.72f)
                         backgroundColor(SftpColorTokens.cardBg)
                         borderRadius(14f)
                         flexDirectionColumn()
@@ -760,17 +760,26 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                             MdFmtChip("―") { ctx.applyFormat("hr") }
                         }
                         // 编辑区
-                        TextArea {
+                        // 外层圆角容器，TextArea 本身**不能设 borderRadius**：
+                        // web 渲染器对设了圆角的元素强制 `overflow:hidden`，textarea 会因此
+                        // 无法用滚轮/滚动条滚动（长代码只能看到前几行、不能滚动）。
+                        View {
                             attr {
-                                text(ctx.editBuffer)
-                                height(150f)
-                                fontSize(12.5f)
-                                color(SftpColorTokens.textPrimary)
+                                height(170f)
                                 backgroundColor(SftpColorTokens.bg)
                                 borderRadius(6f)
-                                placeholder("Markdown 源码…")
                             }
-                            event { textDidChange { e -> ctx.onEditBufferChanged(e.text) } }
+                            TextArea {
+                                attr {
+                                    text(ctx.editBuffer)
+                                    height(170f)
+                                    fontSize(12.5f)
+                                    color(SftpColorTokens.textPrimary)
+                                    backgroundColor(SftpColorTokens.bg)
+                                    placeholder("Markdown 源码…")
+                                }
+                                event { textDidChange { e -> ctx.onEditBufferChanged(e.text) } }
+                            }
                         }
                         // 实时预览
                         Text {

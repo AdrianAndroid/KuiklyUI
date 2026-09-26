@@ -101,6 +101,25 @@ Web/Electron 可在宿主用现成 JS 库增强，但其它端不能空白。因
 - 宿主可选增强（后续）：Web/Electron 在 DOM 里调 mermaid.js / KaTeX / highlight.js，
   通过 `BridgeModule.supportsXxx()` 探测，native 端继续用共享降级实现。
 
+### 3.5 长代码「显示不全/滚不动」修复（2026-09）
+
+用户反馈：Markdown 显示窗口与块编辑窗口「不能滚动、长的代码显示不全」。定位到两个真实缺陷：
+
+1. **块编辑区 TextArea 滚轮滚不动**：`SftpViewerDispatcherPage` 的编辑区 `TextArea` 设了
+   `borderRadius(6f)`；web 渲染器（`KuiklyRenderCSSKTX` 的 `BORDER_RADIUS`）对**设了圆角的元素**
+   强制 `style.overflow = "hidden"` → `<textarea>` 的 `overflowY` 变 `hidden`，
+   `scrollHeight(1230) > clientHeight(150)` 却**无法用滚轮/滚动条滚动**（只能靠键盘/程序滚动）。
+   修法：圆角与背景移到**外层包裹 `View`**，`TextArea` 自身不再设 `borderRadius`；
+   编辑面板高度 0.62→0.72、编辑区 150→170，给长代码更多可见空间。
+2. **长代码行被裁切且无法横向滚动**：代码块在「不换行」下用 `lines(1)`，
+   长行溢出后被父容器 `overflow:hidden` 裁掉；而 Kuikly 的文本**给不出可靠的本征宽度**，
+   横向 `Scroller` 拿到的内容宽度等于视口宽度（`scrollWidth == clientWidth`）→ 滚不动。
+   修法：**代码块始终按宽度折行**（不再随「换行」开关切到不换行），保证六端都能完整看到代码。
+
+> 复用性提醒（六端通用，勿回退）：
+> - **不要在 `<textarea>`/输入类元素上直接设 `borderRadius`**（web 会强制 overflow hidden → 滚不动）。
+> - Kuikly 文本无本征宽度，**不要指望用横向 `Scroller` 展示 nowrap 长文本**（滚不动）。
+
 ---
 
 ## 4. 后续路线（按价值排序）
@@ -116,16 +135,20 @@ Web/Electron 可在宿主用现成 JS 库增强，但其它端不能空白。因
 
 ## 5. 测试
 
-- 用例文件：`electron/test/text-viewer.mjs`（`npm run test:text`）→ **T0–T16 25/25**。
+- 用例文件：`electron/test/text-viewer.mjs`（`npm run test:text`）→ **T0–T19 27/27**。
 - 最近新增：
   - **T15 代码块语法高亮**（≥3 种 token 颜色）：夹具 `f_code.md`（多语言代码块）。
   - **T16 大文档可加载到末尾**（回归：预览硬截 700 块 / 源码硬截 1500 行 / 切源码卡死）：
     `T16a` 预览总块 > 700 且可追加渲染超过 700 块；`T16b` 源码总行数 = 全文行数、可追加超过 1500 行直到末尾，
     并给出切源码耗时（实测 ~1s，不再卡死）。夹具 `g_large_doc.md`（500 节 / 2002 行 / 约 1001 块）。
+  - **T18 不换行下超长代码折行显示、无横向裁切（回归）**：夹具每行 ~250 字符（远超视口宽度），
+    断言「含 marker 的元素最大横向溢出 ≤ 30px（仅纵向滚动条宽度）」。夹具 `f_long_code.md`。
+  - **T19 块编辑区超长代码可用滚轮滚动（回归）**：断言 TextArea `overflowY !== hidden` 且滚轮后
+    `scrollTop > 0`（修复前因 `borderRadius → overflow:hidden` 恒为 0）。
   - **T14 超过 96KB 的 Markdown 分块读取 offset 回归**（浏览器 `read` 把 Kotlin `Long` 当 `Number` 解析失败 →
     offset 恒 0 → 重复前缀损坏正文/末尾围栏被截断 → Markdown 解析越界退回源码、点「预览」空白）。
     断言：渲染态（非源码回退）+ 目录 > 0 + 行数与远端一致。
-  - **T0c** 大文件夹具就绪（>96KB）。
+  - **T0c** 大文件夹具就绪（>96KB）；新增 `f_long_code.md` 超长代码夹具。
   - **Markdown 查看器改为独立窗口**：`T1`（target 数 +1）、`T5`（返回关窗，主窗口留在列表）随之更新。
 - 既有 T0–T13 必须全绿（含即时渲染 T7/T7b、保存 T8、工具条 T9、目录 T3d、增量渲染 T12、缓存 T13）。
 - 测试：`cd electron && npm run test:text`（需外部网关 + 测试机 192.168.2.2）。
