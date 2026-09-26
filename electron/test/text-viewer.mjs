@@ -69,7 +69,12 @@ async function attach(wsUrl) {
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.id && pend.has(m.id)) { pend.get(m.id)(m.result); pend.delete(m.id); }
-    if (m.method === 'Runtime.exceptionThrown') errs.push(String(m.params.exceptionDetails?.exception?.description || m.params.exceptionDetails?.text || '').slice(0, 300));
+    if (m.method === 'Runtime.exceptionThrown') {
+      const d = m.params.exceptionDetails || {};
+      const ex = d.exception || {};
+      const loc = ` @${d.url || ''}:${d.lineNumber ?? ''}`;
+      errs.push((String(ex.description || d.text || 'exception') + loc).slice(0, 600));
+    }
   };
   await send('Runtime.enable');
   const ev = async (x) => { const r = await send('Runtime.evaluate', { expression: x, returnByValue: true }); return r && r.result ? r.result.value : ''; };
@@ -243,6 +248,12 @@ setTimeout(() => {
       check('T4 纯文本查看（页内）', false, '未进入纯文本查看器');
     }
 
+    // 回到夹具目录并重新打开 FIX_MD（查看器已页内：T4 之后页面停在纯文本查看器上）
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
+    await waitFor(async () => (await main.body()).includes(FIX_MD), 30000, 700);
+    await main.clickText(FIX_MD);
+    await waitFor(async () => (await viewerFor(FIX_MD))[0], 20000, 600);
+
     // ---- Vditor 对照用例 ----
     // T9 工具栏：单行、置顶、紧凑（对应 Vditor toolbarConfig.pin，不占大空间）
     const mdWin0 = (await viewerFor(FIX_MD))[0];
@@ -307,7 +318,9 @@ setTimeout(() => {
         await rpc('sftp', 'close', { fileHandleId: rd.fileHandleId });
       }
       const dirtyCleared = !(await v7.body()).includes('保存*');
-      check('T8 保存按钮写回远端（读回内容含加粗标记）', remoteHas,
+      // 必须同时满足：远端已更新 + 页面提示「已保存」+ dirty 清除。
+      // 只断言 remoteHas 会假阳性（样例 md 本身就可能含 '**'）。
+      check('T8 保存按钮写回远端（读回内容含加粗标记 + 提示已保存 + dirty 清除）', remoteHas && !!saved && dirtyCleared,
         `远端含加粗标记=${remoteHas} 远端大小=${remoteLen}B 提示=${!!saved} dirty已清除=${dirtyCleared}`);
       v7.close();
     }
