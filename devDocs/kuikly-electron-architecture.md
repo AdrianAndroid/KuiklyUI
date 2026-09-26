@@ -166,8 +166,9 @@ npm run build:web            # :demo:packLocalJsBundleDebug + :h5App:jsBrowserDe
 npm run sync                 # 产物 → electron/resources
 npm run start                # = sync + env -u ELECTRON_RUN_AS_NODE electron .
 
-# ② 正式：release 产物 + 打包 + dmg（dist:release 已内置先 build:web:release）
-npm run dist:release         # → dist/mac/Kuikly SFTP.app + dist/Kuikly SFTP-0.1.0.dmg
+# ② 打包 dmg：**默认 debug 产物（快）**，够本机验证与覆盖安装
+npm run build:web && npm run dist   # debug → dist/mac/Kuikly SFTP.app + dist/Kuikly SFTP-0.1.0.dmg
+# 仅正式发版才用（慢，且仅 zhaojian 分支）：npm run dist:release = build:web:release + sync(release) + electron-builder
 
 # ③ 覆盖安装（先优雅退出旧实例，ditto 保留符号链接与签名）
 osascript -e 'quit app "Kuikly SFTP"'

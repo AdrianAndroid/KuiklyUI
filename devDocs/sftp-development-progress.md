@@ -31,9 +31,10 @@
 
 ### 0.2 交付流程（固定，见 `AGENTS.md §14.1`）
 
-`npm run dist:release`（**已修**：会先 `build:web:release` 再 sync+打包；此前只 sync，release 产物陈旧 → 新代码打不进包）
+**默认 debug 产物**：`npm run build:web`（debug）+ `npm run dist`(内置 sync + electron-builder + copy-dmg)
 → 优雅退出旧实例 + `ditto` 覆盖安装到 `/Applications` + `xattr -dr com.apple.quarantine`
 → `env -u ELECTRON_RUN_AS_NODE open` 启动 → 提交 → `git push origin zhaojian`。
+（`npm run dist:release` 太慢，**仅 `zhaojian` 且正式发版时**才用；见 `AGENTS.md §3.1 规则 16`。）
 
 ### 0.3 本轮（2026-09-25）新增 / 修复
 
@@ -146,7 +147,7 @@
 | **Android** | ✅ `./gradlew :androidApp:assembleDebug` | JSch 0.1.55 | NanoHTTPD | ✅ 模拟器 **74/74 × 10 轮零失败** + ExoPlayer 经代理播放 | **全链路可用** |
 | **HarmonyOS** | ✅ 渲染器 `libkuikly.so` + 业务 `libshared.so` | libssh2 + 自 vendored mbedTLS 2.28.8 | ❌ 桩（未进 CMake） | ❌ 运行时未验证（无设备） | **核心可用、播放未实现** |
 | **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | 浏览器无 socket → Node 网关代持（ssh2） | 网关直接出 HTTP Range | ✅ 浏览器实测（连接 / 浏览 / Range / 拖动 seek） | **全链路可用** |
-| **桌面壳 (Electron)** | ✅ `npm run dist:release`（dmg + `/Applications` 覆盖安装） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 25/25`、`smoke 21/21`、`player 8/8`、`text 16/16`、`dual 28/28`、`term 7/7` | **全链路可用（独立窗口：播放/终端；文本查看器已改页内查看+底部面板编辑）** |
+| **桌面壳 (Electron)** | ✅ 默认 `npm run build:web && npm run dist`（debug dmg + `/Applications` 覆盖安装；release 仅 zhaojian 发版时） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 33/33`、`smoke 21/21`、`player 8/8`、`text 21/21`、`dual 28/28`、`term 7/7` | **全链路可用（独立窗口：播放/终端/Markdown 查看器；其它文本页内）** |
 | **小程序** | ✅ 同 Web（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | 复用 Web 的 JS 模块 | 需网关 | ❌ 未验证（需微信域名白名单） | **未验证** |
 
 ---
