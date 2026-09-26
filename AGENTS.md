@@ -862,20 +862,28 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   围栏代码块 / 引用 / 有序无序列表 / 任务列表 / 表格 / 分隔线；**目录(TOC)** 抽屉（近似跳转）、
   **源码⇄预览**、**换行开关**、**A−/A+ 字号**、状态栏（编码·大小·行数·字数）、大文件截断提示（>2MB 只读前 2MB）。
   纯文本：行号槽 + 等宽字体 + 换行/字号（渲染上限 1500 行）。
-  - 入口：浏览页点文本类（md/html/txt/代码）→ `SftpViewerLauncher.openViewerPage()`，**统一页内路由**
-    （查看与修改在**同一界面**完成，不再为文本查看另开独立窗口）。
+  - 入口：浏览页点文本类（md/html/txt/代码）→ `SftpViewerLauncher.openViewerPage()`。
+    **Markdown → 独立窗口**（仅桌面壳/Web 宿主 `supportsPlayerWindow()` 为 true 时；复用宿主 `openPlayerWindow`
+    + `standalone=1`，返回键只关该窗口，主窗口留在文件列表）；**其它文本类型 / 宿主不支持 → 页内路由**。
+    跨端差异：Electron/H5 宿主 = 独立窗口；Android/iOS/macOS/OHOS/小程序 = 页内（宿主返回 false 自动回退）。
   - **块编辑为页内**底部面板（文档仍在上方可见，不再全屏模态遮挡）：格式工具条 + 编辑区 + 实时预览（即时渲染，含 Mermaid）。
   - 装载：`SftpTextLoader` 分块流式读（96KB/块）+ 跨端解码（UTF-8 含 4 字节 emoji / UTF-16 BOM）。
   - 服务端不受限：Markdown 解析器在 **commonMain**（纯 Kotlin），六端共用，无平台依赖。
-  ⚠️ 三个踩过的坑（勿回退）：
+  ⚠️ 四个踩过的坑（勿回退）：
   1. **`MimeExtMap.isMarkdown/isHtml` 期望 mime，不是路径**：`decideViewer` 曾传 `remotePath` → 恒 false →
      `.md` 被当纯文本渲染（Markdown 渲染一直未生效）。**必须传 `mimeOfPath()` 的结果**。
   2. **Markdown 解析器禁止用正则**：Kotlin/JS 会把正则编译成 unicode 模式，`[([ xX])]` 这类字符类抛
      `Lone quantifier brackets` → 解析中断、正文空白。任务/有序/无序列表项一律用字符串解析。
   3. **查看器状态必须 provider + 在 `attr{}`/`vif` 内读**：加载完成后正文/工具条标签/字号/目录数若不这样写，
      依赖不被收集 → 永远停在「加载中…」或空态/开关不生效（含 `vif({ mdSourceView })` 切换源码⇄预览）。
-  用例：`cd electron && npm run test:text` → **T0–T6 11/11**（真实点击：页内查看器/Markdown 渲染+目录 46 项/
-  换行/源码⇄预览/字号 26→33.8px/纯文本行号/页内返回），测试目录 `/home/zhaojian/ks-cr-doc`。
+  4. **浏览器 `read` 必须正确解析 `offset`（Kotlin/JS 的 `Long` 不是 JS `Number`）**：`h5App` 的
+     `KRSftpModule.read` 曾用 `arr[1] as? Number`，对 Long 恒为 null → offset 恒 0 → **>96KB 的文件第二次读又回到
+     文件头**，拼成「[0..96K]+[0..N]」重复前缀 → 正文损坏、末尾围栏代码块被截断、Markdown 解析抛
+     `IndexOutOfBoundsException` → 退回源码态，点「预览」显示空白（本 bug）。修复：`toLongSafe/toIntSafe`
+     兼容 Number/Long 装箱/数字字符串。另在 `MarkdownParser` 对未闭合围栏与 `subList` 做防御性夹取，个别畸形块不再整篇空白。
+  用例：`cd electron && npm run test:text` → **T0–T14 21/21**（真实点击：Markdown 独立窗口打开/渲染+目录 46 项/
+  换行/源码⇄预览/字号/独立窗口返回/纯文本行号；**T14 超过 96KB 的大 Markdown 读取 offset 回归**），
+  测试目录 `/home/zhaojian/ks-cr-doc`。
 
 - **独立窗口播放（桌面壳，2026-09）**：视频在 Electron 下开**独立窗口**（可同时播多个、互不影响）。
   能力经 `BridgeModule.supportsPlayerWindow()/openPlayerWindow()`（Web 端读 preload 暴露的 `window.kuiklyHost`），

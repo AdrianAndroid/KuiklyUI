@@ -257,7 +257,10 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     }
 
     private fun parseCapped(body: String): List<MdBlock> {
-        val blocks = try { MarkdownParser.parse(body) } catch (e: Throwable) { emptyList() }
+        val blocks = try { MarkdownParser.parse(body) } catch (e: Throwable) {
+            com.tencent.kuikly.core.log.KLog.e("SftpViewer", "Markdown 解析失败: ${e.message}")
+            emptyList()
+        }
         return if (blocks.size > MAX_MD_BLOCKS) blocks.subList(0, MAX_MD_BLOCKS) else blocks
     }
 

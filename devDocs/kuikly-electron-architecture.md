@@ -139,13 +139,17 @@ flowchart LR
 
 ---
 
-## 8. 独立窗口（播放/终端；文本查看器已改页内）
+## 8. 独立窗口（播放 / 终端 / Markdown 查看器）
 
 - **打开**：页面调 `BridgeModule.openPlayerWindow(query)`；`query` 至少含 `page_name`（**宿主不会补**，页内路由由 RouterModule 补）+ 业务参数。`main.js` 复制为 `standalone=1` 并 `loadFile`。
 - **上限**：播放窗口有 `MAX_PLAYER_WINDOWS`（多开同播，逐个关闭）。
 - **关闭**：`KRRouterModule.closePage()` 仅在 `standalone=1` 时执行「关窗」，否则会误关整个应用；
   页面返回键 / 顶部自动隐藏标题栏的「<」都走它。
 - **窗口内 UI**：视频/终端充满窗口，顶部标题栏与底部控制条**同为悬浮层**，几秒无操作自动隐藏，点击画面重新显示（见 §11 坑 8）。
+- **Markdown 查看器**（2026-09）：浏览页点 `.md` 时 `SftpViewerLauncher.openViewerPage()` 走同一 `openPlayerWindow`
+  在独立窗口打开 `SftpViewerDispatcherPage`（返回键关窗，主窗口留在文件列表）；**仅 Markdown** ——
+  其它文本类型（txt/html/代码）仍页内路由。非桌面/Web 宿主 `supportsPlayerWindow()=false` 时回退页内。
+  用例：`npm run test:text`（T1 target +1、T5 关窗回主窗口列表）。
 
 ---
 

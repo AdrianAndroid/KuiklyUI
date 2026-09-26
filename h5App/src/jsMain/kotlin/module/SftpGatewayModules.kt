@@ -52,8 +52,13 @@ class KRSftpModule : SftpGatewayProxyModule("sftp") {
         if (method == METHOD_READ) {
             val arr = params.asDynamic()
             val fileHandleId = arr[0] as? String ?: return null
-            val offset = (arr[1] as? Number)?.toLong() ?: 0L
-            val length = (arr[2] as? Number)?.toInt() ?: 0
+            // ⚠️ Kotlin/JS 下 `Long` 是装箱对象、**不是** JS `Number`：`arr[1] as? Number`
+            // 对 offset（Long）恒为 null → offset 永远取 0。后果：>96KB 的文件第二次读又回到
+            // 文件头，拼接成「[0..96K] + [0..N]」的重复前缀，正文损坏、末尾围栏代码块被截断，
+            // Markdown 解析抛 IndexOutOfBounds → 回退源码/空白（本 bug 的根因）。
+            // 这里对 Number / Long 装箱 / 数字字符串都做兼容。
+            val offset = toLongSafe(arr[1])
+            val length = toIntSafe(arr[2])
             val p = "{\"fileHandleId\":\"$fileHandleId\",\"offset\":$offset,\"length\":$length}"
             val cb = KuiklyRenderCallback { res: Any? ->
                 val text = (res as? String) ?: "{}"
@@ -71,6 +76,21 @@ class KRSftpModule : SftpGatewayProxyModule("sftp") {
             return null
         }
         return super.call(method, params, callback)
+    }
+
+    /** Kotlin/JS 兼容取值：Number / Long 装箱 / 数字字符串都能转成 Long */
+    private fun toLongSafe(v: Any?): Long = when (v) {
+        is Number -> v.toLong()
+        is String -> v.toDoubleOrNull()?.toLong() ?: 0L
+        null -> 0L
+        else -> v.toString().toDoubleOrNull()?.toLong() ?: 0L
+    }
+
+    private fun toIntSafe(v: Any?): Int = when (v) {
+        is Number -> v.toInt()
+        is String -> v.toDoubleOrNull()?.toInt() ?: 0
+        null -> 0
+        else -> v.toString().toDoubleOrNull()?.toInt() ?: 0
     }
 
     private fun base64ToByteArray(b64: String): ByteArray {

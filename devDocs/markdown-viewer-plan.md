@@ -114,7 +114,12 @@ Web/Electron 可在宿主用现成 JS 库增强，但其它端不能空白。因
 
 ## 5. 测试
 
-- 用例文件：`electron/test/text-viewer.mjs`（`npm run test:text`）。
-- 本轮新增：**T11 Mermaid 流程图渲染**、**T12 增量渲染（首屏只渲染一批 + 提示，滚动后追加）**、
-  **T13 文档缓存（二次打开无需重新装载即可渲染）**。
-- 既有 T0–T10 必须全绿（含即时渲染 T7/T7b、保存 T8、工具条 T9、目录 T3d）。
+- 用例文件：`electron/test/text-viewer.mjs`（`npm run test:text`）→ **T0–T14 21/21**。
+- 本轮新增：
+  - **T14 超过 96KB 的 Markdown 分块读取 offset 回归**（浏览器 `read` 把 Kotlin `Long` 当 `Number` 解析失败 →
+    offset 恒 0 → 重复前缀损坏正文/末尾围栏被截断 → Markdown 解析越界退回源码、点「预览」空白）。
+    断言：渲染态（非源码回退）+ 目录 > 0 + 行数与远端一致。
+  - **T0c** 大文件夹具就绪（>96KB）。
+  - **Markdown 查看器改为独立窗口**：`T1`（target 数 +1）、`T5`（返回关窗，主窗口留在列表）随之更新。
+- 既有 T0–T13 必须全绿（含即时渲染 T7/T7b、保存 T8、工具条 T9、目录 T3d、增量渲染 T12、缓存 T13）。
+- 测试：`cd electron && npm run test:text`（需外部网关 + 测试机 192.168.2.2）。

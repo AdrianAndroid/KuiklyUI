@@ -118,7 +118,10 @@ internal object MarkdownParser {
                     MdBlock.Paragraph(
                         text = text,
                         runs = parseInline(text),
-                        raw = lines.subList(paraStart, endLine).joinToString("\n"),
+                        raw = lines.subList(
+                            paraStart.coerceIn(0, lines.size),
+                            endLine.coerceIn(paraStart.coerceIn(0, lines.size), lines.size)
+                        ).joinToString("\n"),
                         startLine = paraStart,
                         endLine = endLine
                     )
@@ -127,7 +130,12 @@ internal object MarkdownParser {
                 paraStart = -1
             }
         }
-        fun rawOf(from: Int, toExclusive: Int) = lines.subList(from, toExclusive).joinToString("\n")
+        // 防御性夹取：任何情况下都不越界（解析器绝不能因个别畸形块抛异常导致整篇空白）
+        fun rawOf(from: Int, toExclusive: Int): String {
+            val f = from.coerceIn(0, lines.size)
+            val t = toExclusive.coerceIn(f, lines.size)
+            return lines.subList(f, t).joinToString("\n")
+        }
 
         while (i < lines.size) {
             val line = lines[i]
@@ -145,7 +153,9 @@ internal object MarkdownParser {
                     code.append(lines[i]).append('\n')
                     i++
                 }
-                i++ // 跳过结束围栏
+                // 跳过结束围栏；**未闭合的围栏**（EOF 前没有 ```）时 i 已到 lines.size，
+                // 不能再自增，否则下面的 rawOf(from, i) 会 subList 越界 → 整篇解析失败（正文空白）。
+                if (i < lines.size) i++
                 val body = code.toString().trimEnd('\n')
                 // 图表代码块（mermaid / flow / graphviz 等）走 Diagram，由渲染器绘制
                 if (lang.lowercase() in DIAGRAM_LANGS) {

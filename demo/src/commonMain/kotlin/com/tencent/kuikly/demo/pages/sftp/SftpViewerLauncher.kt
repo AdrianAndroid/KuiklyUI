@@ -14,21 +14,40 @@
  */
 package com.tencent.kuikly.demo.pages.sftp
 
+import com.tencent.kuikly.core.log.KLog
 import com.tencent.kuikly.core.module.RouterModule
+import com.tencent.kuikly.core.module.sftp.MimeExtMap
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.demo.pages.sftp.viewer.SftpViewerDispatcherPage
 
 /**
- * 打开「查看器」页（文本 / Markdown / HTML 等）。
+ * 打开「查看器」页（文本 / Markdown / HTML 等）的唯一入口。
  *
- * **统一页内路由**：查看与修改都在**同一个界面**完成，不再为文本查看另开独立窗口
- * （独立窗口会导致「编辑要新窗口、与列表割裂」的体验问题）。
- *
- * 注：`BridgeModule.supportsPlayerWindow` 仍被 `save()` 用作「是否 Web/桌面宿主」的探测，
- * 与本函数的打开方式无关（保存路径不受影响）。
+ * 打开方式分两种：
+ * - **Markdown → 独立窗口**（仅桌面壳/Web 宿主支持时）：Markdown 阅读常伴随目录跳转、
+ *   源码⇄预览切换、块编辑与保存，放在独立窗口里不占用主窗口的文件列表，可对照查看。
+ *   与播放页同款机制（`BridgeModule.openPlayerWindow` + `standalone=1`，返回键只关该窗口）。
+ * - **其它类型 / 宿主不支持 → 页内路由**：保持原行为（`RouterModule.openPage`）。
  */
 internal fun Pager.openViewerPage(viewerParams: JSONObject) {
+    val mime = MimeExtMap.mimeOfPath(viewerParams.optString("remotePath", ""))
+    if (MimeExtMap.isMarkdown(mime) && supportsStandaloneWindow()) {
+        // 独立窗口：宿主直接开窗口不会补 page_name（页内路由才由 RouterModule 补），必须显式带上
+        val hostParams = JSONObject(viewerParams.toString())
+        hostParams.put("page_name", SftpViewerDispatcherPage.PAGE_NAME)
+        acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).openPlayerWindow(hostParams)
+        return
+    }
     acquireModule<RouterModule>(RouterModule.MODULE_NAME)
         .openPage(SftpViewerDispatcherPage.PAGE_NAME, viewerParams)
 }
+
+private fun Pager.supportsStandaloneWindow(): Boolean =
+    runCatching {
+        acquireModule<BridgeModule>(BridgeModule.MODULE_NAME).supportsPlayerWindow()
+    }.getOrElse {
+        KLog.e("SftpViewerLauncher", "supportsPlayerWindow 探测异常: ${it.message}")
+        false
+    }

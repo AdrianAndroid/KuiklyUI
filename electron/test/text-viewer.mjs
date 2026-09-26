@@ -38,6 +38,7 @@ const FIX_MD = 'a_sample_doc.md';
 const FIX_TXT = 'b_notes.txt';
 const FIX_MD_DIAGRAM = 'c_diagram.md';   // mermaid 流程图夹具
 const FIX_MD_BIG = 'd_big_doc.md';       // 大文档夹具（增量渲染）
+const FIX_MD_BIG96 = 'e_big_over_96k.md'; // 超过 96KB 分块大小的回归夹具（验证读取 offset）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -97,6 +98,14 @@ async function attach(wsUrl) {
 
 const listTargets = async () => { try { return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === 'page'); } catch (e) { return []; } };
 const viewerTargets = async () => (await listTargets()).filter((t) => t.url.includes('page_name=SftpViewerDispatcherPage'));
+/** Markdown 查看器开独立窗口：关掉遗留查看器**独立窗口**（绝不关主窗口，即使主窗口正停在查看器页） */
+const closeAllViewers = async (excludeId) => {
+  for (const t of await viewerTargets()) {
+    if (t.id === excludeId) continue;
+    try { await fetch(`http://127.0.0.1:${PORT}/json/close/${t.id}`); } catch (e) {}
+  }
+  await sleep(400);
+};
 /** 按远端文件名精确匹配查看器窗口（同名文件可能同时开了 txt/md 两个窗口） */
 const viewerFor = async (fileName) => (await viewerTargets()).filter((t) => t.url.includes(encodeURIComponent(fileName)) || t.url.includes(fileName));
 const waitFor = async (fn, ms, step = 500) => { const t0 = Date.now(); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() - t0 > ms) return null; await sleep(step); } };
@@ -150,7 +159,18 @@ setTimeout(() => {
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_DIAGRAM}`, content: Buffer.from(diagramMd, 'utf8').toString('base64') });
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_BIG}`, content: Buffer.from(bigMd, 'utf8').toString('base64') });
 
+    // 超过 SftpTextLoader 分块大小（96KB）的 Markdown：验证第二次 read 的 offset 生效。
+    // 回归背景：Kotlin/JS 下 `Long` 不是 JS Number，浏览器模块 `arr[1] as? Number` 恒为 null →
+    // offset 恒 0 → >96KB 文件被拼成「[0..96K]+[0..N]」重复前缀 → 正文损坏、末尾围栏被截断、
+    // Markdown 解析抛越界 → 退回源码，点「预览」显示空白（用户报的正是这个）。
+    const big96Md = '# 大文件回归\n\n' + Array.from({ length: 2500 }, (_, i) =>
+      `## 章节 ${i + 1}\n\n这是第 ${i + 1} 节内容，用于验证超过 96KB 的文件分块读取偏移是否正确。\n`).join('\n');
+    const big96Bytes = Buffer.byteLength(big96Md, 'utf8');
+    const big96Lines = big96Md.split('\n').length;
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_BIG96}`, content: Buffer.from(big96Md, 'utf8').toString('base64') });
+
     check('T0a 夹具就绪（样例 md + txt + 图表 + 大文档）', !!mdB64, `${FIX_DIR}（md ${Math.round(mdB64.length / 1024)}KB）`);
+    check('T0c 超过 96KB 分块的 Markdown 夹具就绪', big96Bytes > 96 * 1024, `${FIX_MD_BIG96} ${Math.round(big96Bytes / 1024)}KB / ${big96Lines} 行`);
 
     const page = await waitFor(async () => (await listTargets())[0], 40000);
     if (!page) { check('T0b 渲染进程启动', false); return; }
@@ -158,6 +178,18 @@ setTimeout(() => {
     await main.send('Page.enable');
     await waitFor(async () => (await main.body()).includes('SFTP 客户端'), 60000, 1000);
     const base = page.url.split('?')[0];
+    const browserUrl = () => `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}`;
+    /** 打开夹具文件并返回**新开**的查看器窗口（先清理遗留窗口，避免误命中旧窗口） */
+    const openFreshViewer = async (fileName) => {
+      await closeAllViewers(page.id);
+      const before = new Set((await listTargets()).map((t) => t.id));
+      await main.send('Page.navigate', { url: browserUrl() });
+      await waitFor(async () => (await main.body()).includes(fileName), 30000, 700);
+      const clicked = await main.clickText(fileName);
+      const win = await waitFor(async () =>
+        (await listTargets()).find((t) => !before.has(t.id) && t.url.includes('page_name=SftpViewerDispatcherPage')), 25000, 600);
+      return { clicked, win };
+    };
 
     // T0 用户指定目录可列出 md
     await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${DOC_DIR}` });
@@ -168,16 +200,16 @@ setTimeout(() => {
     await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
     await waitFor(async () => (await main.body()).includes(FIX_MD), 45000, 700);
 
-    // T1 点 md → **页内**打开查看器（同一界面，不再新开窗口）
+    // T1 点 md → **独立窗口**打开查看器（桌面壳/Web 宿主支持；其它端回退页内）
     const targetsBefore = (await listTargets()).length;
     const clickedMd = await main.clickText(FIX_MD);
     const w1 = await waitFor(async () => {
       const ts = await listTargets();
       const cur = ts.find((t) => t.url.includes('page_name=SftpViewerDispatcherPage'));
-      return (cur && ts.length === targetsBefore) ? cur : null;
+      return (cur && ts.length === targetsBefore + 1) ? cur : null;
     }, 20000);
-    check('T1 点 .md → 页内打开查看器（同一界面，不新开窗口）', clickedMd && !!w1,
-      `clicked=${clickedMd} 页内查看器=${!!w1} target数=${targetsBefore}->${(await listTargets()).length}`);
+    check('T1 点 .md → 独立窗口打开查看器（target 数 +1，主窗口留在列表）', clickedMd && !!w1,
+      `clicked=${clickedMd} 独立窗口=${!!w1} target数=${targetsBefore}->${(await listTargets()).length}`);
 
     if (w1) {
       const md = await attach(w1.webSocketDebuggerUrl);
@@ -248,18 +280,16 @@ setTimeout(() => {
       check('T4 纯文本查看（页内）', false, '未进入纯文本查看器');
     }
 
-    // 回到夹具目录并重新打开 FIX_MD（查看器已页内：T4 之后页面停在纯文本查看器上）
-    await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
-    await waitFor(async () => (await main.body()).includes(FIX_MD), 30000, 700);
-    await main.clickText(FIX_MD);
-    await waitFor(async () => (await viewerFor(FIX_MD))[0], 20000, 600);
+    // 回到夹具目录并重新打开 FIX_MD（Markdown 开独立窗口；只认新开的那个窗口）
+    const mdOpen = await openFreshViewer(FIX_MD);
+    const mdWin0 = mdOpen.win;
 
     // ---- Vditor 对照用例 ----
     // T9 工具栏：单行、置顶、紧凑（对应 Vditor toolbarConfig.pin，不占大空间）
-    const mdWin0 = (await viewerFor(FIX_MD))[0];
     if (mdWin0) {
       const v9 = await attach(mdWin0.webSocketDebuggerUrl);
       await v9.send('Page.enable');
+      await waitFor(async () => { const b = await v9.body(); return (b.includes('A+') && b.includes('保存')) ? true : null; }, 15000, 500);
       const barInfo = await v9.ev("(()=>{const rows=[...document.querySelectorAll('*')].map(e=>({t:(e.textContent||''),r:e.getBoundingClientRect()})).filter(o=>o.t.includes('A+')&&o.t.includes('换行')&&o.t.includes('保存')&&o.r.height>0);if(!rows.length)return 'null';rows.sort((a,b)=>a.r.height-b.r.height);const r=rows[0].r;return JSON.stringify({h:Math.round(r.height),top:Math.round(r.top),w:Math.round(r.width),txt:rows[0].t.slice(0,40)});})()");
       const bar = barInfo && barInfo !== 'null' ? JSON.parse(barInfo) : null;
       check('T9 工具栏单行置顶紧凑（Vditor toolbar pin 类比）', !!bar && bar.h <= 56 && bar.top <= 60,
@@ -268,7 +298,8 @@ setTimeout(() => {
     }
 
     // T7 即时渲染（Vditor ir 类比）：编辑块 → 在编辑区输入 → **实时预览立即更新**（不点任何按钮）→ 完成 → 正文更新
-    const mdWin = (await viewerFor(FIX_MD))[0];
+    // 复用上面 T9 打开的同一个新窗口（不再用 viewerFor 命中旧窗口）
+    const mdWin = mdWin0;
     let inlinePreview = false, applied = false, oldGone = false, fmtApplied = false;
     if (mdWin) {
       const v7 = await attach(mdWin.webSocketDebuggerUrl);
@@ -326,13 +357,7 @@ setTimeout(() => {
     }
 
     // ---- T11 Mermaid 流程图渲染（共享降级实现：节点 + 边标签 + 箭头）----
-    const openFixture = async (fileName) => {
-      await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
-      await waitFor(async () => (await main.body()).includes(fileName), 30000, 700);
-      const clicked = await main.clickText(fileName);
-      const win = await waitFor(async () => (await viewerFor(fileName))[0], 25000, 600);
-      return { clicked, win };
-    };
+    const openFixture = (fileName) => openFreshViewer(fileName);
 
     const dia = await openFixture(FIX_MD_DIAGRAM);
     let diaOk = false, diaText = '';
@@ -396,18 +421,43 @@ setTimeout(() => {
     }
     check('T13 文档缓存（二次打开同一文件直接渲染）', cacheOk, cacheOk ? '命中缓存并渲染' : '未渲染');
 
-    // T5 页内返回：查看器返回键回到文件列表（同一界面，不新开窗口），可再次进入
+    // ---- T14 超过 96KB 的 Markdown：分块读取 offset 正确（回归：offset 丢失导致重复前缀损坏）----
+    const big96 = await openFixture(FIX_MD_BIG96);
+    let big96Ok = false, big96Info = '';
+    if (big96.win) {
+      const go = await attach(big96.win.webSocketDebuggerUrl);
+      go.send('Page.enable');
+      const t = await waitFor(async () => {
+        const b = await go.body();
+        return (b.includes('源码') && b.includes('章节 1')) ? b : null;
+      }, 40000, 700);
+      const bd = await go.body();
+      const notSource = !bd.includes('仅渲染前');       // 未退回「源码/1500 行截断」态
+      const tocOk = /目录\s?\d+/.test(bd) && !/目录\s?0(\D|$)/.test(bd);
+      const lm = bd.match(/([\d,]+)\s*行/);
+      const gotLines = lm ? Number(lm[1].replace(/,/g, '')) : -1;
+      const linesOk = gotLines === big96Lines;          // 行数一致 = 无重复前缀/未截断
+      big96Ok = !!t && notSource && tocOk && linesOk;
+      big96Info = `渲染=${!!t} 非源码态=${notSource} 目录>0=${tocOk} 行数=${gotLines}/${big96Lines}`;
+      await go.shot('text-viewer-big96.png');
+      go.close();
+    }
+    check('T14 超过 96KB 的 Markdown 分块读取 offset 正确（不退源码/无重复前缀）', big96Ok, big96Info);
+
+    // T5 独立窗口返回：点「<」关闭查看器窗口，主窗口仍在文件列表（主界面不受影响）
     const backToList = await (async () => {
       const v = (await viewerFor(FIX_MD))[0] || (await viewerTargets())[0];
       if (!v) return false;
+      const vid = v.id;
       const f = await attach(v.webSocketDebuggerUrl);
       await f.send('Page.enable');
       await f.clickText('<');
-      const ok = await waitFor(async () => ((await listTargets()).some((t) => t.url.includes('page_name=SftpBrowserPage')) ? true : null), 12000, 600);
       f.close();
-      return ok;
+      const closed = await waitFor(async () => (!(await listTargets()).some((t) => t.id === vid) ? true : null), 12000, 500);
+      const mainStillList = (await listTargets()).some((t) => t.url.includes('page_name=SftpBrowserPage'));
+      return closed && mainStillList;
     })();
-    check('T5 页内查看器返回 → 回到文件列表（同界面，不新开窗口）', backToList, `返回列表=${backToList}`);
+    check('T5 查看器独立窗口返回 → 关窗，主窗口仍在文件列表', backToList, `关窗并留在列表=${backToList}`);
 
     check('T6 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {
