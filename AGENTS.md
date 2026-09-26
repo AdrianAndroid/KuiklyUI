@@ -101,6 +101,10 @@
    - **当前分支就是 `zhaojian`**：提交后**立即** `git push origin zhaojian`，保持远端同步。
    - **当前是单独分支（feature/agent）**：每当「功能实现且**受影响用例验证通过**」（或规则/文档节点）后，
      **立即**同步到 `zhaojian` —— 推到 `origin/zhaojian`，并在干净的主 clone 上快进本地 `zhaojian`。
+   - **双向同步，保证所有分支提交一致**：同步**不只是推上去，也要拉下来** —— 除把成果推到 `zhaojian` 外，
+     还要把 `zhaojian` 的最新提交同步回当前分支，确保所有分支提交一致。一键：
+     `node scripts/sync-main.mjs --both`（= 先 `--pull` 拉最新 zhaojian，再成果同步推回去）。
+     每次同步后应核对：`本 worktree HEAD == origin/zhaojian == 本地 zhaojian == 主 clone HEAD`。
    - **同步遇冲突必须先解决冲突，再验证，最后才同步**：向 `zhaojian` 同步前若 rebase/merge 出现冲突，
      必须**先人工解决冲突**（逐个文件，理解双方改动，不丢功能）；冲突解决后**必须重新跑受影响的测试用例**
      （按规则 9 选测；构建/编译也必须通过）；**只有验证通过后**才 `git push`/同步到 `zhaojian`。
