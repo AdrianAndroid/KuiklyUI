@@ -706,6 +706,10 @@ const waitFor = async (fn, ms, step = 500) => {
     check('F30 「更多」半模态：有关闭按钮且可点遮罩关闭', !!drawer2 && hasClose && closedByBtn && closedByMask, `抽屉=${!!drawer2} 关闭按钮=${hasClose} 按钮关闭=${closedByBtn} 遮罩关闭=${closedByMask}`);
     check('F30b 「更多」半模态：卡片末行完整可见且遮罩覆盖整屏', cardFullyVisible && maskCoversTop, `末行在屏内=${cardFullyVisible} 遮罩盖满=${maskCoversTop}`);
 
+    // F32 Debug 构建标识：开发态（未打包）首页标题旁显示 DEBUG（Release/打包版不显示）
+    const debugBadge = (await main.body()).includes('DEBUG');
+    check('F32 Debug 构建显示 DEBUG 标识（首页标题旁；Release 不显示）', debugBadge, `首页含 DEBUG=${debugBadge}`);
+
     check('F13 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {
     console.log('ERROR | ' + String((e && e.stack) || e).slice(0, 400));

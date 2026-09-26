@@ -991,6 +991,14 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   （Web/桌面 true；native false → 隐藏，绝不伪报）。Web 实现优先 `navigator.clipboard.writeText`，回退 `textarea+execCommand`。
 - 用途：用户遇到打不开的路径时一键复制 `host:path` 反馈。用例 **F25**（含剪贴板内容校验）。
 
+### 13.1.8 DEBUG 标识（Web / 桌面，2026-09 新增）
+
+- 首页标题「SFTP 客户端」旁在**开发态**显示橙色 `DEBUG` 徽标，**Release 打包版不显示**。
+- 判定链：`BridgeModule.isDebugBuild()`（commonMain）→ h5App 读 `window.__KR_DEBUG__`
+  → `electron/preload.js` 由主进程 `--debug=1/0` 注入 → `main.js` 用 `!app.isPackaged` 决定
+  （另开窗口同样带该参数）。普通浏览器 Web 未注入 → false；native 端未实现 → 返回 false（不报错、不显示）。
+- 用例 **F32**（开发态首页含 `DEBUG`）。
+
 ### 13.1.4 双栏文件管理器（Web / 桌面，2026-09 新增）
 
 `core/file-manager/`（纯状态机，jvm+js，76/76 单测）+ `demo/src/jsMain/.../FilesDualPanePage.kt`（双栏 UI）

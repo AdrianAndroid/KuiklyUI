@@ -35,6 +35,13 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
                 if (ok) "{\"supported\":true}" else "{\"supported\":false}"
             }
 
+            // 是否 Debug 构建（界面 DEBUG 标识）：宿主 preload 注入 window.__KR_DEBUG__
+            // （Electron 侧由 app.isPackaged 决定；普通 Web 未注入 → false）
+            "isDebugBuild" -> {
+                val dbg = js("(typeof window !== 'undefined' && window.__KR_DEBUG__ === true)") as Boolean
+                if (dbg) "{\"debug\":true}" else "{\"debug\":false}"
+            }
+
             // 读取器保存：把内容写到宿主的本地临时文件，返回绝对路径（供 upload(localPath) 使用）
             //
             // 注意：不要用 `js("...cb(...)")` 引用 Kotlin 局部 `cb` —— Kotlin/JS 下该局部在

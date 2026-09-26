@@ -11,7 +11,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 const arg = (process.argv.find((a) => a.startsWith('--gateway=')) || '').replace('--gateway=', '');
 const gatewayUrl = arg || 'http://127.0.0.1:18090';
 
+// Debug 标识：主进程按 app.isPackaged 传入 `--debug=1/0`（Release 打包版为 0）
+const debugArg = process.argv.find((a) => a.startsWith('--debug=')) || '';
+const isDebug = debugArg.endsWith('=1');
+
 contextBridge.exposeInMainWorld('__SFTP_GATEWAY_URL__', gatewayUrl);
+contextBridge.exposeInMainWorld('__KR_DEBUG__', isDebug);
 
 contextBridge.exposeInMainWorld('kuiklyHost', {
   // 另存为：{ suggestedName, base64 } -> { ok, path }

@@ -43,6 +43,17 @@ internal class BridgeModule : Module() {
     }
 
     /**
+     * 是否为 Debug 构建（用于界面展示 DEBUG 标识；Release 不显示）。
+     * Web/桌面：由宿主注入的 `window.__KR_DEBUG__` 决定（Electron 用 `app.isPackaged`）；
+     * 原生端：未实现时返回 false（不显示标识，绝不报错）。
+     */
+    fun isDebugBuild(): Boolean {
+        val res = syncToNativeMethod(IS_DEBUG_BUILD, JSONObject(), null)
+        return runCatching { JSONObject(res).optBoolean("debug", false) }
+            .getOrDefault(res.trim() == "true")
+    }
+
+    /**
      * 桌面/Web 宿主：把内容写入宿主的本地临时文件并返回绝对路径。
      * 读取器保存时用「写临时文件 + SftpModule.upload(localPath)」，避免新增各端原生方法。
      * 仅当 [supportsPlayerWindow] 为 true（Web/桌面壳）时才调用 → 原生端不需要实现。
@@ -358,6 +369,7 @@ internal class BridgeModule : Module() {
     companion object {
         const val SUPPORTS_PLAYER_WINDOW = "supportsPlayerWindow"
         const val OPEN_PLAYER_WINDOW = "openPlayerWindow"
+        const val IS_DEBUG_BUILD = "isDebugBuild"
         const val SAVE_TEMP_FILE = "saveTempFile"
         const val SUPPORTS_TERMINAL = "supportsTerminal"
         const val CACHE_ROOT = "cacheRoot"

@@ -26,6 +26,8 @@ const path = require('path');
 // 窗口标题带实例名便于区分多个测试应用；userData 指向实例私有目录（隔离连接/收藏/历史/网关数据）。
 const INSTANCE = process.env.KR_INSTANCE ? String(process.env.KR_INSTANCE) : '';
 const WINDOW_TITLE = INSTANCE ? `Kuikly SFTP [${INSTANCE}]` : 'Kuikly SFTP';
+// Debug 构建：开发态（未打包）为 true → 界面显示 DEBUG 标识；打包（dmg）后为 false → 不显示
+const IS_DEBUG = !app.isPackaged;
 if (process.env.KR_USER_DATA_DIR) {
   try { app.setPath('userData', path.resolve(process.env.KR_USER_DATA_DIR)); }
   catch (e) { console.warn('[electron] 设置 userData 失败：', e.message); }
@@ -86,7 +88,7 @@ async function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       // 把网关地址传给 preload（sandbox 下 preload 可读 process.argv）
-      additionalArguments: ['--gateway=' + gatewayUrl],
+      additionalArguments: ['--gateway=' + gatewayUrl, '--debug=' + (IS_DEBUG ? '1' : '0')],
     },
   });
 
@@ -220,7 +222,7 @@ function createPlayerWindow(playerQuery) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: ['--gateway=' + gatewayUrl],
+      additionalArguments: ['--gateway=' + gatewayUrl, '--debug=' + (IS_DEBUG ? '1' : '0')],
     },
   });
   playerWindows.add(win);

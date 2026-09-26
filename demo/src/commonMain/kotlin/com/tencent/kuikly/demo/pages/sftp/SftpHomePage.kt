@@ -66,6 +66,8 @@ internal class SftpHomePage : SftpBasePager() {
     private var currentTab: Int by observable(0)  // 0 连接 / 1 收藏 / 2 历史
     /** 右下角「更多」抽屉（设置 / 缓存列表 / 关于） */
     private var moreVisible: Boolean by observable(false)
+    /** 是否 Debug 构建（标题旁显示 DEBUG 标识；Release 不显示） */
+    private var isDebug: Boolean by observable(false)
     /** 删除连接的二级确认弹窗 */
     private var deleteConnVisible: Boolean by observable(false)
     private var pendingDeleteConn: SftpConnection? = null
@@ -104,13 +106,36 @@ internal class SftpHomePage : SftpBasePager() {
                     padding(16f, 8f, 16f, 8f)
                     backgroundColor(SftpColorTokens.cardBg)
                 }
-                Text {
-                    attr {
-                        text("SFTP 客户端")
-                        fontSize(18f)
-                        fontWeightBold()
-                        color(SftpColorTokens.textPrimary)
-                        flex(1f)
+                View {
+                    attr { flex(1f); flexDirectionRow(); alignItemsCenter() }
+                    Text {
+                        attr {
+                            text("SFTP 客户端")
+                            fontSize(18f)
+                            fontWeightBold()
+                            color(SftpColorTokens.textPrimary)
+                        }
+                    }
+                    // Debug 构建标识（Release 打包版不显示）
+                    vif({ ctx.isDebug }) {
+                        View {
+                            attr {
+                                marginLeft(8f)
+                                padding(6f, 2f, 6f, 2f)
+                                borderRadius(4f)
+                                backgroundColor(Color(0xFFFF7043.toInt()))
+                                allCenter()
+                                accessibility("debug_badge")
+                            }
+                            Text {
+                                attr {
+                                    text("DEBUG")
+                                    fontSize(10f)
+                                    fontWeightBold()
+                                    color(Color(0xFFFFFFFF.toInt()))
+                                }
+                            }
+                        }
                     }
                 }
                 // 双栏文件管理器入口（需宿主本地文件能力：Web/桌面 & 原生端沙盒）
@@ -573,6 +598,7 @@ internal class SftpHomePage : SftpBasePager() {
 
     override fun created() {
         super.created()
+        isDebug = runCatching { Utils.bridgeModule(this).isDebugBuild() }.getOrDefault(false)
         refresh()
         refreshCacheState()
         scheduleCachePoll()
