@@ -19,6 +19,9 @@
  *
  * 退出码：0 成功 / 1 本 worktree 有未提交改动 / 2 需等待(<30min) / 3 超过 30min 跳过 /
  *         4 分叉需人工 / 5 push 失败 / 6 pull 冲突需人工
+ *
+ * 冲突处理铁律（AGENTS.md §3 规则 7）：先解决冲突 → 重新跑受影响用例验证（构建/编译也要过）→ 才同步；
+ * 未解决冲突或未验证通过绝不推送。
  */
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -90,11 +93,13 @@ function runPull() {
   if (DRY) { log(`[dry] 将把 ${name} 以 ${PULL_MODE} 方式合入 ${current}`); process.exit(0); }
 
   if (PULL_MODE === 'merge') {
-    if (!gitOk(['merge', '--no-edit', base])) die(6, `merge ${name} 冲突；请人工解决（git merge --abort 可放弃）`);
+    if (!gitOk(['merge', '--no-edit', base])) {
+      die(6, `merge ${name} 冲突；请人工解决冲突 → 重新跑受影响用例验证 → 再 git commit（git merge --abort 可放弃）。规则见 AGENTS.md §3 规则 7`);
+    }
   } else {
     if (!gitOk(['rebase', base])) {
       gitOk(['rebase', '--abort']);   // 冲突：回退，保持干净
-      die(6, `rebase 到 ${name} 冲突，已 abort；请人工 rebase 后再开发`);
+      die(6, `rebase 到 ${name} 冲突，已 abort；请人工 rebase 解决冲突 → 重新跑受影响用例验证 → 再同步（规则 AGENTS.md §3 规则 7）`);
     }
   }
   log(`已同步 ${name} → ${current} ✓（HEAD ${git(['rev-parse', '--short', 'HEAD'])}）`);
