@@ -73,6 +73,11 @@ internal class SftpBrowserPage : SftpBasePager() {
     private var errorMsg: String? by observable(null)
     private var currentPath: String by observable("/")
 
+    // —— 收藏两态（未收藏 ☆ / 已收藏 ★）——
+    // 当前连接下已收藏的远端路径集合；favoriteVersion 为 observable，供 vif/attr 读取以触发重渲染。
+    private val favoritePathSet = mutableSetOf<String>()
+    private var favoriteVersion by observable(0)
+
     // —— 缓存（目录 / 单文件）——
     /** 本地缓存根目录（空 = 本端不支持，入口隐藏，绝不伪报成功） */
     private var cacheRoot: String = ""
@@ -195,6 +200,8 @@ internal class SftpBrowserPage : SftpBasePager() {
                 entries.addAll(items.sortedWith(compareBy({ it.name.lowercase() }, { it.name })))
                 loading = false
                 errorMsg = null
+                // 列目录后刷新收藏两态（行内/当前目录按钮据此切换 ☆/★）
+                refreshFavorites()
             }
         }
     }
@@ -292,14 +299,20 @@ internal class SftpBrowserPage : SftpBasePager() {
                         Text { attr { text("⧉"); fontSize(17f); color(SftpColorTokens.primary) } }
                     }
                 }
-                // 右上角：收藏当前目录（可点容器）
-                View {
-                    attr {
-                        width(38f); height(38f); allCenter()
-                        accessibility("favorite_current_dir")
+                // 右上角：收藏当前目录（两态按钮：未收藏 ☆ / 已收藏 ★）
+                vif({ ctx.isFavoritePath(ctx.currentPath) }) {
+                    View {
+                        attr { width(38f); height(38f); allCenter(); accessibility("unfavorite_current_dir") }
+                        event { click { ctx.toggleFavoriteDir() } }
+                        Text { attr { text("★"); fontSize(17f); color(SftpColorTokens.primary) } }
                     }
-                    event { click { ctx.toggleFavoriteDir() } }
-                    Text { attr { text("⭐"); fontSize(17f); color(SftpColorTokens.primary) } }
+                }
+                velse {
+                    View {
+                        attr { width(38f); height(38f); allCenter(); accessibility("favorite_current_dir") }
+                        event { click { ctx.toggleFavoriteDir() } }
+                        Text { attr { text("☆"); fontSize(17f); color(SftpColorTokens.textSecondary) } }
+                    }
                 }
                 // 右上角：切到双栏（本地 ↔ 当前远端目录）—— 需宿主本地文件能力
                 vif({ ctx.localFsSupported }) {
@@ -327,10 +340,11 @@ internal class SftpBrowserPage : SftpBasePager() {
                 }
                 velse {
                     SftpEntriesView(
-                        { ctx.entries },
-                        { entry -> ctx.onEntryClick(entry) },
-                        { e -> ctx.favoriteEntry(e) },
-                        if (ctx.cacheSupported) { { e -> ctx.requestCache(e) } } else null,
+                        entriesProvider = { ctx.entries },
+                        onClick = { entry -> ctx.onEntryClick(entry) },
+                        isFavorited = { path -> ctx.isFavoritePath(path) },
+                        onToggleFavorite = { e -> ctx.toggleFavoriteEntry(e) },
+                        onCache = if (ctx.cacheSupported) { { e -> ctx.requestCache(e) } } else null,
                     )
                 }
             }
@@ -461,40 +475,95 @@ internal class SftpBrowserPage : SftpBasePager() {
         }
     }
 
-    /** 收藏当前目录（已收藏再点则取消） */
-    internal fun toggleFavoriteDir() {
-        if (connectionId.isEmpty()) { Utils.bridgeModule(this).toast("请先从连接列表进入"); return }
-        val fav = com.tencent.kuikly.core.module.sftp.SftpFavorite(
-            id = connectionId + "::" + currentPath,
-            connectionId = connectionId,
-            connectionLabel = connectionLabel,
-            remotePath = currentPath,
-            name = currentPath.substringAfterLast('/').ifEmpty { "/" },
-            isDir = true,
-            size = 0L,
-            starredAt = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp(),
-        )
-        sftpFavoritesModule().add(fav) { id, err ->
-            val msg = if (err != null) "收藏失败：" + err.msg else "已收藏目录"
-            Utils.bridgeModule(this).toast(msg)
+    /** 当前连接下该远端路径是否已收藏（读 favoriteVersion 以在 vif/attr 内建立响应式依赖）。 */
+    internal fun isFavoritePath(path: String): Boolean {
+        val rev = favoriteVersion   // 读取 observable：在 vif/attr 内调用可建立响应式依赖
+        return rev >= 0 && favoritePathSet.contains(path)
+    }
+
+    /** 拉取当前连接的收藏，刷新两态按钮（列目录后 / 收藏变更后调用）。 */
+    private fun refreshFavorites() {
+        sftpFavoritesModule().list(connectionId.takeIf { it.isNotEmpty() }) { items, _ ->
+            val set = items.filter { it.connectionId == connectionId }.map { it.remotePath }.toSet()
+            favoritePathSet.clear()
+            favoritePathSet.addAll(set)
+            favoriteVersion++
         }
     }
 
-    /** 收藏一个条目（文件或目录） */
-    internal fun favoriteEntry(entry: SftpEntry) {
-        val fav = com.tencent.kuikly.core.module.sftp.SftpFavorite(
-            id = connectionId + "::" + entry.path,
-            connectionId = connectionId,
-            connectionLabel = connectionLabel,
-            remotePath = entry.path,
-            name = entry.name,
-            isDir = entry.isDir,
-            size = entry.size,
-            starredAt = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp(),
-        )
-        sftpFavoritesModule().add(fav) { _, err ->
-            val msg = if (err != null) "收藏失败：" + err.msg else if (entry.isDir) "已收藏目录" else "已收藏文件"
-            Utils.bridgeModule(this).toast(msg)
+    /** 本地即时更新某路径的收藏态（不等待原生回包刷新，交互更跟手）。 */
+    private fun markFavoriteLocal(path: String, favorited: Boolean) {
+        if (favorited) favoritePathSet.add(path) else favoritePathSet.remove(path)
+        favoriteVersion++
+    }
+
+    /** 收藏当前目录：未收藏 → 收藏；已收藏 → 取消（两态按钮）。 */
+    internal fun toggleFavoriteDir() {
+        if (connectionId.isEmpty()) { Utils.bridgeModule(this).toast("请先从连接列表进入"); return }
+        val path = currentPath
+        val id = connectionId + "::" + path
+        if (isFavoritePath(path)) {
+            sftpFavoritesModule().remove(id) { ok, err ->
+                if (err != null || !ok) {
+                    Utils.bridgeModule(this).toast("取消收藏失败：" + (err?.msg ?: ""))
+                } else {
+                    markFavoriteLocal(path, false)
+                    Utils.bridgeModule(this).toast("已取消收藏目录")
+                }
+            }
+        } else {
+            val fav = com.tencent.kuikly.core.module.sftp.SftpFavorite(
+                id = id,
+                connectionId = connectionId,
+                connectionLabel = connectionLabel,
+                remotePath = path,
+                name = path.substringAfterLast('/').ifEmpty { "/" },
+                isDir = true,
+                size = 0L,
+                starredAt = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp(),
+            )
+            sftpFavoritesModule().add(fav) { _, err ->
+                if (err != null) {
+                    Utils.bridgeModule(this).toast("收藏失败：" + err.msg)
+                } else {
+                    markFavoriteLocal(path, true)
+                    Utils.bridgeModule(this).toast("已收藏目录")
+                }
+            }
+        }
+    }
+
+    /** 收藏一个条目：未收藏 → 收藏；已收藏 → 取消（文件与目录都适用）。 */
+    internal fun toggleFavoriteEntry(entry: SftpEntry) {
+        val id = connectionId + "::" + entry.path
+        if (isFavoritePath(entry.path)) {
+            sftpFavoritesModule().remove(id) { ok, err ->
+                if (err != null || !ok) {
+                    Utils.bridgeModule(this).toast("取消收藏失败：" + (err?.msg ?: ""))
+                } else {
+                    markFavoriteLocal(entry.path, false)
+                    Utils.bridgeModule(this).toast(if (entry.isDir) "已取消收藏目录" else "已取消收藏文件")
+                }
+            }
+        } else {
+            val fav = com.tencent.kuikly.core.module.sftp.SftpFavorite(
+                id = id,
+                connectionId = connectionId,
+                connectionLabel = connectionLabel,
+                remotePath = entry.path,
+                name = entry.name,
+                isDir = entry.isDir,
+                size = entry.size,
+                starredAt = com.tencent.kuikly.core.datetime.DateTime.currentTimestamp(),
+            )
+            sftpFavoritesModule().add(fav) { _, err ->
+                if (err != null) {
+                    Utils.bridgeModule(this).toast("收藏失败：" + err.msg)
+                } else {
+                    markFavoriteLocal(entry.path, true)
+                    Utils.bridgeModule(this).toast(if (entry.isDir) "已收藏目录" else "已收藏文件")
+                }
+            }
         }
     }
 
@@ -623,7 +692,8 @@ internal class SftpBrowserPage : SftpBasePager() {
 internal fun ViewContainer<*, *>.SftpEntriesView(
     entriesProvider: () -> ObservableList<SftpEntry>,
     onClick: (SftpEntry) -> Unit,
-    onFavorite: (SftpEntry) -> Unit = { },
+    isFavorited: (String) -> Boolean = { false },
+    onToggleFavorite: (SftpEntry) -> Unit = { },
     onCache: ((SftpEntry) -> Unit)? = null
 ) {
     // 必须放在滚动容器里：此前行直接铺在普通 View 上，没有滚动能力，
@@ -674,16 +744,21 @@ internal fun ViewContainer<*, *>.SftpEntriesView(
                         }
                     }
                 }
-                // 行内收藏（文件与目录都可收藏）：用可点容器（Way 与首页 ⇄ />_ 一致，裸 Text+event 在本页点击不生效）
-                View {
-                    attr {
-                        width(38f)
-                        height(38f)
-                        allCenter()
-                        accessibility("favorite_entry")
+                // 行内收藏两态按钮：未收藏 ☆ / 已收藏 ★（文件与目录都可收藏）。
+                // 必须在 vif 的 lambda 内读收藏态，依赖才会被收集（结构层读取不会触发重渲染）。
+                vif({ isFavorited(entry.path) }) {
+                    View {
+                        attr { width(38f); height(38f); allCenter(); accessibility("unfavorite_entry") }
+                        event { click { onToggleFavorite(entry) } }
+                        Text { attr { text("★"); fontSize(15f); color(SftpColorTokens.primary) } }
                     }
-                    event { click { onFavorite(entry) } }
-                    Text { attr { text("⭐"); fontSize(15f); color(SftpColorTokens.primary) } }
+                }
+                velse {
+                    View {
+                        attr { width(38f); height(38f); allCenter(); accessibility("favorite_entry") }
+                        event { click { onToggleFavorite(entry) } }
+                        Text { attr { text("☆"); fontSize(15f); color(SftpColorTokens.textSecondary) } }
+                    }
                 }
                 // 行内缓存（目录递归缓存 / 单文件缓存）：仅在支持本地缓存的端显示
                 if (onCache != null) {

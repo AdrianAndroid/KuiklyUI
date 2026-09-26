@@ -155,31 +155,30 @@ const waitFor = async (fn, ms, step = 500) => {
 
     const listed = await waitFor(async () => { const t = await main.body(); return t.includes('file_a.txt') ? t : null; }, 45000, 700);
 
-    // F2/F3 行尾 ⭐ 收藏目录 / 文件（点「列表里」的 ⭐：y 在导航栏之下；结果用网关 favorites.list 判定）
+    // F2/F3 行内收藏两态按钮（未收藏 ☆ / 已收藏 ★；结果用网关 favorites.list 判定）
     // 注意：页面用的是 Electron 自带网关（独立 data 目录），因此必须**在页面内**调网关读取
     const favDump = async () => await main.ev(pageFetch('favorites', 'list', {}), true);
     const favNames = async () => {
       const txt = await main.ev(pageFetch('favorites', 'list', {}), true);
       try { return String((JSON.parse(String(txt)).items || []).map((x) => x.name).join(',') || '').split(',').filter(Boolean); } catch (e) { return []; }
     };
-    // 点击后校验；未生效则重试（最多 3 次，避免渲染时序导致漏点）
-    // 断言策略：点「列表内 ⭐」按索引（夹具目录只有 dir_a / file_a.txt，目录优先）
-    //  → 第 1 个 = 目录（需求：文件夹可收藏）；第 2 个 = 文件（需求：文件可收藏）
     const favCount = async () => (await favNames()).length;
     const favHas = async (n) => (await favNames()).includes(n);
-    const clickListStar = async (index) => {
-      const pos = await main.ev("(()=>{const stars=[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()==='⭐'&&e.getBoundingClientRect().width>1&&e.getBoundingClientRect().top>60);if(stars.length<=" + (index + 1) + ")return null;const r=stars[" + index + "].getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+    const UNFAV = '☆';   // 未收藏态按钮字形
+    const FAVED = '★';   // 已收藏态按钮字形
+    // 点击「列表内」某字形的第 index 个（top>60 排除导航栏，避免点到当前目录按钮）
+    const clickListGlyph = async (index, glyph) => {
+      const pos = await main.ev("(()=>{const g=" + JSON.stringify(glyph) + ";const els=[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()===g&&e.getBoundingClientRect().width>1&&e.getBoundingClientRect().top>60);if(els.length<=" + (index + 1) + ")return null;const r=els[" + index + "].getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
       if (!pos) return false;
       const p = JSON.parse(pos);
       await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(150);
       await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
       await sleep(1000); return true;
     };
-    const starCount = async () => Number(await main.ev("(()=>[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()==='⭐'&&e.getBoundingClientRect().width>1&&e.getBoundingClientRect().top>60).length)()"));
-    // 按名字点「该行内」的 ⭐（不依赖行序/序号，避免多夹具时点到别的行）
-    const clickStarInRow = async (name) => {
-      // 名称文本 → 向上找含 ⭐ 的行 → 点行内 ⭐（与缓存按钮同款定位，避免误点导航栏 ⭐）
-      const pos = await main.ev("(()=>{const name=" + JSON.stringify(name) + ";const all=[...document.querySelectorAll('*')];const nameEl=all.find(e=>(e.textContent||'').trim()===name&&e.getBoundingClientRect().width>0);if(!nameEl)return null;let p=nameEl.parentElement;for(let i=0;i<8&&p;i++){const ss=[...p.querySelectorAll('*')].filter(c=>(c.textContent||'').trim()==='⭐');if(ss.length){const r=ss[0].getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});}p=p.parentElement;}return null;})()");
+    const listGlyphCount = async (glyph) => Number(await main.ev("(()=>{const g=" + JSON.stringify(glyph) + ";return [...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()===g&&e.getBoundingClientRect().width>1&&e.getBoundingClientRect().top>60).length;})()"));
+    // 按名字点「该行内」指定字形的按钮（不依赖行序/序号，避免多夹具时点到别的行）
+    const clickGlyphInRow = async (name, glyph) => {
+      const pos = await main.ev("(()=>{const name=" + JSON.stringify(name) + ";const g=" + JSON.stringify(glyph) + ";const all=[...document.querySelectorAll('*')];const nameEl=all.find(e=>(e.textContent||'').trim()===name&&e.getBoundingClientRect().width>0);if(!nameEl)return null;let p=nameEl.parentElement;for(let i=0;i<8&&p;i++){const ss=[...p.querySelectorAll('*')].filter(c=>(c.textContent||'').trim()===g);if(ss.length){const r=ss[0].getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});}p=p.parentElement;}return null;})()");
       if (!pos) return false;
       const p = JSON.parse(pos);
       await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(150);
@@ -188,17 +187,38 @@ const waitFor = async (fn, ms, step = 500) => {
     };
     const favByRow = async (name) => {
       for (let i = 0; i < 3; i++) {
-        await clickStarInRow(name);
+        await clickGlyphInRow(name, UNFAV);
         if (await waitFor(async () => ((await favHas(name)) ? true : null), 5000, 500)) return true;
       }
       return false;
     };
     const dirFav = await favByRow('dir_a');
-    check('F1 目录行 ⭐ 收藏（文件夹可收藏）', dirFav, `列表含 dir_a=${dirFav} 当前=${JSON.stringify(await favNames())}`);
+    check('F1 目录行 ☆ 收藏（文件夹可收藏）', dirFav, `列表含 dir_a=${dirFav} 当前=${JSON.stringify(await favNames())}`);
     const fileFav = await favByRow('file_a.txt');
-    check('F2 文件行 ⭐ 收藏（文件可收藏）', fileFav, `列表含 file_a.txt=${fileFav} 当前=${JSON.stringify(await favNames())}`);
+    check('F2 文件行 ☆ 收藏（文件可收藏）', fileFav, `列表含 file_a.txt=${fileFav} 当前=${JSON.stringify(await favNames())}`);
     check('F3 收藏列表同时含目录与文件', (await favCount()) >= 2, `count=${await favCount()}`);
     await main.shot('features-favorite-add.png');
+
+    // F3b/F3c/F3d 两态按钮：收藏后行内按钮由 ☆ 变 ★；点 ★ 取消收藏后回到 ☆（两态对应不同按钮）
+    const favedCount = await listGlyphCount(FAVED);
+    check('F3b 收藏后行内按钮变为已收藏态 ★（两态不同按钮）', favedCount >= 2, `已收藏★数=${favedCount} 未收藏☆数=${await listGlyphCount(UNFAV)}`);
+    const unfavOk = await (async () => {
+      for (let i = 0; i < 3; i++) {
+        await clickGlyphInRow('dir_a', FAVED);
+        if (await waitFor(async () => ((await favHas('dir_a')) ? null : true), 5000, 500)) return true;
+      }
+      return false;
+    })();
+    check('F3c 点已收藏按钮 ★ → 取消收藏且不在收藏列表', unfavOk, `含 dir_a=${await favHas('dir_a')}`);
+    const backToUnfav = await (async () => {
+      for (let i = 0; i < 3; i++) {
+        await clickGlyphInRow('dir_a', UNFAV);
+        if (await waitFor(async () => ((await favHas('dir_a')) ? true : null), 5000, 500)) return true;
+      }
+      return false;
+    })();
+    check('F3d 取消后按钮回到未收藏 ☆ 且可再次收藏', backToUnfav, `含 dir_a=${await favHas('dir_a')}`);
+    await main.shot('features-favorite-two-state.png');
 
     // F4/F5 收藏 Tab 可见并可点击打开
     await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });

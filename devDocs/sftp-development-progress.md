@@ -168,7 +168,7 @@
 
 **UI 页面**（`demo/src/commonMain/.../pages/sftp/`，自研 DSL）：
 - `SftpHomePage` — 连接列表 + 新建/编辑/删除 + 测试连接 + 收藏 Tab + 历史 Tab
-- `SftpBrowserPage` — 目录浏览 + 排序 + 过滤 + 多选 + 心心收藏 + 面包屑 + 三态
+- `SftpBrowserPage` — 目录浏览 + 排序 + 过滤 + 多选 + **收藏两态按钮（未收藏 ☆ / 已收藏 ★，点 ★ 取消）** + 面包屑 + 三态
 - `SftpPlayerPage` — 视频播放 + 续播提示 + 选集抽屉 + 自动下一集倒计时 + 首帧超时 + mpv OSC 风格控件
 - `SftpFavoritesPage` / `SftpHistoryPage` / `SftpFilePropsPage` / `SftpBatchProgressDialog` / `SftpConnectEditPage`
 - `SftpIntegrationTestPage` — 74 项集成自测页，逐条断言后落日志
