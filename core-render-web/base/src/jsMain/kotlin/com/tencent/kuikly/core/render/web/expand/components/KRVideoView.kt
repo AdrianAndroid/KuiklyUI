@@ -135,6 +135,8 @@ class KRVideoView : IKuiklyRenderViewExport {
             firstFrameCallback?.invoke(mapOf<String, Any>())
             // 元数据就绪后再补发早到的 seek（否则 seekTo 会被丢弃）
             flushPendingSeek()
+            // 换源后浏览器会重置 playbackRate 为 1.0；这里按上次的速率重设
+            pendingRate?.let { ele.playbackRate = it }
             // 换源（切换选集/重试）后浏览器必然回到暂停态，而引擎不会重复下发 playControl
             // → 若用户意图是「播放」，在此恢复播放，否则新一集只加载不播放
             if (wantPlay) ele.play()
@@ -247,7 +249,9 @@ class KRVideoView : IKuiklyRenderViewExport {
 
             RATE -> {
                 // Set playback rate
-                ele.playbackRate = (propValue.unsafeCast<Number>()).toDouble()
+                val rate = (propValue.unsafeCast<Number>()).toDouble()
+                ele.playbackRate = rate
+                pendingRate = rate
                 true
             }
 
@@ -294,6 +298,12 @@ class KRVideoView : IKuiklyRenderViewExport {
 
     /** 元数据未就绪时暂存的 seek（毫秒），loadeddata 后补发 */
     private var pendingSeekMs: Long = -1L
+
+    /**
+     * 元数据未就绪或刚切源时暂存的播放倍速，loadeddata/换源后补发
+     * （切换选集后浏览器会重置 <video> 的 playbackRate，回退到 1.0；这里记录并重发）
+     */
+    private var pendingRate: Double? = null
 
     /**
      * 显式跳转（毫秒）。时长未知（元数据未加载）时先暂存，避免 seek 被静默丢弃。
@@ -356,6 +366,8 @@ class KRVideoView : IKuiklyRenderViewExport {
         val source = src ?: return
         // Set playback source
         ele.src = source
+        // 浏览器换源后 <video> 的 playbackRate 会回到 1.0；立即按上次值回设（loadeddata 里也会兜底）
+        pendingRate?.let { ele.playbackRate = it }
     }
 
     /**

@@ -81,6 +81,10 @@
    （如单条用例 >30s、整轮 >5min、`rpc`/联网请求无响应）时，先判断是否正常耗时 → 不正常则**立即停止/杀掉子进程/跳过该用例**，
    记录原因后再继续，**绝不无限等待**。测试脚本必须：全局看门狗（并在看门狗里 `kill` 子进程）、每个 `rpc` 带 `AbortController` 超时、
    `waitFor` 有上限、耗时用例逐条打印耗时以便定位。
+8. **测试前先清理上次残留的客户端/调试进程**：每次跑 Electron 测试（`npm test` / `npm run test:*`）或重新打包安装
+   之前，必须先杀掉上一次的 Kuikly SFTP 客户端和带调试端口的进程（`pkill -f "Kuikly SFTP.app" || true; pkill -f "remote-debugging-port=" || true`），
+   否则多个客户端会同时跑、占满 CPU、互相干扰（看门狗先挂的就是这种情形）。
+   Electron 的 `test` 系脚本已加 `pretest` 钩子（`node scripts/pretest-kill.js`）做这件事；构建发布版前也必须先 `osascript -e 'quit app "Kuikly SFTP"'`。
 
 ---
 

@@ -32,7 +32,21 @@ const HOME = process.env.SFTP_HOME || '/home/zhaojian';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
-const check = (n, ok, d) => { results.push({ n, ok: !!ok, d }); console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''}`); };
+  // 点击画面中心以显示自动隐藏的控制条/标题（页面 toggleControls 仅在 hidden→show）
+  const tapVideoToShowControls = async (view) => {
+    const info = await view.ev("(()=>{const v=document.querySelector('video');if(!v)return null;const r=v.getBoundingClientRect();return Math.round(r.left+r.width/2)+','+Math.round(r.top+r.height/2);})()");
+    if (!info) return false;
+    const [x, y] = info.split(',').map(Number);
+    const press = (type) => view.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseMoved' ? 0 : 1, clickCount: 1 });
+    await press('mouseMoved');
+    await new Promise((r) => setTimeout(r, 200));
+    await press('mousePressed');
+    await press('mouseReleased');
+    await new Promise((r) => setTimeout(r, 200));
+    return true;
+  };
+
+  const check = (n, ok, d) => { results.push({ n, ok: !!ok, d }); console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''}`); };
 const rpc = async (module, method, params) => (await fetch(GW + '/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module, method, params }) })).json();
 
 /** 连一个 CDP target，返回 {send, ev, body, shot, mouseAt, close} */
@@ -136,8 +150,22 @@ setTimeout(() => {
 
       // 在第一个窗口点「<」返回 → 该窗口关闭，其它窗口不受影响
       const before = (await playerTargets()).length;
+      // 续播对话框（"继续播放？/从头播放"）若还在，会盖在画面上拦截点击 → 先按"从头播放"关掉
+      const resumeShown = (await pl1.body()).includes('继续播放？');
+      if (resumeShown) {
+        await clickText('从头播放', pl1);
+        await waitFor(async () => ((await pl1.body()).includes('继续播放？') ? null : true), 5000, 200);
+      }
+      // 控制条/标题自动隐藏 → 点击画面先显示（几秒后再隐），然后点「<」关闭
+      const visShown = await tapVideoToShowControls(pl1);
+      // 等渲染把「<」挂出来
+      const backReady = await waitFor(async () => ((await pl1.body()).includes('<') ? true : null), 5000, 100);
+      if (!backReady) {
+        const dbg = await pl1.body();
+        console.log('      [debug P4a] body head=' + dbg.slice(0, 200).replace(/\n/g, ' | '));
+      }
       const backClicked = await clickText('<', pl1);
-      check('P4a 播放窗口内「<」可点击', backClicked);
+      check('P4a 播放窗口内「<」可点击', visShown && backReady && backClicked, 'visible=' + visShown + ' ready=' + !!backReady + ' click=' + backClicked);
       const closed = await waitFor(async () => ((await playerTargets()).length < before ? true : null), 12000, 600);
       check('P4 播放窗口「<」关闭自身，其它窗口不受影响', !!closed, `${before} → ${(await playerTargets()).length}`);
       pl1.close();

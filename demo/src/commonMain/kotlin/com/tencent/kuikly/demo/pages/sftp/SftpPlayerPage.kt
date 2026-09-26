@@ -145,6 +145,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         size = params.optLong("size", 0L)
         loadEpisodes()
         checkExistsThenStart()
+        // 控制条/标题初始可见，几秒后自动消失；用户点击画面时重新显示
+        showControls()
     }
 
     /**
@@ -219,44 +221,15 @@ internal class SftpPlayerPage : SftpBasePager() {
                 attr {
                     width(pagerData.pageViewWidth)
                     height(pagerData.pageViewHeight)
-                    paddingTop(if (ctx.isFullscreen) 0f else pagerData.statusBarHeight)
+                    paddingTop(0f)   // 视频充满整个窗口：与底部控制条/标题保持一致（无永久安全区）
                 }
 
             attr { backgroundColor(Color.BLACK) }
 
-            // 顶部导航栏（全屏时隐藏，把空间让给画面）
-            vif({ !ctx.isFullscreen }) {
-            View {
-                attr {
-                    size(pagerData.pageViewWidth, 56f)
-                    flexDirectionRow()
-                    alignItemsCenter()
-                    padding(16f, 8f, 16f, 8f)
-                    backgroundColor(Color(0xFF1A1A1A))
-                }
-                View {
-                    attr { size(36f, 36f); allCenter(); accessibility(SftpAccessibility.BTN_BACK) }
-                    event { click { ctx.closeSelf() } }
-                    Text { attr { text("<"); fontSize(22f); color(Color.WHITE) } }
-                }
-                Text {
-                    attr {
-                        text(ctx.name)
-                        fontSize(15f)
-                        color(Color.WHITE)
-                        flex(1f)
-                        marginLeft(8f)
-                        lines(1)                 // 单行，避免逐字换行
-                        textOverFlowTail()       // 超出用省略号
-                    }
-                }
-            }
-            }
-
-            // 视频容器：占据窗口剩余高度，画面按 contain 等比缩放（随窗口自适应）
+            // 视频容器：占据整个窗口，画面按 contain 等比缩放（随窗口自适应）
             View {
                 attr { flex(1f); width(pagerData.pageViewWidth); backgroundColor(Color.BLACK) }
-                // 全屏时点击画面切换控制条显隐（移动端主要靠这个；桌面 Web 还会靠鼠标移动）
+                // 点击画面：切换控制条/标题显隐（几秒后自动消失）
                 event { click { ctx.toggleControls() } }
                 // 必须用 vif：playUrl 是异步拿到的，写成 body 结构层的 `let`/`if`
                 // 时首次求值为 null，Video 视图不会被创建，之后也不会重建（=黑屏）。
@@ -340,24 +313,42 @@ internal class SftpPlayerPage : SftpBasePager() {
                         }
                     }
                 }
-                // 全屏时的返回入口：全屏会隐藏导航栏，这里补一个悬浮返回键（随控制条显隐）
-                vif({ ctx.isFullscreen && ctx.controlsVisible }) {
+                // 全屏返回入口已合并到顶部标题栏（自动显隐）
+            }
+            // 顶部标题栏（与底部控制条同步显隐：自动消失，点击画面时显示，几秒后再消失）
+            vif({ ctx.controlsVisible }) {
+                View {
+                    attr {
+                        width(pagerData.pageViewWidth)
+                        positionAbsolute()
+                        top(0f)
+                        padding(SftpPlayerTokens.PAD_X, 10f, SftpPlayerTokens.PAD_X, 10f)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                        backgroundColor(SftpPlayerTokens.oscBg)
+                    }
                     View {
-                        attr {
-                            positionAbsolute()
-                            left(12f); top(12f)
-                            size(40f, 40f); allCenter(); borderRadius(20f)
-                            backgroundColor(Color(0x66000000))
-                            accessibility(SftpAccessibility.BTN_BACK)
-                        }
+                        attr { size(36f, 36f); allCenter(); accessibility(SftpAccessibility.BTN_BACK) }
                         event { click { ctx.closeSelf() } }
                         Text { attr { text("<"); fontSize(20f); color(Color.WHITE) } }
                     }
+                    Text {
+                        attr {
+                            text(ctx.name)
+                            fontSize(15f)
+                            color(Color.WHITE)
+                            flex(1f)
+                            marginLeft(8f)
+                            lines(1)
+                            textOverFlowTail()
+                        }
+                    }
                 }
             }
+
             // ┌ 信息行（line1）：选集 | (flex) | 倍速 | 全屏
             // └ 控制行（line2）：播放 | 快退 | 快进 | tc_left | ──●── seekbar | tc_right | 静音
-            vif({ !ctx.isFullscreen || ctx.controlsVisible }) {
+            vif({ ctx.controlsVisible }) {
             View {
                 attr {
                     width(pagerData.pageViewWidth)
@@ -804,12 +795,11 @@ internal class SftpPlayerPage : SftpBasePager() {
         scheduleHideControls()
     }
 
-    /** 3 秒无操作后隐藏控制条（仅全屏且正在播放时） */
+    /** 几秒无操作后隐藏控制条（与标题同步；正在播放时；拖动/设置菜单打开时保留） */
     private fun scheduleHideControls() {
         hideControlsTimer?.let { clearTimeout(it) }
         hideControlsTimer = setTimeout(SftpPlayerTokens.HIDE_TIMEOUT_MS) {
-            // 正在拖动进度 / 打开设置菜单时绝不隐藏：隐藏会移除手势元素，拖动会被中断
-            if (isFullscreen && isPlaying && !draggingProgress && !showSettingsMenu) {
+            if (isPlaying && !draggingProgress && !showSettingsMenu) {
                 controlsVisible = false
             }
         }
@@ -827,9 +817,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         showControls()
     }
 
-    /** 点击画面：全屏时切换控制条显隐 */
+    /** 点击画面：切换控制条/标题显隐（无延迟） */
     private fun toggleControls() {
-        if (!isFullscreen) return
         if (controlsVisible) {
             hideControlsTimer?.let { clearTimeout(it) }
             hideControlsTimer = null
@@ -944,6 +933,8 @@ internal class SftpPlayerPage : SftpBasePager() {
         sftpModule().stat(sessionId.ifEmpty { connectionId }, remotePath) { entry, _ ->
             if (entry != null && entry.size > 0) size = entry.size
             startPlayback()
+            // 控制条/标题随切集后再次显示，几秒后自动隐藏
+            showControls()
         }
     }
 
