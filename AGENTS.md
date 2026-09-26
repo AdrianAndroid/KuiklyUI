@@ -78,7 +78,9 @@
    - 不得伪造验证结果（没跑就说跑了、编译通过说成功能可用）。
 6. **出错自己修**：自己引入的失败（构建/用例挂）自行排查到通过；确属环境或外部依赖阻塞的，
    给出证据与可选下一步，而不是原样抛回给用户。
-7. **多工作树注意**：真正提交代码的仓库根是 `/Users/zhaojian/bin/macmini/KuiklyUI`（分支 `zhaojian`）；
+7. **zhaojian 分支的固定交付动作**：每次功能开发/修复收尾**必须**「打 dmg → `~/Downloads` 留副本 → 覆盖安装到
+   `/Applications/Kuikly SFTP.app`」，命令与细节见 §3.1 规则 11。这是本机验证与回滚的唯一可信基线。
+8. **多工作树注意**：真正提交代码的仓库根是 `/Users/zhaojian/bin/macmini/KuiklyUI`（分支 `zhaojian`）；
    `.kilo/worktrees/*` 是 Agent Manager 工作树，可能是旧状态，动手前先确认在哪个树、哪个分支。
 
 ---
@@ -141,8 +143,15 @@
 10. **每开发一项功能，必须登记对应的测试用例**：新功能/修复都要在对应用例文件（`electron/test/*.mjs`）里补上**针对该功能全流程**的用例
    （正向 + 关键分支/取消/失败），并在 `devDocs/kuikly-app-features-test-plan.md`（或对应测试规程）登记用例 ID 与断言；
    必要功能的关键路径要 `Page.captureScreenshot` 留证。不允许「只改代码不补用例」。
-11. **每次构建 dmg 都要在 `~/Downloads` 留一份带构建时间的副本**：`npm run dist`/`dist:release` 已内置
-   `node scripts/copy-dmg.mjs`，把 `electron/dist/*.dmg` 另存为 `~/Downloads/Kuikly SFTP-<版本>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）。
+11. **在 `zhaojian` 分支上，每次开发/修复功能都必须「打 dmg + 存 Downloads + 覆盖安装到本机」**（固定交付动作，不可省）：
+   一次功能开发或缺陷修复收尾时必须完成三件事，缺一不可：
+   1. 构建 dmg：`cd electron && npm run dist`（内置 `sync` + electron-builder + `copy-dmg.mjs`）；
+   2. `~/Downloads` 留副本：`copy-dmg.mjs` 已自动另存为
+      `~/Downloads/Kuikly SFTP-<版本>-<功能slug>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）；
+   3. **覆盖安装到本机**：`npm run install:app`（见 `electron/scripts/install-app.mjs`）——
+      退出正在运行的客户端后，把 `electron/dist/mac*/Kuikly SFTP.app` 覆盖到 `/Applications/Kuikly SFTP.app`，
+      保证本机跑的始终是最新构建（自动化用例/人工验证都以它为准）。
+   仅当用户明确说「不用打包/不用安装」时才可跳过；跳过时必须在收尾汇报里写明原因。
 12. **测试应用在「开始前」和「结束后」都必须 kill 掉（否则多 worktree 累积会把机器卡死）**：
    - **开始前**：`pretest`/`pretest:*` 钩子自动执行 `cd electron && node scripts/pretest-kill.js`（按本实例
      userData 标记杀 Electron + 释放本实例网关端口），清掉上次残留再启动。

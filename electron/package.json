@@ -11,6 +11,7 @@
     "start": "npm run sync && env -u ELECTRON_RUN_AS_NODE electron .",
     "start:noenv": "npm run sync && electron .",
     "dist": "node scripts/pretest-kill.js && npm run sync && env -u ELECTRON_RUN_AS_NODE electron-builder && node scripts/copy-dmg.mjs",
+    "install:app": "node scripts/install-app.mjs",
     "test": "node test/smoke.mjs",
     "test:dual": "node test/dual-pane.mjs",
     "build:web:release": "KUIKLY_WEB_MODE=release node scripts/build-web.mjs",
