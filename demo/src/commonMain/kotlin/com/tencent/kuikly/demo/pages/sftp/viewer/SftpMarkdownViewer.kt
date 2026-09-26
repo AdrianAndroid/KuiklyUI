@@ -43,11 +43,17 @@ internal fun ViewContainer<*, *>.SftpMarkdownViewer(
     editingProvider: () -> Boolean = { false },
     editTargetProvider: () -> Int = { -1 },
     onBlockTap: (Int) -> Unit = { },
+    /**
+     * 已渲染块数上限（增量渲染/窗口化）：默认不限。
+     * 目的：拖动窗口/切换换行时只重排已渲染的少量块，而不是整篇（最多 700 块）。
+     */
+    renderLimitProvider: () -> Int = { Int.MAX_VALUE },
 ) {
-    vif({ blocksProvider().isNotEmpty() }) {
+    // 条件里同时读 renderLimitProvider，保证 limit 变化时依赖被收集并重渲染
+    vif({ blocksProvider().isNotEmpty() && renderLimitProvider() >= 0 }) {
         SftpMarkdownBody(
             blocksProvider(), fontScaleProvider, wrapProvider, onLink,
-            editingProvider, editTargetProvider, onBlockTap
+            editingProvider, editTargetProvider, onBlockTap, renderLimitProvider
         )
     }
     velse {
@@ -66,7 +72,10 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
     editingProvider: () -> Boolean,
     editTargetProvider: () -> Int,
     onBlockTap: (Int) -> Unit,
+    renderLimitProvider: () -> Int,
 ) {
+    val limit = renderLimitProvider().coerceAtLeast(1)
+    val shown = if (blocks.size > limit) blocks.subList(0, limit) else blocks
     View {
         attr {
             flex(1f)
@@ -75,7 +84,7 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
             borderRadius(8f)
             padding(14f, 14f, 14f, 14f)
         }
-        blocks.forEachIndexed { index, block ->
+        shown.forEachIndexed { index, block ->
             // 编辑模式：每个块可点（进来改这一块的 Markdown 源码，完成即重渲染 = 即时渲染）
             View {
                 attr {
@@ -88,13 +97,28 @@ private fun ViewContainer<*, *>.SftpMarkdownBody(
                 event { click { if (editingProvider()) onBlockTap(index) } }
                 when (block) {
                     is MdBlock.Heading -> MdHeading(block, fontScaleProvider)
-                    is MdBlock.Paragraph -> MdInlineText(MarkdownParser.parseInline(block.text), 14f, fontScaleProvider, wrapProvider, onLink, 6f)
+                    is MdBlock.Paragraph -> MdInlineText(block.runs, 14f, fontScaleProvider, wrapProvider, onLink, 6f)
                     is MdBlock.Code -> MdCode(block, fontScaleProvider, wrapProvider)
-                    is MdBlock.Quote -> MdQuote(block.text, fontScaleProvider, wrapProvider, onLink)
+                    is MdBlock.Quote -> MdQuote(block.runs, fontScaleProvider, wrapProvider, onLink)
                     is MdBlock.ListBlock -> MdList(block.items, fontScaleProvider, wrapProvider, onLink)
+                    is MdBlock.Diagram -> MdDiagram(block, fontScaleProvider)
                     is MdBlock.Table -> MdTable(block, fontScaleProvider)
                     is MdBlock.Hr -> View {
                         attr { height(1f); backgroundColor(SftpColorTokens.divider); margin(10f, 0f, 10f, 0f) }
+                    }
+                }
+            }
+        }
+        // 增量渲染占位：还有未渲染的块时给出提示（继续下滑会自动追加）
+        if (shown.size < blocks.size) {
+            View {
+                attr { height(40f); allCenter() }
+                Text {
+                    attr {
+                        text("继续下滑加载 · 已渲染 ${shown.size}/${blocks.size} 块")
+                        fontSize(11f)
+                        color(SftpColorTokens.textSecondary)
+                        accessibility("md_more")
                     }
                 }
             }
@@ -136,7 +160,7 @@ private fun ViewContainer<*, *>.MdHeading(block: MdBlock.Heading, fontScaleProvi
 }
 
 private fun ViewContainer<*, *>.MdQuote(
-    text: String,
+    runs: List<MdRun>,
     fontScaleProvider: () -> Float,
     wrapProvider: () -> Boolean,
     onLink: (String) -> Unit,
@@ -151,7 +175,7 @@ private fun ViewContainer<*, *>.MdQuote(
         View { attr { width(3f); backgroundColor(SftpColorTokens.primary); borderRadius(2f); marginRight(8f) } }
         View {
             attr { flex(1f); padding(8f, 6f, 8f, 6f) }
-            MdInlineText(MarkdownParser.parseInline(text), 13f, fontScaleProvider, wrapProvider, onLink, 0f)
+            MdInlineText(runs, 13f, fontScaleProvider, wrapProvider, onLink, 0f)
         }
     }
 }
@@ -222,7 +246,7 @@ private fun ViewContainer<*, *>.MdList(
                 }
                 View {
                     attr { flex(1f) }
-                    MdInlineText(MarkdownParser.parseInline(item.text), 13.5f, fontScaleProvider, wrapProvider, onLink, 0f)
+                    MdInlineText(item.runs, 13.5f, fontScaleProvider, wrapProvider, onLink, 0f)
                 }
             }
         }

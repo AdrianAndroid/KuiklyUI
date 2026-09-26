@@ -35,6 +35,8 @@ internal fun ViewContainer<*, *>.SftpReaderScaffold(
     wrapProvider: () -> Boolean,
     onToggleWrap: () -> Unit,
     onScrollerReady: (scrollTo: (Float) -> Unit) -> Unit,
+    /** 滚动回调（传当前 contentOffsetY）：用于增量渲染，避免一次性建出全部块视图 */
+    onScroll: ((Float) -> Unit)? = null,
     mdSourceProvider: (() -> Boolean)? = null,
     onToggleSource: (() -> Unit)? = null,
     tocCountProvider: (() -> Int)? = null,
@@ -111,6 +113,11 @@ internal fun ViewContainer<*, *>.SftpReaderScaffold(
             }
             ref { v ->
                 onScrollerReady { y -> v.view?.setContentOffset(0f, y, true) }
+            }
+            if (onScroll != null) {
+                event {
+                    scroll { onScroll.invoke(it.offsetY) }
+                }
             }
             content()
         }

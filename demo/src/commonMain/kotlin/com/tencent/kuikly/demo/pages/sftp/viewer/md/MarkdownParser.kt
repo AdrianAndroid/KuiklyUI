@@ -36,6 +36,8 @@ internal sealed class MdBlock {
 
     data class Paragraph(
         val text: String,
+        /** 行内片段在解析期一次算好，渲染期不再重复解析（拖动窗口/切换行时的主要卡顿来源之一） */
+        val runs: List<MdRun>,
         override val raw: String, override val startLine: Int, override val endLine: Int
     ) : MdBlock()
 
@@ -44,8 +46,15 @@ internal sealed class MdBlock {
         override val raw: String, override val startLine: Int, override val endLine: Int
     ) : MdBlock()
 
+    /** 图表代码块（```mermaid / ```flow 等）：由各端/共享渲染器绘制 */
+    data class Diagram(
+        val kind: String, val code: String,
+        override val raw: String, override val startLine: Int, override val endLine: Int
+    ) : MdBlock()
+
     data class Quote(
         val text: String,
+        val runs: List<MdRun>,
         override val raw: String, override val startLine: Int, override val endLine: Int
     ) : MdBlock()
 
@@ -67,6 +76,8 @@ internal sealed class MdBlock {
 /** 列表项：indent 用于表达层级（0 起） */
 internal data class MdItem(
     val text: String,
+    /** 行内片段在解析期一次算好（同 Paragraph） */
+    val runs: List<MdRun> = emptyList(),
     val ordered: Boolean,
     val index: Int,
     val indent: Int,
@@ -90,6 +101,9 @@ internal sealed class MdRun {
  */
 internal object MarkdownParser {
 
+    /** 走 Diagram 渲染的代码块语言（图表 DSL） */
+    private val DIAGRAM_LANGS = setOf("mermaid", "flow", "flowchart", "graphviz", "dot")
+
     fun parse(source: String): List<MdBlock> {
         val lines = source.replace("\r\n", "\n").replace('\r', '\n').split('\n')
         val blocks = ArrayList<MdBlock>()
@@ -99,9 +113,11 @@ internal object MarkdownParser {
 
         fun flushPara(endLine: Int) {
             if (para.isNotEmpty()) {
+                val text = para.toString().trim()
                 blocks.add(
                     MdBlock.Paragraph(
-                        text = para.toString().trim(),
+                        text = text,
+                        runs = parseInline(text),
                         raw = lines.subList(paraStart, endLine).joinToString("\n"),
                         startLine = paraStart,
                         endLine = endLine
@@ -130,12 +146,23 @@ internal object MarkdownParser {
                     i++
                 }
                 i++ // 跳过结束围栏
-                blocks.add(
-                    MdBlock.Code(
-                        lang, code.toString().trimEnd('\n'),
-                        raw = rawOf(from, i), startLine = from, endLine = i
+                val body = code.toString().trimEnd('\n')
+                // 图表代码块（mermaid / flow / graphviz 等）走 Diagram，由渲染器绘制
+                if (lang.lowercase() in DIAGRAM_LANGS) {
+                    blocks.add(
+                        MdBlock.Diagram(
+                            kind = lang.lowercase(), code = body,
+                            raw = rawOf(from, i), startLine = from, endLine = i
+                        )
                     )
-                )
+                } else {
+                    blocks.add(
+                        MdBlock.Code(
+                            lang, body,
+                            raw = rawOf(from, i), startLine = from, endLine = i
+                        )
+                    )
+                }
                 continue
             }
 
@@ -190,9 +217,11 @@ internal object MarkdownParser {
                     quote.append(lines[i].trim().removePrefix(">").trim()).append(' ')
                     i++
                 }
+                val quoteText = quote.toString().trim()
                 blocks.add(
                     MdBlock.Quote(
-                        quote.toString().trim(),
+                        quoteText,
+                        runs = parseInline(quoteText),
                         raw = rawOf(from, i), startLine = from, endLine = i
                     )
                 )
@@ -208,7 +237,7 @@ internal object MarkdownParser {
                 var idx = i
                 while (idx < lines.size) {
                     val it = parseListItem(lines[idx]) ?: break
-                    items.add(it)
+                    items.add(it.copy(runs = parseInline(it.text)))
                     idx++
                 }
                 blocks.add(

@@ -36,6 +36,8 @@ const SAMPLE_MD = '国王红包功能总结文档.md';
 const FIX_DIR = `${HOME}/kr_text_fixture_${INSTANCE}`;   // 确定性夹具带实例前缀（多 worktree 并行不互删）
 const FIX_MD = 'a_sample_doc.md';
 const FIX_TXT = 'b_notes.txt';
+const FIX_MD_DIAGRAM = 'c_diagram.md';   // mermaid 流程图夹具
+const FIX_MD_BIG = 'd_big_doc.md';       // 大文档夹具（增量渲染）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -104,7 +106,30 @@ setTimeout(() => {
     await rpc('sftp', 'mkdir', { sessionId: sid, remotePath: FIX_DIR });
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD}`, content: mdB64 });
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_TXT}`, content: Buffer.from(txt, 'utf8').toString('base64') });
-    check('T0a 夹具就绪（样例 md + txt）', !!mdB64, `${FIX_DIR}（md ${Math.round(mdB64.length / 1024)}KB）`);
+
+    // 图表夹具（mermaid 流程图）与大文档夹具（验证增量渲染）
+    const diagramMd = [
+      '# 图表样例',
+      '',
+      '下面是一个 mermaid 流程图：',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A[开始] --> B{是否命中}',
+      '  B -->|是| C[处理数据]',
+      '  B -->|否| D[结束]',
+      '  C --> D',
+      '```',
+      '',
+      '以上。',
+      ''
+    ].join('\n');
+    const bigMd = '# 大文档\n\n' + Array.from({ length: 90 }, (_, i) =>
+      `## 小节 ${i + 1}\n\n这是第 ${i + 1} 段内容，用于验证增量渲染。\n`).join('\n');
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_DIAGRAM}`, content: Buffer.from(diagramMd, 'utf8').toString('base64') });
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_BIG}`, content: Buffer.from(bigMd, 'utf8').toString('base64') });
+
+    check('T0a 夹具就绪（样例 md + txt + 图表 + 大文档）', !!mdB64, `${FIX_DIR}（md ${Math.round(mdB64.length / 1024)}KB）`);
 
     const page = await waitFor(async () => (await listTargets())[0], 40000);
     if (!page) { check('T0b 渲染进程启动', false); return; }
@@ -255,6 +280,77 @@ setTimeout(() => {
         `远端含加粗标记=${remoteHas} 远端大小=${remoteLen}B 提示=${!!saved} dirty已清除=${dirtyCleared}`);
       v7.close();
     }
+
+    // ---- T11 Mermaid 流程图渲染（共享降级实现：节点 + 边标签 + 箭头）----
+    const openFixture = async (fileName) => {
+      await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
+      await waitFor(async () => (await main.body()).includes(fileName), 30000, 700);
+      const clicked = await main.clickText(fileName);
+      const win = await waitFor(async () => (await viewerFor(fileName))[0], 25000, 600);
+      return { clicked, win };
+    };
+
+    const dia = await openFixture(FIX_MD_DIAGRAM);
+    let diaOk = false, diaText = '';
+    if (dia.win) {
+      const dv = await attach(dia.win.webSocketDebuggerUrl);
+      await dv.send('Page.enable');
+      const t = await waitFor(async () => {
+        const b = await dv.body();
+        return (b.includes('开始') && b.includes('处理数据')) ? b : null;
+      }, 25000, 600);
+      diaText = t || '';
+      // 节点标签（开始/处理数据/结束）+ 边标签（是/否）+ 箭头字形（▼）
+      diaOk = !!t && diaText.includes('结束') && diaText.includes('是') &&
+        diaText.includes('否') && diaText.includes('▼');
+      await dv.shot('text-viewer-mermaid.png');
+      dv.close();
+    }
+    check('T11 Mermaid 流程图渲染（节点/边标签/箭头）', diaOk,
+      diaOk ? '含 开始/处理数据/结束 + 是/否 + ▼' : `未渲染：${diaText.slice(0, 100)}`);
+
+    // ---- T12 增量渲染：大文档首屏只渲染一批并给出提示，滚动后追加 ----
+    const big = await openFixture(FIX_MD_BIG);
+    let incFirst = false, incGrew = false, incText = '';
+    if (big.win) {
+      const bv = await attach(big.win.webSocketDebuggerUrl);
+      await bv.send('Page.enable');
+      const t1 = await waitFor(async () => {
+        const b = await bv.body();
+        return b.includes('继续下滑加载') ? b : null;
+      }, 30000, 600);
+      incText = t1 || '';
+      incFirst = !!t1 && /已渲染 (40|4[0-9])\//.test(incText);
+      if (incFirst) {
+        // 滚到底 → 触发追加（多滚几次，等待窗口增长）
+        for (let k = 0; k < 6 && !incGrew; k++) {
+          await bv.ev("(()=>{const el=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+40);if(el){el.scrollTop=el.scrollHeight;return true;}return false;})()");
+          await sleep(700);
+          const b = await bv.body();
+          const m = /已渲染 (\d+)\//.exec(b);
+          if (m && Number(m[1]) > 40) incGrew = true;
+        }
+      }
+      await bv.shot('text-viewer-incremental.png');
+      bv.close();
+    }
+    check('T12 增量渲染（首屏只渲染一批 + 提示，滚动后追加）', incFirst && incGrew,
+      `首屏提示=${incFirst} 滚动后追加=${incGrew} 文案=${(/已渲染 \d+\/\d+ 块/.exec(incText) || [''])[0]}`);
+
+    // ---- T13 文档缓存：同一文件二次打开命中缓存（无需重新装载即可渲染）----
+    const again = await openFixture(FIX_MD);
+    let cacheOk = false;
+    if (again.win) {
+      const cv = await attach(again.win.webSocketDebuggerUrl);
+      cv.send('Page.enable');
+      const t = await waitFor(async () => {
+        const b = await cv.body();
+        return b.includes('业务背景') ? b : null;
+      }, 10000, 400);
+      cacheOk = !!t;
+      cv.close();
+    }
+    check('T13 文档缓存（二次打开同一文件直接渲染）', cacheOk, cacheOk ? '命中缓存并渲染' : '未渲染');
 
     // T5 多窗口并存 + 逐个关闭
     const before = (await viewerTargets()).length;

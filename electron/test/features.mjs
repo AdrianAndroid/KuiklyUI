@@ -558,7 +558,13 @@ const waitFor = async (fn, ms, step = 500) => {
         try { got = fs.readFileSync(localPath).toString('base64'); } catch (e) { got = 'ERR:' + e.message; }
         const exp = FILE_BYTES.toString('base64');
         bytesOk = got === exp;
-        bytesDiag = `len(got=${got.length},exp=${exp.length}) same=${bytesOk} path=${localPath}`;
+        let tree = '';
+        try {
+          const root = require('node:os').homedir() + '/.kuikly_cache';
+          tree = fs.readdirSync(root).slice(0, 10).join(',');
+          if (fs.existsSync(root + '/cachedir')) tree += ' | cachedir=' + fs.readdirSync(root + '/cachedir').length;
+        } catch (e) { tree = 'ERR:' + e.message; }
+        bytesDiag = `len(got=${got.length},exp=${exp.length}) same=${bytesOk} path=${localPath} tree=[${tree}]`;
       }
       await closeCachePanel();
     }
