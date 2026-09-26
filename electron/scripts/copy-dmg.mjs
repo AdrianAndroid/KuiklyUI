@@ -1,15 +1,13 @@
 /*
  * 构建后把 dmg 另存一份到 ~/Downloads，文件名带构建时间（便于回滚/对比）。
  * 规则见 AGENTS.md §3.1 规则 11。
- * 用法：node scripts/copy-dmg.mjs [mode]
- *   - 无参：找 electron/dist/*.dmg
- *   - release：electron/dist/*.dmg（同路径；保留参数以兼容 dist:release 链）
  */
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 
-const distDir = path.resolve(__dirname, '..', 'dist');
+const here = path.dirname(new URL(import.meta.url).pathname);
+const distDir = path.resolve(here, '..', 'dist');
 if (!fs.existsSync(distDir)) {
   console.log('[copy-dmg] 无 dist 目录，跳过');
   process.exit(0);
