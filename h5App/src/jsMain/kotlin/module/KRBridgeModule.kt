@@ -36,10 +36,14 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
             }
 
             // 读取器保存：把内容写到宿主的本地临时文件，返回绝对路径（供 upload(localPath) 使用）
+            //
+            // 注意：不要用 `js("...cb(...)")` 引用 Kotlin 局部 `cb` —— Kotlin/JS 下该局部在
+            // 生成的 JS 里不可见，运行时报 `TypeError: cb is not a function`，回调永不触发（保存静默失败）。
+            // 统一走项目标准写法：Kotlin 里链式 then，回调用 `callback?.invoke(...)`。
             "saveTempFile" -> {
                 val q = js("JSON").parse(params ?: "{}")
                 val content = q.content as? String ?: ""
-                js("window.localFs.home().then(function(home){ var p = home + '/.kuikly_edit_tmp'; return window.localFs.writeFile(p, content).then(function(){ return p; }); }).then(function(p){ cb({ path: p }); }).catch(function(e){ cb({ path: '' }); })")
+                saveTempFileAsync(content, cb)
                 Unit
             }
 
@@ -228,6 +232,28 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
     }
 
     /**
+     * 把 base64 内容写入宿主本地临时文件（`window.localFs`，由 Electron preload 注入），
+     * 完成后经 [cb] 回传 `{"path": "<绝对路径>"}`（失败回传空 path）。
+     *
+     * 用 Kotlin 链式 `.then`（lambda 编译成 JS 函数）而不是 `js("...cb(...)")`，
+     * 避免局部回调在生成的 JS 里不可见。
+     */
+    private fun saveTempFileAsync(content: String, cb: KuiklyRenderCallback?) {
+        try {
+            val lf = js("window.localFs").unsafeCast<LocalFsJs>()
+            lf.home().then({ home ->
+                val p = "$home/.kuikly_edit_tmp"
+                lf.writeFile(p, content).then(
+                    { ignoredOk -> cb?.invoke("{\"path\":\"$p\"}") },
+                    { ignoredErr -> cb?.invoke("{\"path\":\"\"}") }
+                )
+            }, { ignoredErr -> cb?.invoke("{\"path\":\"\"}") })
+        } catch (e: Throwable) {
+            cb?.invoke("{\"path\":\"\"}")
+        }
+    }
+
+    /**
      * Show toast message on page
      */
     private fun toast(params: String?) {
@@ -271,3 +297,15 @@ class KRBridgeModule : KuiklyRenderBaseModule() {
     }
 }
 
+
+/** `window.localFs`（Electron preload 注入）的最小 JS 类型声明，用于保存临时文件。 */
+private external class LocalFsJs {
+    fun home(): JsPromise
+    fun writeFile(path: String, contentBase64: String): JsPromise
+}
+
+/** Promise 的最小声明：只需要 then。 */
+private external class JsPromise {
+    fun then(onFulfilled: (dynamic) -> Unit): JsPromise
+    fun then(onFulfilled: (dynamic) -> Unit, onRejected: (dynamic) -> Unit): JsPromise
+}
