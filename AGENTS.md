@@ -91,9 +91,16 @@
 4. **Commit 格式**：Angular Convention — `feat:` / `fix:` / `docs:` / `refactor:` / `chore:`。
 5. **平台 API 差异**：跨端行为不一致时，必须在 `openspec` spec 中显式记录每端行为。
 6. **二进制通信**：`Module` 与原生通信支持 `String/Int/Float/ByteArray`；二进制走原子通道避免 base64 开销（见 `NetworkModule.httpRequestBinary`）。
-7. **主工作分支 = `zhaojian`**：主 clone `/Users/zhaojian/bin/macmini/KuiklyUI` 检出在 `zhaojian`；各 worktree 的
-   feature/agent 分支成果最终都合回 `zhaojian`。日常节点按规则 14 只本地提交到**当前 worktree 分支**，
-   `git push origin zhaojian` 仅在交付（§14.1）或用户明确要求时执行。
+7. **主工作分支 = `zhaojian`，成果要及时同步回去**：主 clone `/Users/zhaojian/bin/macmini/KuiklyUI` 检出在 `zhaojian`；
+   各 worktree/feature 分支成果最终都合回 `zhaojian`。同步统一用 `node scripts/sync-main.mjs`：
+   - **当前分支就是 `zhaojian`**：提交后**立即** `git push origin zhaojian`，保持远端同步。
+   - **当前是单独分支（feature/agent）**：每当「功能实现且**受影响用例验证通过**」（或规则/文档节点）后，
+     **立即**同步到 `zhaojian` —— 推到 `origin/zhaojian`，并在干净的主 clone 上快进本地 `zhaojian`。
+   - **赵健在主 clone 有未提交改动时的等待规则**：若未提交改动**开始不到 30 分钟** → **先等待**
+     （可用 `schedule_wakeup` 半小时后再试），不要合并；若**已超过 30 分钟**仍未提交 → **本轮先不同步/不提交**，
+     在结果里说明，交由用户处理。
+   - 冲突 / 远端分叉 / 不确定时**绝不强行合并**，报告用户（`sync-main.mjs` 退出码：`0` 已同步、`2` 需等待、
+     `3` 超时跳过、`4` 分叉需人工、`1` 本 worktree 有未提交改动）。
 
 详见 `openspec/config.yaml`。
 
@@ -153,7 +160,8 @@
      ① 新增/修改了规则或文档（本文件、`devDocs/*`、`openspec/*`）；
      ② 一个功能/修复**已实现**且**受影响用例已跑绿**（按规则 9 只跑受影响套件，不要求全量）。
    - 命令：`git add -A && git commit -m "<type>: <摘要>"`，遵循 Angular Convention（`feat:`/`fix:`/`docs:`/`refactor:`/`chore:`）。
-   - **默认只提交到本地**；`git push origin zhaojian` **只在用户明确要求或走 §14.1 交付流程时**执行。
+   - **本地提交是默认动作**；**同步到 `zhaojian`/推送**按 §3 规则 7 执行（当前分支=`zhaojian` 时提交后即推；
+     单独分支在「功能已验证」节点用 `node scripts/sync-main.mjs` 同步）；§14.1 交付流程照旧推送。
    - **多 worktree 并行时各自提交各自分支**，不要替其它 worktree 提交/推送；一个提交只包含**本 worktree、本次改动**的文件。
    - 提交前按仓库规范先看 `git status` / `git diff`，只 stage 本次相关文件，**绝不提交凭据、token、`.kr-test/`、`electron/resources/` 等产物**。
 
