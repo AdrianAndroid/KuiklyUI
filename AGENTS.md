@@ -158,7 +158,8 @@
    仅当用户明确说「不用打包/不用安装」时才可跳过；跳过时必须在收尾汇报里写明原因。
 12. **测试应用在「开始前」和「结束后」都必须 kill 掉（否则多 worktree 累积会把机器卡死）**：
    - **开始前**：`pretest`/`pretest:*` 钩子自动执行 `cd electron && node scripts/pretest-kill.js`（按本实例
-     userData 标记杀 Electron + 释放本实例网关端口），清掉上次残留再启动。
+     userData 标记 `ud-<instance>` 精准杀 Electron），清掉上次残留再启动；**不动外部网关**（`npm run gateway`
+     是测试前置进程，杀它会 ECONNREFUSED）。
    - **结束后**：① 每个套件在 `finally` 调用 `registerCleanup(child)` 返回的清理函数（SIGKILL 主进程 +
      `pkill -f ud-<instance>` 兜底清 Chromium 子进程）；② `posttest`/`posttest:*` 钩子再兜底一次。
      `registerCleanup` 同时挂在进程 `exit`/`SIGINT`/`SIGTERM`/`SIGHUP` 上——**即使用例被 watchdog 或 ctrl-c 强杀也保证清理**。
@@ -346,6 +347,9 @@
 - ❌ 在 Web/MiniApp 假设有 TCP/SSH 能力 → 浏览器沙箱限制，必须走后端网关（Web 端已实现 `sftp-gateway/`，见 §13.1.3）。
 - ❌ 在 VS Code / Kilo 环境直接 `electron .` → 会继承 `ELECTRON_RUN_AS_NODE=1`，Electron 退化纯 Node，
   `require('electron')` 只返回路径（`ipcMain` 为 undefined）。必须 `env -u ELECTRON_RUN_AS_NODE electron .`。
+- ❌ **Kotlin/JS 的 `js("...")` 里引用 Kotlin 局部变量（尤其回调 `cb`）**：该局部在生成的 JS 中不可见，
+  运行时报 `TypeError: cb is not a function`（表现为异步回调永不触发、保存静默失败）。桥接回调一律用
+  `callback?.invoke(...)` 的 Kotlin 写法（见 `h5App/.../KRBridgeModule.kt` 的 `saveTempFileAsync`）。
 
 ---
 

@@ -171,7 +171,8 @@ env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
 
 - **必须 `env -u ELECTRON_RUN_AS_NODE`**：VS Code / Kilo 会泄漏该变量，导致 Electron 退化成纯 Node（主进程直接 `exit(1)`）。
 - **`KUIKLY_WEB_MODE=release`** 才取 release 产物；debug 产物带调试开销。
-- **`pretest-kill.js` 已挂在 `pretest` / `pretest:*` / `posttest` / `dist` / `dist:release`**：按**本实例 userData 标记**精准 kill 残留客户端 + 释放本实例网关端口（见 §13）。
+- **`pretest-kill.js` 已挂在 `pretest` / `pretest:*` / `posttest` / `dist` / `dist:release`**：按**本实例 userData 标记**
+  `ud-<instance>` 精准 kill 残留 Electron（**不动外部网关**，见 §13）。
 - 打包版资源在 `Contents/Resources/app.asar`（`resources/**`）与其旁的 `Resources/gateway`（`extraResources`）。
 
 ---
@@ -255,7 +256,7 @@ npm test                     # 终端 B：本实例测试（自动用本实例�
 **主进程配合**（`main.js`）：窗口标题 `Kuikly SFTP [<instance>]`（多应用一眼区分）；`KR_USER_DATA_DIR`
 → `app.setPath('userData')`；`KR_LOCAL_ROOT` → `localfs:*` 根。
 
-**清理**：`node scripts/pretest-kill.js` 只杀带 `ud-<instance>` 标记的 Electron + 释放本实例网关端口；
+**清理**：`node scripts/pretest-kill.js` 只杀带 `ud-<instance>` 标记的 Electron（**不杀外部网关**，否则套件 fixture 会 ECONNREFUSED）；
 **禁止**无差别 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` / `osascript quit`（会误杀其它 worktree）。
 
 **全局动作串行**：`npm run dist*` / 覆盖安装 `/Applications/Kuikly SFTP.app` / 发布推送，一次只在一个 worktree 执行。
