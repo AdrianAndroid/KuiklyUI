@@ -17,6 +17,10 @@
 
 两种 DSL：**自研 DSL**（`Pager + body()`）与 **Compose DSL**（`ComposeContainer + setContent{}`），二者不可混用。
 
+> ⚠️ **本仓库还包含一个「第七端」：Electron 桌面壳**（`electron/`，产品名 `Kuikly SFTP`），
+> 它复用 **Web 产物**（同一份 `nativevue2.js`/`h5App.js`）渲染，SSH/SFTP/本地 shell 由 **Node 网关 `sftp-gateway/`** 代持。
+> 任何「六端」说法都要把桌面端算进去；接手前先读 **`devDocs/kuikly-electron-architecture.md`**。
+
 详细文档：<https://framework.tds.qq.com/>
 
 ---
@@ -39,8 +43,10 @@
 | iosApp | `iosApp/` | iOS 宿主 shell（Xcode） | iOS |
 | macApp | `macApp/` | macOS 宿主 shell（Xcode） | macOS |
 | ohosApp | `ohosApp/` | HarmonyOS 宿主 shell（DevEco） | HarmonyOS |
-| h5App / h5App-js | `h5App*/` | Web 宿主 | Web |
+| h5App / h5App-js | `h5App*/` | Web 宿主（也是 **Electron 渲染层**：`index.html` + `h5App.js` + 宿主桥 `KRBridgeModule`） | Web/桌面 |
 | miniApp / miniApp-js | `miniApp*/` | 小程序宿主 | MiniApp |
+| **electron** | `electron/` | **桌面壳（Electron 主进程/预加载/打包/测试）**：托管网关、独立窗口、`window.localFs`/`kuiklyHost`。见 `devDocs/kuikly-electron-architecture.md` | 桌面 |
+| **sftp-gateway** | `sftp-gateway/` | **Node+ssh2 网关**：浏览器/桌面不能直连 SSH，`/rpc` + HTTP Range 代持；打包进 `Resources/gateway` | Node |
 | buildSrc | `buildSrc/` | 构建：编译/打包/产物拆分脚本 | Gradle |
 | publish | `publish/` | 发布配置 | Gradle |
 | openspec | `openspec/` | spec-driven 变更管理（每个 change 一个目录） | 文档 |
@@ -210,6 +216,7 @@
 | 跨平台 SFTP 客户端 + 流式视频播放 | `docs/SFTP-Client.md` | SftpModule + SftpFavoritesModule + 本地 HTTP 代理 + VideoView 复用；完整文件管理（CRUD/权限/批量）+ 文件与文件夹收藏 + 点击即流式播放；四端落地方案。**先看本文件第 13 节的压缩上下文，再按需深入** |
 | SFTP 实现详解（学习/实现向） | `docs/SFTP-实现详解.md` | 从架构到各端实现的完整走读：分层、Module 桥接、共享层、本地代理、三端原生实现、UI、测试、踩坑。**想理解「代码怎么写的、为什么这么写」优先看这篇** |
 | **跨端应用开发规划（含 Electron 桌面壳）** | `devDocs/kuikly-app-development-plan.md` | 完整交付规划：目标/不变量/差距/里程碑 M0-M8/Electron 边界契约与专项设计/测试与安全/发布/风险/排期/DoD。**做新功能或桌面打包前先看这篇** |
+| **Electron 桌面端架构（必读）** | `devDocs/kuikly-electron-architecture.md` | 桌面壳全貌：进程/窗口模型、启动加载链路、两个网关的区别、preload 暴露的 `window.*`、宿主能力桥（`HRBridgeModule`）、独立窗口、构建打包安装、Electron 测试体系与踩坑。**任何模型接手前先看这篇，别只盯 KMP 六端而漏掉 Electron** |
 | **自动化测试用例与执行规程** | `devDocs/sftp-test-plan.md` | 分层 L0-L5 用例（ID 稳定）、固定执行步骤、通过标准、失败排查、结果模板。**每次改动后照此跑**（一键：`bash scripts/run-all-tests.sh`）|
 | **双栏文件管理器：测试用例与执行规程** | `devDocs/kuikly-dual-pane-test-plan.md` | 双栏（本地↔远端）验收用例 D0–D19、真实点击技法、踩坑清单；运行 `cd electron && npm run test:dual` |
 | **文件双向传输模块：抽离与开发计划** | `devDocs/kuikly-file-transfer-module.md` | `core/file-manager` 纯状态机 + 双栏落地现状（§6）+ 未落地项（§6.5） |
@@ -909,6 +916,9 @@ git add -A && git commit && git push origin zhaojian
 - **交付新的 SFTP 里程碑（commit / 验证 / 能力清单变化）**时，必须同步更新 `devDocs/sftp-development-progress.md`。
 - **新增功能 / 桌面（Electron）打包 / 安全加固 / 发布**时，先对齐 `devDocs/kuikly-app-development-plan.md` 的里程碑与
   不变量（尤其 §1.3 红线与 §6.8 Electron 反模式清单），完成后回填该文档的现状与勾选。
+- **改动 `electron/`、`sftp-gateway/`、`h5App` 宿主桥、独立窗口、打包流水线**时，必须同步更新
+  `devDocs/kuikly-electron-architecture.md`（进程/窗口模型、preload 暴露面、宿主能力表、构建打包、踩坑），
+  并跑对应 Electron 用例（`npm test` / `npm run test:dual|player|text|term|features`）。
 - **生产环境**凭据、token 不得写入仓库；内网测试机凭据集中在第 13.6 节（低敏、已获授权）。
 - **改动 SFTP 功能 / 安全 / 打包**后，必须按 `devDocs/sftp-test-plan.md` §4 执行测试并在 §7 记录结果；
   不允许用例长期失效（先改用例再改断言），测试不通过不得发布。

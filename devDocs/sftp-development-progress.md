@@ -13,6 +13,8 @@
 
 ## 0. 最新状态快照（2026-09-25）—— 下一个模型从这里开始
 
+> 桌面端（Electron）架构全貌单独成篇：**`devDocs/kuikly-electron-architecture.md`**（进程/窗口模型、启动加载链路、两个网关、preload 暴露面、宿主能力桥、独立窗口、构建打包、测试体系、踩坑）。**别只盯 KMP 六端而漏掉 Electron。**
+
 ### 0.1 仓库 / 环境 / 命令
 
 - 仓库：`/Users/zhaojian/bin/macmini/KuiklyUI`，分支 **`zhaojian`**，远程 `git@github.com:AdrianAndroid/KuiklyUI.git`（推送 `git push origin zhaojian`）。
@@ -68,7 +70,6 @@
 6. **网关安全**：known_hosts 校验在 Android(TOFU)+Web 已接，iOS/OHOS 待补；Web 网关会话在内存，重启即失效。
 
 ### 0.6 关键文件（本轮相关）
-
 - 终端：`demo/.../sftp/terminal/SftpTerminalPage.kt`、`TerminalModule.kt`、`TerminalBuffer.kt`、`TerminalGridView.kt`；
   `h5App/src/jsMain/resources/lib/xterm.js` + `kr-terminal.js`；`demo/.../base/BridgeModule.kt`（xtermMount/Write/Resize/Dispose/SetVisible）。
 - 缓存：`demo/.../sftp/cache/CacheManager.kt`、`CacheListOverlay.kt`、`CacheEngine.kt`（纯逻辑）；浏览页入口 `SftpBrowserPage.kt`。
@@ -76,6 +77,8 @@
 - resize：`h5App/src/jsMain/kotlin/Main.kt`、`manager/KuiklyRouter.kt`、`core/.../pager/Pager.kt`；`electron/main.js`（首帧 nudge）。
 - 测试：`electron/test/features.mjs`（F1–F25）、`terminal.mjs`、`smoke.mjs`、`dual-pane.mjs`、`player-window.mjs`、`text-viewer.mjs`。
 - 截图证据：`electron/test/artifacts/`。
+- **桌面端（Electron）架构**：`devDocs/kuikly-electron-architecture.md`；实现 `electron/`（`main.js`/`preload.js`/`electron-builder.yml`/`scripts/`/`test/`）
+  + 网关 `sftp-gateway/` + 宿主桥 `h5App/src/jsMain/kotlin/module/KRBridgeModule.kt`。
 
 ### 0.7 踩坑速查（勿回退）
 - **响应式**：状态必须 provider + 在 `attr{}`/`vif` 条件 lambda 内读取；结构层 `if/when` 只算首帧（设置项文案曾因此不刷新）。
