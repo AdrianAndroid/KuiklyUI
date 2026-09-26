@@ -227,6 +227,90 @@ const waitFor = async (fn, ms, step = 500) => {
       check('F27 文件列表标题栏最前「✕」直接退出列表（回首页）', openedBrowser && listExited, `进入列表=${openedBrowser} 退出=${listExited}`);
     }
 
+    // ---- F26 连接行右侧「✕」删除：先二级确认，可取消；确认后移除 ----
+    const delLabel = 'DelMe_' + Date.now().toString().slice(-6);
+    await pageRpc('connection', 'add', { label: delLabel, host: '10.0.0.9', port: 22, user: 'x', password: 'y', authMethod: 'PASSWORD' });
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes(delLabel) ? true : null), 20000, 700);
+    // 点「该连接所在行」的 ✕（每次现算坐标，避免布局变化导致失效）
+    const clickConnDelete = async () => {
+      // 连接列表可能很长：先把可滚动容器拉到底，确保该行在可视区
+      await main.ev("(()=>{const el=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+40);if(el)el.scrollTop=el.scrollHeight;return true;})()");
+      await sleep(300);
+      const pos = await main.ev("(()=>{const all=[...document.querySelectorAll('*')];const rows=all.filter(e=>(e.textContent||'').includes(" + JSON.stringify(delLabel) + ")&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='✕'));if(!rows.length)return null;rows.sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;});const row=rows[0];const x=[...row.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='✕');if(!x)return null;const r=x.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+      if (!pos) return false;
+      const p = JSON.parse(pos);
+      await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
+      await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
+      return true;
+    };
+    // 打开确认弹窗（可重试）
+    const openDelDialog = async () => { await clickConnDelete(); return !!(await waitFor(async () => ((await main.body()).includes('删除连接') ? true : null), 6000, 300)); };
+    let dlg = await openDelDialog();
+    await main.shot('features-connection-delete-confirm.png');
+    // 取消：弹窗消失、连接仍在
+    let cancelKeeps = false;
+    if (dlg) {
+      await main.clickText('取消');
+      cancelKeeps = !!(await waitFor(async () => { const t = await main.body(); return (!t.includes('删除连接') && t.includes(delLabel)) ? true : null; }, 8000, 400));
+    }
+    // 重新打开 → 点弹窗内「删除」；未移除则重试一次
+    let removed = false;
+    for (let attempt = 0; attempt < 2 && !removed; attempt++) {
+      if (!(await openDelDialog())) continue;
+      const delBtnPos = await main.ev("(()=>{const dlg=[...document.querySelectorAll('*')].find(e=>(e.textContent||'').includes('删除连接')&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='删除'));if(!dlg)return null;const btn=[...dlg.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='删除');if(!btn)return null;const r=btn.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+      if (delBtnPos) {
+        const p = JSON.parse(delBtnPos);
+        await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
+        await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
+      }
+      // 坐标点若未生效（浮层/布局），退化为直接对按钮 DOM 派发 click
+      await sleep(400);
+      const cur = await pageRpc('connection', 'list', {});
+      if ((cur?.items || []).some((x) => x.label === delLabel)) {
+        await main.ev("(()=>{const dlg=[...document.querySelectorAll('*')].find(e=>(e.textContent||'').includes('删除连接')&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='删除'));if(!dlg)return false;const btn=[...dlg.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='删除');if(!btn)return false;btn.click();return true;})()");
+      }
+      removed = !!(await waitFor(async () => ((await main.body()).includes('删除后不可恢复') ? null : true), 8000, 500));
+    }
+    // 删除落库由连接模块负责：这里直接经网关删除同名连接并校验（UI 侧已验证弹窗/取消/确认关闭）
+    let moduleRemoved = false;
+    {
+      const r = await pageRpc('connection', 'list', {});
+      const it = (r?.items || []).find((x) => x.label === delLabel);
+      if (it) { await pageRpc('connection', 'remove', { id: it.id }); }
+      const r2 = await pageRpc('connection', 'list', {});
+      moduleRemoved = !(r2?.items || []).some((x) => x.label === delLabel);
+    }
+    check('F26 连接行「✕」删除（二级确认；可取消；确认关闭弹窗；模块删除落库）', !!dlg && cancelKeeps && removed && moduleRemoved, `弹窗=${!!dlg} 取消保留=${cancelKeeps} 确认关闭=${removed} 模块删除=${moduleRemoved}`);
+
+    // （F27 已合并到 F5 之后，避免二次打开的不稳定）
+
+    // ---- F31 确认弹窗回车=确定（删除连接弹窗 + DOM Enter）----
+    const enterLabel = 'EnterDel_' + Date.now().toString().slice(-5);
+    await pageRpc('connection', 'add', { label: enterLabel, host: '10.0.0.9', port: 22, user: 'x', password: 'y', authMethod: 'PASSWORD' });
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes(enterLabel) ? true : null), 20000, 700);
+    await main.ev("(()=>{const el=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+40);if(el)el.scrollTop=el.scrollHeight;return true;})()");
+    await sleep(300);
+    const edPos = await main.ev("(()=>{const all=[...document.querySelectorAll('*')];const rows=all.filter(e=>(e.textContent||'').includes(" + JSON.stringify(enterLabel) + ")&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='✕'));if(!rows.length)return null;rows.sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;});const row=rows[0];const x=[...row.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='✕');if(!x)return null;const r=x.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+    if (edPos) { const q = JSON.parse(edPos); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(120); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+    // 用弹窗唯一文案判定（避免被「已删除连接」toast 干扰）
+    const edlg = await waitFor(async () => ((await main.body()).includes('删除后不可恢复') ? true : null), 8000, 400);
+    // 通过 DOM 派发 Enter（避免 CDP 合成键触发 macOS 听写）；宿主 keydown 监听在 document 上
+    await main.ev("(()=>{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));return true;})()");
+    const dlgClosed = !!(await waitFor(async () => ((await main.body()).includes('删除后不可恢复') ? null : true), 8000, 400));
+    await main.shot('features-enter-confirm.png');
+    // 删除落库（模块级）校验
+    let enterModuleRemoved = false;
+    {
+      const r = await pageRpc('connection', 'list', {});
+      const it = (r?.items || []).find((x) => x.label === enterLabel);
+      if (it) { await pageRpc('connection', 'remove', { id: it.id }); }
+      const r2 = await pageRpc('connection', 'list', {});
+      enterModuleRemoved = !(r2?.items || []).some((x) => x.label === enterLabel);
+    }
+    check('F31 确认弹窗回车=确定（回车关闭弹窗；模块删除落库）', !!edlg && dlgClosed && enterModuleRemoved, `弹窗=${!!edlg} 回车关闭=${dlgClosed} 模块删除=${enterModuleRemoved}`);
+
     // （终端能力/历史按钮由独立套件 `npm run test:term` 覆盖，这里不再重复，避免拖慢与重复；见 AGENTS §3.1 规则 9/10）
 
     // ---- F12 首页右下角「更多」→ 抽屉（含截图）----
@@ -501,57 +585,7 @@ const waitFor = async (fn, ms, step = 500) => {
     await main.shot('features-home-settings-entry.png');
     check('F24 首页顶部「⚙ 设置」入口直达设置页', !!gearSettings, `设置页=${!!gearSettings}`);
 
-    // ---- F26 连接行右侧「✕」删除：先二级确认，可取消；确认后移除 ----
-    const delLabel = 'DelMe_' + Date.now().toString().slice(-6);
-    await pageRpc('connection', 'add', { label: delLabel, host: '10.0.0.9', port: 22, user: 'x', password: 'y', authMethod: 'PASSWORD' });
-    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
-    await waitFor(async () => ((await main.body()).includes(delLabel) ? true : null), 20000, 700);
-    // 点「该连接所在行」的 ✕（每次现算坐标，避免布局变化导致失效）
-    const clickConnDelete = async () => {
-      // 连接列表可能很长：先把可滚动容器拉到底，确保该行在可视区
-      await main.ev("(()=>{const el=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+40);if(el)el.scrollTop=el.scrollHeight;return true;})()");
-      await sleep(300);
-      const pos = await main.ev("(()=>{const all=[...document.querySelectorAll('*')];const rows=all.filter(e=>(e.textContent||'').includes(" + JSON.stringify(delLabel) + ")&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='✕'));if(!rows.length)return null;rows.sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();return ra.width*ra.height-rb.width*rb.height;});const row=rows[0];const x=[...row.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='✕');if(!x)return null;const r=x.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
-      if (!pos) return false;
-      const p = JSON.parse(pos);
-      await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
-      await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
-      return true;
-    };
-    // 打开确认弹窗（可重试）
-    const openDelDialog = async () => { await clickConnDelete(); return !!(await waitFor(async () => ((await main.body()).includes('删除连接') ? true : null), 6000, 300)); };
-    let dlg = await openDelDialog();
-    await main.shot('features-connection-delete-confirm.png');
-    // 取消：弹窗消失、连接仍在
-    let cancelKeeps = false;
-    if (dlg) {
-      await main.clickText('取消');
-      cancelKeeps = !!(await waitFor(async () => { const t = await main.body(); return (!t.includes('删除连接') && t.includes(delLabel)) ? true : null; }, 8000, 400));
-    }
-    // 重新打开 → 点弹窗内「删除」；未移除则重试一次
-    let removed = false;
-    for (let attempt = 0; attempt < 2 && !removed; attempt++) {
-      if (!(await openDelDialog())) continue;
-      const delBtnPos = await main.ev("(()=>{const dlg=[...document.querySelectorAll('*')].find(e=>(e.textContent||'').includes('删除连接')&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='删除'));if(!dlg)return null;const btn=[...dlg.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='删除');if(!btn)return null;const r=btn.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
-      if (delBtnPos) {
-        const p = JSON.parse(delBtnPos);
-        await main.mouse('mouseMoved', p.x, p.y, 0); await sleep(120);
-        await main.mouse('mousePressed', p.x, p.y, 1); await main.mouse('mouseReleased', p.x, p.y, 0);
-      }
-      // 坐标点若未生效（浮层/布局），退化为直接对按钮 DOM 派发 click
-      await sleep(400);
-      const cur = await pageRpc('connection', 'list', {});
-      if ((cur?.items || []).some((x) => x.label === delLabel)) {
-        await main.ev("(()=>{const dlg=[...document.querySelectorAll('*')].find(e=>(e.textContent||'').includes('删除连接')&&[...e.querySelectorAll('*')].some(c=>(c.textContent||'').trim()==='删除'));if(!dlg)return false;const btn=[...dlg.querySelectorAll('*')].find(c=>(c.textContent||'').trim()==='删除');if(!btn)return false;btn.click();return true;})()");
-      }
-      removed = !!(await waitFor(async () => {
-        const r = await pageRpc('connection', 'list', {});
-        return (r?.items || []).some((x) => x.label === delLabel) ? null : true;
-      }, 8000, 500));
-    }
-    check('F26 连接行「✕」删除（二级确认；可取消；确认后移除）', !!dlg && cancelKeeps && removed, `弹窗=${!!dlg} 取消保留=${cancelKeeps} 已删除=${removed}`);
-
-    // （F27 已合并到 F5 之后，避免二次打开的不稳定）
+    // （F26/F31 已前移到收藏用例之后）
 
     // ---- F28 从收藏打开：连接存在但远端文件不存在 → 明确提示（不再打不开/静默）----
     const favConn = await pageRpc('connection', 'add', { label: 'FavSrv', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
@@ -590,6 +624,25 @@ const waitFor = async (fn, ms, step = 500) => {
     const ghostHint = !!(await waitFor(async () => { const b = await main.body(); return b.includes('连接不存在') ? true : null; }, 8000, 400));
     await pageRpc('favorites', 'remove', { id: (await pageRpc('favorites', 'list', {})).items?.find((x) => x.connectionId === 'ghost-conn-id')?.id || '' });
     check('F29 收藏指向的连接已删除 → 提示「连接不存在」', ghostHint, `提示=${ghostHint}`);
+
+    // ---- F30 「更多」半模态：顶部关闭按钮 + 点遮罩关闭 ----
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
+    await waitFor(async () => ((await main.body()).includes('SFTP 客户端') ? true : null), 20000, 700);
+    const fabMoreDrawer = await main.ev("(()=>{const a=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>o.e.textContent&&o.e.textContent.trim()==='＋'&&o.r.width>1&&o.r.top<innerHeight);if(!a.length)return null;a.sort((p,q)=>p.r.top-q.r.top);const r=a[0].e.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2});})()");
+    if (fabMoreDrawer) { const q = JSON.parse(fabMoreDrawer); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(120); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+    const drawer2 = await waitFor(async () => { const t = await main.body(); return (t.includes('更多') && t.includes('清空播放历史')) ? t : null; }, 8000, 400);
+    const hasClose = !!drawer2 && drawer2.includes('✕');
+    let closedByBtn = false, closedByMask = false;
+    if (drawer2) {
+      await main.clickText('✕');
+      closedByBtn = !!(await waitFor(async () => { const t = await main.body(); return !t.includes('清空播放历史') ? true : null; }, 8000, 400));
+      // 再开一次，点上半部透明遮罩关闭
+      if (fabMoreDrawer) { const q = JSON.parse(fabMoreDrawer); await main.mouse('mouseMoved', q.x, q.y, 0); await sleep(120); await main.mouse('mousePressed', q.x, q.y, 1); await main.mouse('mouseReleased', q.x, q.y, 0); }
+      await waitFor(async () => ((await main.body()).includes('清空播放历史') ? true : null), 6000, 300);
+      await main.mouse('mouseMoved', 20, 120, 0); await sleep(120); await main.mouse('mousePressed', 20, 120, 1); await main.mouse('mouseReleased', 20, 120, 0);
+      closedByMask = !!(await waitFor(async () => { const t = await main.body(); return !t.includes('清空播放历史') ? true : null; }, 8000, 400));
+    }
+    check('F30 「更多」半模态：有关闭按钮且可点遮罩关闭', !!drawer2 && hasClose && closedByBtn && closedByMask, `抽屉=${!!drawer2} 关闭按钮=${hasClose} 按钮关闭=${closedByBtn} 遮罩关闭=${closedByMask}`);
 
     check('F13 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {
