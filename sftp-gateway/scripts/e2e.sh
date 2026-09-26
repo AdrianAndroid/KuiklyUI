@@ -12,6 +12,10 @@
 #   E2E_TEST_TIMEOUT=300 测试超时秒数 | E2E_WORKDIR 工作目录
 #   JAVA_HOME / NODE_BIN / CHROME_PATH / SFTP_*  同 test/sftp-web.test.js
 #
+# 多 worktree 并行：本脚本默认占用 18090/8080，会与其它的撞；并行时显式指定实例私有端口：
+#   SFTP_GATEWAY_PORT=$((18090 + n*100)) E2E_SHELL_PORT=$((8080 + n*100)) npm run e2e
+# （Electron 套件的端口隔离见 electron/test/env.mjs，与本脚本互不影响）
+#
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

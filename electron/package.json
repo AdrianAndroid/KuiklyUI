@@ -5,6 +5,7 @@
   "description": "Kuikly SFTP 桌面壳（Electron）：托管 Node 网关 + 复用 H5 产物；不含业务逻辑（规划 §3.3 / §6.8）",
   "main": "main.js",
   "scripts": {
+    "gateway": "node scripts/dev-gateway.mjs",
     "build:web": "node scripts/build-web.mjs",
     "sync": "node scripts/sync-resources.mjs",
     "start": "npm run sync && env -u ELECTRON_RUN_AS_NODE electron .",

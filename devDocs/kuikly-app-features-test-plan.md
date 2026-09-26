@@ -1,8 +1,9 @@
 # Kuikly 桌面端功能测试规程（历史 / 收藏 / 缓存 / 终端历史 / 设置）
 
 > 适用：`electron/` 桌面壳（Web 端共用同一份 JS bundle）。
-> 运行前置：`cd electron && npm run sync`；网关已起（`sftp-gateway`，`127.0.0.1:18090`）。
+> 运行前置：`cd electron && npm run sync`；网关已起（`cd electron && npm run gateway`，端口按实例计算，见 `electron/test/env.mjs`）。
 > 一键：`npm run test:features`（本文 §3 用例），相关：`npm run test:term`（终端）、`npm run test:text`（查看器）。
+> **并行 worktree**：端口/userData/本地文件根/夹具名全部由 `electron/test/env.mjs` 按 `KR_INSTANCE` 隔离（`AGENTS.md §3.1 规则 13`）。
 
 ---
 

@@ -7,18 +7,19 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const artifacts = path.join(electronDir, 'test', 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
-const PORT = 9457;
-const GW = process.env.GATEWAY_URL || 'http://127.0.0.1:18090';
+const PORT = cdpPort('features');
+const GW = GATEWAY_URL;
 const HOST = process.env.SFTP_HOST || '192.168.2.2';
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
-const HOME = process.env.SFTP_HOME || '/home/zhaojian';
-const FIX = `${HOME}/kr_feat_fixture`;
+const HOME = SFTP_HOME;
+const FIX = `${HOME}/kr_feat_fixture_${INSTANCE}`;   // 夹具带实例前缀：多 worktree 并行不互删
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const skipped = [];
@@ -90,8 +91,10 @@ const waitFor = async (fn, ms, step = 500) => {
 };
 
 (async () => {
-  const childEnv = { ...process.env }; delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  logInstance('features');
+  ensureDirs();
+  const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
+  const child = spawn(require('electron'), ['.', ...cdpArgs('features', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   __child = child;
   const conn = await rpc('sftp', 'connect', { host: HOST, port: 22, user: USER, password: PASS });
   const sid = conn.sessionId;
@@ -99,7 +102,7 @@ const waitFor = async (fn, ms, step = 500) => {
     try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: FIX, recursive: true }); } catch (e) { }
     try { await rpc('favorites', 'clearByConnection', { connectionId: '' }); } catch (e) { }
     try { await rpc('history', 'clearByConnection', { connectionId: '' }); } catch (e) { }
-    try { fs.rmSync(require('node:os').homedir() + '/.kuikly_cache', { recursive: true, force: true }); } catch (e) { }
+    try { fs.rmSync(path.join(LOCAL_ROOT, '.kuikly_cache'), { recursive: true, force: true }); } catch (e) { }
   };
   try {
     await cleanup();

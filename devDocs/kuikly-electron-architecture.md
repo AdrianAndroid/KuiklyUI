@@ -77,7 +77,7 @@ flowchart LR
   端口由 OS 分配，回传后经 preload 的 `additionalArguments: ['--gateway=...']` 注入 `window.__SFTP_GATEWAY_URL__`。
 - **打包版网关路径**：`extraResources` 把 `sftp-gateway` 放到 `Resources/gateway`；`main.js` 按 `app.isPackaged` 解析入口。
 - **独立窗口**：播放/终端/文本查看器都是新 `BrowserWindow`，query 带 `standalone=1`（只有它允许「返回=关窗」）。
-- **测试用的「外部网关」**：跑用例前手动 `node sftp-gateway/server.js` 监听 **18090**，用于直连 SFTP 造远端夹具；
+- **测试用的「外部网关」**：跑用例前执行 `cd electron && npm run gateway`（端口由实例计算，见 §13），用于直连 SFTP 造远端夹具；
   它和**应用自带网关是两套数据目录**（见 §11 坑 4）。
 
 ---
@@ -97,8 +97,8 @@ flowchart LR
 
 | | 应用自带网关 | 测试外部网关 |
 |---|---|---|
-| 启动 | `main.js` utilityProcess（随机端口，preload 注入） | 手动 `node sftp-gateway/server.js`，固定 **18090** |
-| 数据目录 | `userData/gateway-data`（打包版） | `sftp-gateway/data`（已 gitignore） |
+| 启动 | `main.js` utilityProcess（随机端口，preload 注入） | `cd electron && npm run gateway`（实例端口，见 §13） |
+| 数据目录 | `userData/gateway-data`（打包版） | `.kr-test/gateway-data-<instance>`（已 gitignore） |
 | 出现在 | 页面 `window.__SFTP_GATEWAY_URL__` | 测试脚本里的 `rpc(...)` |
 | 用途 | 真实业务（连接/浏览/播放/终端/缓存） | 造远端夹具、直连验证 |
 
@@ -170,7 +170,7 @@ env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
 
 - **必须 `env -u ELECTRON_RUN_AS_NODE`**：VS Code / Kilo 会泄漏该变量，导致 Electron 退化成纯 Node（主进程直接 `exit(1)`）。
 - **`KUIKLY_WEB_MODE=release`** 才取 release 产物；debug 产物带调试开销。
-- **`pretest-kill.js` 已挂在 `pretest` / `pretest:*` / `posttest` / `dist` / `dist:release`**：自动 kill 上次残留客户端与调试端口进程，避免多实例卡机。
+- **`pretest-kill.js` 已挂在 `pretest` / `pretest:*` / `posttest` / `dist` / `dist:release`**：按**本实例 userData 标记**精准 kill 残留客户端 + 释放本实例网关端口（见 §13）。
 - 打包版资源在 `Contents/Resources/app.asar`（`resources/**`）与其旁的 `Resources/gateway`（`extraResources`）。
 
 ---
@@ -202,13 +202,13 @@ env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
 1. **`ELECTRON_RUN_AS_NODE` 必须去掉**再启动（§9）。否则 `require('electron')` 只返回路径、`ipcMain` 为 undefined。
 2. **`dist:release` 必须先 `build:web:release`**：它只 `sync` 会把**陈旧 release 产物**打进包（新代码进不去，曾导致「新功能在安装版没有」）。
 3. **首帧 `#root` 高 0 → 空白窗**：`main.js` 加载后派发 `resize` nudge；另见 `AGENTS.md §13.1.3` 的 core resize 修复。
-4. **应用网关 ≠ 测试外部网关（18090）**：两套数据目录；页面断言用 `window.__SFTP_GATEWAY_URL__`。
+4. **应用网关 ≠ 测试外部网关**：两套数据目录/端口；页面断言用 `window.__SFTP_GATEWAY_URL__`，不要假设 18090（并行时端口=18090+slot*100，见 §13）。
 5. **toast 必须 `pointer-events:none`**（`h5App/utils/Ui.kt`）：否则盖住其下可点元素（终端/缓存悬浮条）。
 6. **独立窗口 URL 必须 `standalone=1`**：否则返回键会关整个应用；宿主开窗**必须显式带 `page_name`**。
 7. **窗口 resize 链路**（已修）：resize 监听必须在 `installHostEventBridges()`（SPA 前）；core 尺寸变化也要 `markDirty+layoutIfNeed`（见 `AGENTS.md §13.1.3`）。
 8. **控制栏/标题自动隐藏**：顶部标题与底部控制条共享 `controlsVisible`，几秒无操作隐藏；续播对话框等全屏浮层会**拦截点击**，测试需先关掉它再点画面。
 9. **Web `KRVideoView` 换源会重置 `playbackRate`/`currentTime`**：需 `pendingRate`/`pendingSeek` 在 `setVideoSrc`/`loadeddata` 回设（切集倍速/续播依赖）。
-10. **测试/打包前清理残留客户端**（`pretest-kill.js`），否则多实例占满 CPU、互相抢调试端口。
+10. **测试/打包前清理残留客户端**：`node scripts/pretest-kill.js`（**按实例精准清理**，见 §13），否则多实例占满 CPU、互相抢调试端口。禁止全局 `pkill`。
 11. **网关绝对路径写入**要向上找最近存在祖先目录做校验（新建多级目录否则被 `LOCAL_PATH_DENIED` 误拒）。
 12. **Web 浮层（终端/缓存/选集/设置/续播）必须放在内容区之后 + `positionAbsolute`**，且不与工具条按钮同名。
 
@@ -226,7 +226,42 @@ env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
 
 ---
 
-## 13. 相关文档
+## 13. 并行 worktree 测试隔离（`electron/test/env.mjs`）
+
+多个 Agent Manager worktree 同时开发/跑测试时，**构建产物本身按 worktree 隔离**（`electron/resources`、
+`demo`/`h5App/build`、`electron/test/artifacts`），但**运行期资源是全局共享的**，必须靠实例标识隔离。
+
+**唯一事实来源：`electron/test/env.mjs`**（所有套件 `import` 它，禁止再写死端口/路径）：
+
+| 资源 | 取值 | 隔离方式 |
+|---|---|---|
+| 实例标识 | `KR_INSTANCE`（默认仓库/worktree 目录名） | 主 clone（`.git` 是目录）slot=0（端口同历史）；linked worktree slot=1~99 |
+| CDP 端口 | `cdpPort('smoke'\|'dual'\|'player'\|'text'\|'terminal'\|'features')` | 基址 9330~9380 + slot*100；启动用 `cdpArgs(...)` |
+| Electron userData | `.kr-test/ud-<instance>` | `--user-data-dir=...` + `KR_USER_DATA_DIR`，隔离连接库/收藏/播放历史/内嵌网关数据 |
+| 本地文件根 | `.kr-test/local-<instance>` | `KR_LOCAL_ROOT` → `main.js` 的 `localfs:*` 根；缓存/临时文件随之隔离 |
+| 外部网关 | `npm run gateway` | 端口 18090+slot*100，与套件 `GATEWAY_URL` 同源 |
+| 远端夹具 | `kr_<instance>_*` 等 | 同一台测试机上多 worktree 并行不互删 |
+
+**标准用法**：
+
+```bash
+cd electron
+npm run sync                 # 构建产物（每个 worktree 各自一份）
+npm run gateway              # 终端 A：本实例外部网关（打印实例与端口）
+npm test                     # 终端 B：本实例测试（自动用本实例端口/userData/本地根）
+```
+
+**主进程配合**（`main.js`）：窗口标题 `Kuikly SFTP [<instance>]`（多应用一眼区分）；`KR_USER_DATA_DIR`
+→ `app.setPath('userData')`；`KR_LOCAL_ROOT` → `localfs:*` 根。
+
+**清理**：`node scripts/pretest-kill.js` 只杀带 `ud-<instance>` 标记的 Electron + 释放本实例网关端口；
+**禁止**无差别 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` / `osascript quit`（会误杀其它 worktree）。
+
+**全局动作串行**：`npm run dist*` / 覆盖安装 `/Applications/Kuikly SFTP.app` / 发布推送，一次只在一个 worktree 执行。
+
+---
+
+## 14. 相关文档
 
 - `AGENTS.md §13.1.3`（Web/桌面 SFTP + 网关 + resize）、`§13.1.4`（双栏）、`§13.1.5`（终端）、`§13.1.6`（缓存）、`§13.1.7`（复制路径）、`§14.1`（固定交付流程）。
 - `devDocs/sftp-development-progress.md §0`（当前进度快照，含 Electron/跨端矩阵）。

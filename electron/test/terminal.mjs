@@ -1,7 +1,7 @@
 /*
  * 终端功能（跨平台设计：共享网格渲染 = native 路径；web 可另用 xterm.js）
  *
- *   前置：cd electron && npm run sync；网关已起（sftp-gateway，127.0.0.1:18090）
+ *   前置：cd electron && npm run sync；外部网关已起（cd electron && npm run gateway，端口按实例计算）
  *   运行：cd electron && npm run test:term
  *
  * 用例：
@@ -17,13 +17,14 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, SFTP_HOME } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const artifacts = path.join(electronDir, 'test', 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
-const PORT = 9443;
-const HOME = process.env.SFTP_HOME || '/home/zhaojian';
+const PORT = cdpPort('terminal');
+const HOME = SFTP_HOME;
 const USER = process.env.SFTP_USER || 'zhaojian';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -85,8 +86,10 @@ async function runCommand(view, cmd) {
 }
 
 (async () => {
-  const childEnv = { ...process.env }; delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  logInstance('terminal');
+  ensureDirs();
+  const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
+  const child = spawn(require('electron'), ['.', ...cdpArgs('terminal', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   try {
     const page = await waitFor(async () => (await listTargets())[0], 40000);
     if (!page) { check('T0 渲染进程启动', false); return; }

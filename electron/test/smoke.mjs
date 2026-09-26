@@ -8,6 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -29,7 +30,7 @@ if (!binOverride && !fs.existsSync(path.join(electronDir, 'resources', 'index.ht
   process.exit(2);
 }
 
-const PORT = 9333;
+const PORT = cdpPort('smoke');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0All = Date.now();
 const results = [];
@@ -61,12 +62,14 @@ setTimeout(() => {
 }, 900 * 1000);
 
 (async () => {
+  logInstance('smoke');
+  ensureDirs();
   // 关键：宿主环境可能带 ELECTRON_RUN_AS_NODE=1（VS Code 等），会让 Electron 以纯 Node 运行
-  const childEnv = { ...process.env };
+  const childEnv = buildChildEnv();
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = binOverride
-    ? spawn(binOverride, [`--remote-debugging-port=${PORT}`], { stdio: 'inherit', env: childEnv })
-    : spawn(electronBin, ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+    ? spawn(binOverride, cdpArgs('smoke', PORT), { stdio: 'inherit', env: childEnv })
+    : spawn(electronBin, ['.', ...cdpArgs('smoke', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
   try {
     check('S1 Electron 启动 + CDP 可用', await waitCdp());
     // 等待渲染进程页面出现（窗口创建/首帧可能晚于 CDP 就绪）

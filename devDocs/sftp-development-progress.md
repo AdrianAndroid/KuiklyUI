@@ -23,8 +23,11 @@
 - 常用 Gradle 参数：`-Pkuikly.useLocalKsp=false --offline`；Android 编译需 `ANDROID_HOME=$HOME/Library/Android/sdk`。
 - **启动 Electron 必须去掉 `ELECTRON_RUN_AS_NODE`**（VS Code/Kilo 会泄漏，导致主进程 `exit(1)`）：
   `env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"`。
-- 测试用外部网关（远程夹具/直连 SFTP）：`cd sftp-gateway && node server.js`（监听 127.0.0.1:18090）。
-  页面业务走的是 **Electron 自带网关（随机端口）**，所以收藏/历史断言要用页面内 `window.__SFTP_GATEWAY_URL__`，不能走 18090。
+- 测试用外部网关（远程夹具/直连 SFTP）：`cd electron && npm run gateway`（端口由 `electron/test/env.mjs` 按实例计算：
+  主 clone=18090，linked worktree=18090+slot*100）。
+  页面业务走的是 **Electron 自带网关（随机端口）**，所以收藏/历史断言要用页面内 `window.__SFTP_GATEWAY_URL__`，不能走固定端口。
+- **并行 worktree**：CDP 端口/userData/本地文件根/远端夹具名一律由 `electron/test/env.mjs` 按 `KR_INSTANCE` 隔离；
+  清理用 `node electron/scripts/pretest-kill.js`（只清本实例）。详见 `AGENTS.md §3.1 规则 13`。
 
 ### 0.2 交付流程（固定，见 `AGENTS.md §14.1`）
 

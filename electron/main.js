@@ -22,6 +22,15 @@ if (!app) {
 }
 const path = require('path');
 
+// 并行 worktree 隔离（AGENTS.md §3.1 规则 13）：实例标识来自 KR_INSTANCE，
+// 窗口标题带实例名便于区分多个测试应用；userData 指向实例私有目录（隔离连接/收藏/历史/网关数据）。
+const INSTANCE = process.env.KR_INSTANCE ? String(process.env.KR_INSTANCE) : '';
+const WINDOW_TITLE = INSTANCE ? `Kuikly SFTP [${INSTANCE}]` : 'Kuikly SFTP';
+if (process.env.KR_USER_DATA_DIR) {
+  try { app.setPath('userData', path.resolve(process.env.KR_USER_DATA_DIR)); }
+  catch (e) { console.warn('[electron] 设置 userData 失败：', e.message); }
+}
+
 const RES_DIR = path.join(__dirname, 'resources');
 
 /**
@@ -70,7 +79,7 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1180,
     height: 820,
-    title: 'Kuikly SFTP',
+    title: WINDOW_TITLE,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -123,8 +132,9 @@ ipcMain.handle('host:getInfo', async () => ({
   gatewayUrl,
 }));
 
-/* ---- 本地文件系统（双栏「本地栏」）：只允许访问 root（用户主目录）之下 ---- */
-const LOCAL_ROOT = app.getPath('home');
+/* ---- 本地文件系统（双栏「本地栏」）：只允许访问 root 之下 ----
+ * 默认用户主目录；并行 worktree 测试用 KR_LOCAL_ROOT 指向实例私有目录（隔离夹具/缓存）。 */
+const LOCAL_ROOT = process.env.KR_LOCAL_ROOT ? path.resolve(process.env.KR_LOCAL_ROOT) : app.getPath('home');
 let localRootReal = null;
 /** 校验并返回真实路径：realpath 解析（拒绝主目录内指向外部的符号链接）。 */
 async function assertWithinRoot(p) {
@@ -204,7 +214,7 @@ function createPlayerWindow(playerQuery) {
     height: 640,
     minWidth: 420,
     minHeight: 260,
-    title: 'Kuikly SFTP',
+    title: WINDOW_TITLE,
     backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -223,7 +233,7 @@ function createPlayerWindow(playerQuery) {
   Object.keys(playerQuery || {}).forEach((k) => {
     if (playerQuery[k] != null) query[k] = String(playerQuery[k]);
   });
-  if (query.name) win.setTitle('Kuikly SFTP - ' + query.name);
+  if (query.name) win.setTitle(WINDOW_TITLE + ' - ' + query.name);
   win.loadFile(path.join(RES_DIR, 'index.html'), { query });
   return true;
 }

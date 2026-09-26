@@ -492,8 +492,9 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
 
 > 运行：`cd electron && npm run build:web`（或先跑 Gradle 打包）→ `npm run sync` → `npm run test:dual`
 > 脚本：`electron/test/dual-pane.mjs`；截图：`electron/test/artifacts/*.png`（关键步骤自动存图）
-> 前置：`sftp-gateway` 已起（脚本会连网关做断言/清理；Electron 主进程另起自带网关供页面使用）
-> **夹具自建自清**：脚本运行开始时创建 `~/000_kuikly_dual_*.{txt,bin}` 与远端同名文件，结束时全部删除（不留残余）。
+> 前置：外部网关已起：`cd electron && npm run gateway`（端口按实例计算；脚本连它做断言/清理；Electron 主进程另起自带网关供页面使用）
+> **夹具自建自清**：本地夹具建在 `.kr-test/local-<instance>/000_kuikly_dual_<instance>.*`（经 `KR_LOCAL_ROOT` 隔离），
+> 远端夹具名带实例前缀；结束时全部删除（不留残余）。并行 worktree 说明见 `electron/test/env.mjs` 与 `AGENTS.md §3.1 规则 13`。
 
 | ID | 用例 | 断言方式 |
 |----|------|----------|

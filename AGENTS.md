@@ -127,8 +127,32 @@
 11. **每次构建 dmg 都要在 `~/Downloads` 留一份带构建时间的副本**：`npm run dist`/`dist:release` 已内置
    `node scripts/copy-dmg.mjs`，把 `electron/dist/*.dmg` 另存为 `~/Downloads/Kuikly SFTP-<版本>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）。
 12. **每回结束（一次测试/开发会话收尾）都要关闭自己启动的 SFTP 客户端/网关进程**：跑完用例或调试后执行
-   `pkill -f "Kuikly SFTP.app" || true; pkill -f "remote-debugging-port=" || true; pkill -f "electron ." || true`，
-   不要留下后台客户端/网关占资源。`posttest`/`posttest:*` 钩子已自动做这件事。
+   `cd electron && node scripts/pretest-kill.js`（**只清理本 worktree 实例**：按实例 userData 标记杀 Electron +
+   释放本实例网关端口），不要留下后台客户端/网关占资源。`pretest`/`posttest` 钩子已自动做这件事。
+   ⚠️ **禁止**用无差别的 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` /
+   `osascript -e 'quit app "Kuikly SFTP"'` —— 会把其它并行 worktree 正在跑的用例一并杀掉（见规则 13）。
+13. **多 worktree 并行开发时，测试必须按实例隔离，禁止再用写死的端口/全局路径**：
+   - **唯一事实来源**：`electron/test/env.mjs`。所有测试的 CDP 端口、userData、外部网关地址、本地文件根、
+     远端夹具命名一律从这里取，不得在各套件里另行写死。
+   - **实例标识**：`KR_INSTANCE`（默认取仓库/worktree 目录名，如 `able-seagull`）；主 clone（`.git` 是目录）slot=0，
+     端口与历史行为完全一致；linked worktree slot=1~99，端口 = 基址 + slot*100。
+   - **CDP 端口**：用 `cdpPort('smoke'|'dual'|'player'|'text'|'terminal'|'features')`；启动参数用 `cdpArgs(...)`
+     （自动带 `--user-data-dir=<repo>/.kr-test/ud-<instance>`，隔离连接库/收藏/播放历史/内嵌网关数据）。
+   - **外部网关**：用 `cd electron && npm run gateway` 启动（端口与各套件 `GATEWAY_URL` 同源）；**不要**再手起
+     `node server.js`（会固定 18090 与其它 worktree 撞车）。
+   - **本地文件根**：测试经 `KR_LOCAL_ROOT` 指向 `<repo>/.kr-test/local-<instance>`（双栏本地栏/缓存/临时文件随之隔离）；
+     `main.js` 窗口标题会带 `[<instance>]`，便于区分多个测试应用。
+   - **远端夹具**：名字带实例前缀（`kr_<instance>_*`、`kr_feat_fixture_<instance>` 等），多个 worktree 在同一台测试机上并行不互删。
+   - **禁用全局操作**：并行期间的 `pretest-kill` 不得无差别 `pkill`；`npm run dist*` / 覆盖安装 `/Applications` /
+     发布推送等**全局动作一次只在一个 worktree 执行**。
+14. **每个「规则新增/修改」与「功能完成且验证通过」的节点，都要提交到本地**：
+   - 只要满足任一条件，就**立即**在**当前 worktree 的分支**上提交（无需再询问）：
+     ① 新增/修改了规则或文档（本文件、`devDocs/*`、`openspec/*`）；
+     ② 一个功能/修复**已实现**且**受影响用例已跑绿**（按规则 9 只跑受影响套件，不要求全量）。
+   - 命令：`git add -A && git commit -m "<type>: <摘要>"`，遵循 Angular Convention（`feat:`/`fix:`/`docs:`/`refactor:`/`chore:`）。
+   - **默认只提交到本地**；`git push origin zhaojian` **只在用户明确要求或走 §14.1 交付流程时**执行。
+   - **多 worktree 并行时各自提交各自分支**，不要替其它 worktree 提交/推送；一个提交只包含**本 worktree、本次改动**的文件。
+   - 提交前按仓库规范先看 `git status` / `git diff`，只 stage 本次相关文件，**绝不提交凭据、token、`.kr-test/`、`electron/resources/` 等产物**。
 
 ---
 
@@ -922,6 +946,9 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 
 固定四步（缺一不可）：
 
+> ⚠️ **这是全局动作，一次只在一个 worktree 执行**（`/Applications` 只有一份、`osascript quit` 会关掉所有实例）：
+> 并行开发时先确保其它 worktree 没在跑用例/调试。
+
 ```bash
 cd /Users/zhaojian/bin/macmini/KuiklyUI/electron
 # ① 打包（release bundle + dmg）
@@ -935,7 +962,7 @@ xattr -dr com.apple.quarantine "/Applications/Kuikly SFTP.app"
 # 启动必须去掉 ELECTRON_RUN_AS_NODE（VS Code/Kilo 会泄漏，否则主进程直接 exit(1)）
 env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
 
-# ③ 提交 ④ 推送
+# ③ 提交 ④ 推送（交付才推送；日常「规则/功能」节点按规则 14 只本地 commit）
 git add -A && git commit && git push origin zhaojian
 ```
 
@@ -957,6 +984,9 @@ git add -A && git commit && git push origin zhaojian
 - **改动 `electron/`、`sftp-gateway/`、`h5App` 宿主桥、独立窗口、打包流水线**时，必须同步更新
   `devDocs/kuikly-electron-architecture.md`（进程/窗口模型、preload 暴露面、宿主能力表、构建打包、踩坑），
   并跑对应 Electron 用例（`npm test` / `npm run test:dual|player|text|term|features`）。
+- **新增/修改 Electron 测试套件时，端口/userData/本地根/网关/夹具命名必须从 `electron/test/env.mjs` 取**，
+  禁止再写死 `--remote-debugging-port=9333` 这类常量或 `os.homedir()` 夹具路径（见 §3.1 规则 13）；
+  新增 suite 时在 `env.mjs` 的 `SUITE_BASE` 登记一个基址。
 - **生产环境**凭据、token 不得写入仓库；内网测试机凭据集中在第 13.6 节（低敏、已获授权）。
 - **改动 SFTP 功能 / 安全 / 打包**后，必须按 `devDocs/sftp-test-plan.md` §4 执行测试并在 §7 记录结果；
   不允许用例长期失效（先改用例再改断言），测试不通过不得发布。

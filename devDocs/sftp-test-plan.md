@@ -67,6 +67,11 @@
 | `9230`-`9333` | CDP 调试端口（Web 测试 / Electron 测试）|
 
 > ⚠️ 历史文档里的 `8083`（单独托管 nativevue2.js）已**不再需要**：改为同源 8080 提供。
+>
+> **并行 worktree（Electron 套件）**：CDP 端口、Electron userData、本地文件根、外部网关端口、远端夹具名
+> 一律由 `electron/test/env.mjs` 按 `KR_INSTANCE` 派生（主 clone slot=0 保持旧端口；linked worktree 端口=基址+slot*100）。
+> 外部网关用 `cd electron && npm run gateway` 启动；清理用 `node electron/scripts/pretest-kill.js`（**只清本实例**，
+> 禁止全局 `pkill`）。详见 `AGENTS.md §3.1 规则 13` 与 `devDocs/kuikly-electron-architecture.md §13`。
 
 ### 2.3 测试服务器与素材（内网低敏，`AGENTS.md` §13.6）
 

@@ -1,7 +1,7 @@
 /*
  * 文本文件查看器（独立窗口，含 Markdown）——真实点击自动化验证
  *
- *   前置：cd electron && npm run sync；网关已起（sftp-gateway，127.0.0.1:18090）
+ *   前置：cd electron && npm run sync；外部网关已起（cd electron && npm run gateway，端口按实例计算）
  *   运行：cd electron && npm run test:text
  *
  * 验证点：
@@ -17,22 +17,23 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, GATEWAY_URL, SFTP_HOME } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const artifacts = path.join(electronDir, 'test', 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
 
-const PORT = 9409;
-const GW = process.env.GATEWAY_URL || 'http://127.0.0.1:18090';
+const PORT = cdpPort('text');
+const GW = GATEWAY_URL;
 const HOST = process.env.SFTP_HOST || '192.168.2.2';
 const PORT_SSH = process.env.SFTP_PORT || '22';
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
-const HOME = process.env.SFTP_HOME || '/home/zhaojian';
-const DOC_DIR = `${HOME}/ks-cr-doc`;                 // 用户指定的 Markdown 目录
+const HOME = SFTP_HOME;
+const DOC_DIR = `${HOME}/ks-cr-doc`;                 // 用户指定的 Markdown 目录（共享只读）
 const SAMPLE_MD = '国王红包功能总结文档.md';
-const FIX_DIR = `${HOME}/kr_text_fixture`;           // 确定性夹具（含样例 md + 小 txt）
+const FIX_DIR = `${HOME}/kr_text_fixture_${INSTANCE}`;   // 确定性夹具带实例前缀（多 worktree 并行不互删）
 const FIX_MD = 'a_sample_doc.md';
 const FIX_TXT = 'b_notes.txt';
 
@@ -85,8 +86,10 @@ setTimeout(() => {
 }, 900 * 1000);
 
 (async () => {
-  const childEnv = { ...process.env }; delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  logInstance('text');
+  ensureDirs();
+  const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
+  const child = spawn(require('electron'), ['.', ...cdpArgs('text', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   const conn = await rpc('sftp', 'connect', { host: HOST, port: Number(PORT_SSH), user: USER, password: PASS });
   const sid = conn.sessionId;
   const cleanup = async () => { try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: FIX_DIR, recursive: true }); } catch (e) {} };

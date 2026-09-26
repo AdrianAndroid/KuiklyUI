@@ -78,5 +78,8 @@ sftp-gateway/data/
 # Electron 自动化测试截图产物（不入库）
 electron/test/artifacts/
 
+# 并行 worktree 测试隔离目录：实例私有 userData / 本地文件根（见 electron/test/env.mjs）
+.kr-test/
+
 # 运行时产物（history.setLimit 在 cwd 落盘）
 sftp_history_limit.json

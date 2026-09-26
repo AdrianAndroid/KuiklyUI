@@ -1,7 +1,7 @@
 /*
  * 独立播放窗口（多视频同时播放）——真实点击自动化验证
  *
- *   前置：cd electron && npm run sync；网关已起（sftp-gateway，127.0.0.1:18090）
+ *   前置：cd electron && npm run sync；外部网关已起（cd electron && npm run gateway，端口按实例计算）
  *   运行：cd electron && npm run test:player
  *
  * 验证点：
@@ -16,19 +16,20 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, GATEWAY_URL, SFTP_HOME } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const artifacts = path.join(electronDir, 'test', 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
 
-const PORT = 9381;
-const GW = process.env.GATEWAY_URL || 'http://127.0.0.1:18090';
+const PORT = cdpPort('player');
+const GW = GATEWAY_URL;
 const HOST = process.env.SFTP_HOST || '192.168.2.2';
 const PORT_SSH = process.env.SFTP_PORT || '22';
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
-const HOME = process.env.SFTP_HOME || '/home/zhaojian';
+const HOME = SFTP_HOME;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -81,8 +82,10 @@ setTimeout(() => {
 }, 900 * 1000);
 
 (async () => {
-  const childEnv = { ...process.env }; delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  logInstance('player');
+  ensureDirs();
+  const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
+  const child = spawn(require('electron'), ['.', ...cdpArgs('player', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   try {
     const page = await waitFor(async () => (await listTargets())[0], 40000);
     if (!page) { check('P0 启动渲染进程', false); return; }
@@ -94,7 +97,7 @@ setTimeout(() => {
     // 因为 Kuikly 的 Scroller 不是原生滚动容器，scrollIntoView 对其无效）
     const conn = await rpc('sftp', 'connect', { host: HOST, port: Number(PORT_SSH), user: USER, password: PASS });
     const sid = conn.sessionId;
-    const FIX_DIR = `${HOME}/kr_pw_fixture`;
+    const FIX_DIR = `${HOME}/kr_pw_fixture_${INSTANCE}`;
     const CLIP_A = 'a_first_60s.mp4';
     const CLIP_B = 'b_second_60s.mp4';
     const cleanup = async () => { try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: FIX_DIR, recursive: true }); } catch (e) {} };

@@ -1,7 +1,7 @@
 /*
  * 双栏文件管理器：真实点击自动化验证（可见窗口 + 截图）
  *
- *   前置：cd electron && npm run sync；网关已起（sftp-gateway，127.0.0.1:18090）
+ *   前置：cd electron && npm run sync；外部网关已起（cd electron && npm run gateway，端口按实例计算）
  *   运行：cd electron && npm run test:dual
  *
  * 说明：全程用 CDP Input.dispatchMouseEvent 模拟人工点击（不调页面内部 API），
@@ -10,32 +10,34 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const artifacts = path.join(electronDir, 'test', 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
 
-const PORT = 9334;
-const GW = process.env.GATEWAY_URL || 'http://127.0.0.1:18090';
+const PORT = cdpPort('dual');
+const GW = GATEWAY_URL;
 const HOST = process.env.SFTP_HOST || '192.168.2.2';
 const PORT_SSH = process.env.SFTP_PORT || '22';
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
-const HOME = process.env.SFTP_HOME || '/home/zhaojian';
-const LOCAL_HOME = os.homedir();
+const HOME = SFTP_HOME;
+const LOCAL_HOME = LOCAL_ROOT;   // 本实例隔离的本地文件根（经 KR_LOCAL_ROOT 传给主进程）
 
-const UPLOAD_TXT = '000_kuikly_dual_test.txt';
-const UPLOAD_BIN = '000_kuikly_dual_bin.bin';
-const DL_TXT = '000_kuikly_dual_dl.txt';
-const NEW_DIR = '000_dual_new_dir';
-const LOCAL_NEW_DIR = '000_dual_local_dir';
+// 夹具名带实例前缀：多个 worktree 并行时在共享测试机上不互删
+const UPLOAD_TXT = `000_kuikly_dual_${INSTANCE}.txt`;
+const UPLOAD_BIN = `000_kuikly_dual_${INSTANCE}.bin`;
+const DL_TXT = `000_kuikly_dual_dl_${INSTANCE}.txt`;
+const NEW_DIR = `000_dual_new_${INSTANCE}`;
+const LOCAL_NEW_DIR = `000_dual_local_${INSTANCE}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const results = [];
 const check = (n, ok, d) => { results.push({ n, ok: !!ok, d }); console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''}`); };
 
@@ -61,6 +63,8 @@ setTimeout(() => {
 }, 900 * 1000);
 
 (async () => {
+  logInstance('dual');
+  ensureDirs();
   // ---------- 夹具（本脚本自建自清，运行结束不留残余）----------
   const localFixtures = [UPLOAD_TXT, UPLOAD_BIN, DL_TXT].map((n) => path.join(LOCAL_HOME, n));
   fs.rmSync(path.join(LOCAL_HOME, LOCAL_NEW_DIR), { recursive: true, force: true });
@@ -77,10 +81,10 @@ setTimeout(() => {
   // 造一个远端文件用于「下载」用例
   await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${HOME}/${DL_TXT}`, content: dlContent.toString('base64') });
 
-  const childEnv = { ...process.env };
+  const childEnv = buildChildEnv();
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const electronBin = require('electron');
-  const child = spawn(electronBin, ['.', `--remote-debugging-port=${PORT}`], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+  const child = spawn(electronBin, ['.', ...cdpArgs('dual', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
 
   let failures = 0;
   try {
@@ -195,7 +199,7 @@ setTimeout(() => {
     const t0 = await waitText((t) => t.includes('文件管理') && t.includes('本地') && t.includes('远端'));
     check('D2 双栏页渲染（本地/远端两栏）', t0.includes('文件管理') && t0.includes('本地') && t0.includes('远端'), `len=${t0.length}`);
     const listedLocal = await waitText((t) => t.includes(UPLOAD_TXT));
-    check('D3 本地栏列出真实主目录', listedLocal.includes(UPLOAD_TXT), `has ${UPLOAD_TXT}=${listedLocal.includes(UPLOAD_TXT)}`);
+    check('D3 本地栏列出真实本地根（本实例隔离目录）', listedLocal.includes(UPLOAD_TXT), `has ${UPLOAD_TXT}=${listedLocal.includes(UPLOAD_TXT)}`);
     const listedRemote = await waitText((t) => t.includes(DL_TXT));
     check('D4 远端栏列出真实远端目录', listedRemote.includes(DL_TXT), `has ${DL_TXT}=${listedRemote.includes(DL_TXT)}`);
     console.log('      截图:', await shot('D0-双栏初始'));
@@ -247,16 +251,16 @@ setTimeout(() => {
 
     // ---------- D13 真实点击：进入远端目录 ----------
     const before = await bodyText();
-    const beforePath = (before.match(/\/home\/zhaojian[^\s\n]*/) || [''])[0];
+    const beforePath = (before.match(new RegExp(escapeRe(HOME) + '[^\\s\\n]*')) || [''])[0];
     const opened = await clickIn('▶', NEW_DIR);
-    const afterTxt = await waitText((x) => x.includes('/home/zhaojian/') && x.includes(NEW_DIR), 10000);
+    const afterTxt = await waitText((x) => x.includes(HOME + '/') && x.includes(NEW_DIR), 10000);
     const afterPath = (afterTxt.match(new RegExp(`${HOME}/${NEW_DIR}`)) || [''])[0];
     check('D13 点击目录行「▶」→ 进入下一级（真实点击）', opened && !!afterPath, `${beforePath} -> ${afterPath} | ${lastClick}`);
 
     // ---------- D14 真实点击：返回上级 → 选中新建目录 → 删除（弹层确认）----------
     const upClicked = await clickIn('↑', '远端');     // 远端栏「↑」返回上级
-    const backTxt = await waitText((x) => x.includes('文件管理') && !x.includes(`/home/zhaojian/${NEW_DIR}`), 10000);
-    check('D14a 远端栏「↑」返回上级（真实点击）', upClicked && !backTxt.includes(`/home/zhaojian/${NEW_DIR}`), lastClick);
+    const backTxt = await waitText((x) => x.includes('文件管理') && !x.includes(`${HOME}/${NEW_DIR}`), 10000);
+    check('D14a 远端栏「↑」返回上级（真实点击）', upClicked && !backTxt.includes(`${HOME}/${NEW_DIR}`), lastClick);
     const rowSel = await clickRow(NEW_DIR);         // 行点击 = 选中（按 ▶ 定位所在行）
     const afterSel = await bodyText();
     const selOk2 = /远端已选\s*1\s*项/.test(afterSel);
@@ -285,9 +289,9 @@ setTimeout(() => {
     const denyDW = errCode(denyDl) === 2001;
     const escaped = fs.existsSync('/etc/kr_escape_should_not_exist');
     check('D21 网关拒绝越界绝对路径下载（2001，且未落盘）', denyDW && !escaped, `denied=${denyDW} leaked=${escaped}`);
-    const okUp = await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${HOME}/000_kuikly_dual_scope.txt`, localPath: `${LOCAL_HOME}/${UPLOAD_TXT}` });
+    const okUp = await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${HOME}/000_kuikly_dual_scope_${INSTANCE}.txt`, localPath: `${LOCAL_HOME}/${UPLOAD_TXT}` });
     check('D22 根内 localPath 上传仍可用（不被误拒）', !!okUp && !okUp.error, JSON.stringify(okUp).slice(0, 120));
-    try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: `${HOME}/000_kuikly_dual_scope.txt` }); } catch (e) {}
+    try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: `${HOME}/000_kuikly_dual_scope_${INSTANCE}.txt` }); } catch (e) {}
 
     // ---------- D17 首页默认入口：本地文件管理 ----------
     await send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
