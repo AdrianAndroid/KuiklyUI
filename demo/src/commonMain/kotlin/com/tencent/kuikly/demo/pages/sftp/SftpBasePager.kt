@@ -36,6 +36,29 @@ import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
  */
 internal abstract class SftpBasePager : BasePager() {
 
+    /** 宿主键盘事件（Web/桌面）：回车默认「确定」（有确认弹窗的页面覆盖 [onEnterKey]） */
+    private val hostKeyObserver = object : com.tencent.kuikly.core.pager.IPagerEventObserver {
+        override fun onPagerEvent(pagerEvent: String, eventData: JSONObject) {
+            if (pagerEvent != EVENT_HOST_KEY) return
+            val key = eventData.optString("key")
+            if (key == "Enter" || key == "\r" || key == "\n") onEnterKey()
+        }
+    }
+
+    override fun created() {
+        super.created()
+        addPagerEventObserver(hostKeyObserver)
+    }
+
+    override fun pageWillDestroy() {
+        super.pageWillDestroy()
+        removePagerEventObserver(hostKeyObserver)
+    }
+
+    /** 回车键默认行为：默认空实现；有确认弹窗的页面覆盖为「确定」 */
+    open fun onEnterKey() {
+    }
+
     override fun createExternalModules(): Map<String, Module>? {
         val map = hashMapOf<String, Module>()
         // 需要宿主能力（toast 等）：SftpBasePager 覆盖了父类实现，这里显式补上
@@ -87,5 +110,9 @@ internal abstract class SftpBasePager : BasePager() {
         val night = super.isNightMode()
         SftpColorTokens.setNightMode(night)
         return night
+    }
+
+    companion object {
+        const val EVENT_HOST_KEY = "host_key"
     }
 }

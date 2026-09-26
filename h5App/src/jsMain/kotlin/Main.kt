@@ -138,6 +138,10 @@ private fun installHostEventBridges() {
             val key = (ev.key as? String) ?: ""
             if (key.isNotEmpty()) {
                 KuiklyRouter.sendEventToCurrentPage("sftp_player_key", mapOf("key" to key))
+                // 通用键盘事件：回车=确定（供各页确认弹窗监听；页面自行判断是否消费）
+                if (key == "Enter") {
+                    KuiklyRouter.sendEventToCurrentPage("host_key", mapOf("key" to "Enter"))
+                }
             }
         }
     })

@@ -136,6 +136,11 @@ internal class SftpBrowserPage : SftpBasePager() {
         cachePollRef?.let { clearTimeout(it) }
     }
 
+    /** 回车=确定：缓存过大确认弹窗打开时确认 */
+    override fun onEnterKey() {
+        if (cacheConfirmVisible) confirmCache()
+    }
+
     /** 轮询缓存进度以刷新顶部悬浮条与浮层（CacheManager 为全局单例，跨页面） */
     private fun scheduleCachePoll() {
         cachePollRef = setTimeout(350) {
