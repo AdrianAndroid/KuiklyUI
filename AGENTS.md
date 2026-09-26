@@ -873,6 +873,10 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   围栏代码块 / 引用 / 有序无序列表 / 任务列表 / 表格 / 分隔线；**目录(TOC)** 抽屉（近似跳转）、
   **源码⇄预览**、**换行开关**、**A−/A+ 字号**、状态栏（编码·大小·行数·字数）、大文件截断提示（>2MB 只读前 2MB）。
   纯文本：行号槽 + 等宽字体 + 换行/字号（渲染上限 1500 行）。
+  **代码块语法高亮**（参考 MarkText / VS Code Dark+ 配色）：纯 Kotlin 词法着色器 `viewer/md/CodeHighlighter.kt`
+  （**禁用正则**，字符扫描）识别关键字/字符串/注释/数字/函数/类型/注解，覆盖 js/ts/kotlin/java/swift/python/
+  go/rust/c/cpp/c#/html/xml/vue/css/scss/json/yaml/bash/sql 等常见语言（含别名归一；未知语言走通用规则）；
+  单块最多高亮 300 行，其余单色。用例 **T15**。
   - 入口：浏览页点文本类（md/html/txt/代码）→ `SftpViewerLauncher.openViewerPage()`。
     **Markdown → 独立窗口**（仅桌面壳/Web 宿主 `supportsPlayerWindow()` 为 true 时；复用宿主 `openPlayerWindow`
     + `standalone=1`，返回键只关该窗口，主窗口留在文件列表）；**其它文本类型 / 宿主不支持 → 页内路由**。

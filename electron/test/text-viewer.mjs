@@ -39,6 +39,7 @@ const FIX_TXT = 'b_notes.txt';
 const FIX_MD_DIAGRAM = 'c_diagram.md';   // mermaid 流程图夹具
 const FIX_MD_BIG = 'd_big_doc.md';       // 大文档夹具（增量渲染）
 const FIX_MD_BIG96 = 'e_big_over_96k.md'; // 超过 96KB 分块大小的回归夹具（验证读取 offset）
+const FIX_MD_CODE = 'f_code.md';          // 多语言代码块夹具（验证语法高亮）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -158,6 +159,44 @@ setTimeout(() => {
       `## 小节 ${i + 1}\n\n这是第 ${i + 1} 段内容，用于验证增量渲染。\n`).join('\n');
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_DIAGRAM}`, content: Buffer.from(diagramMd, 'utf8').toString('base64') });
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_BIG}`, content: Buffer.from(bigMd, 'utf8').toString('base64') });
+
+    // 多语言代码块夹具（验证语法高亮：js/kotlin/python/html/css/json）
+    const codeMd = [
+      '# 代码高亮样例', '',
+      '```javascript',
+      '// 用户信息持久化',
+      'const user = JSON.parse(await AsyncStorage.getItem("user")) || null;',
+      'export async function saveUser(u) {',
+      '  if (u && u.id > 0) { await AsyncStorage.setItem("user", JSON.stringify(u)); }',
+      '  return true;',
+      '}',
+      '```', '',
+      '```kotlin',
+      '// Kotlin 片段',
+      'data class User(val id: Long, val name: String)',
+      'fun main() {',
+      '    val u = User(1L, "Alice")',
+      '    println("hello ${u.name}")',
+      '}',
+      '```', '',
+      '```python',
+      'def add(a, b):',
+      '    """求和"""',
+      '    return a + b',
+      '```', '',
+      '```html',
+      '<div class="card" id="main">Hello</div>',
+      '```', '',
+      '```css',
+      '/* 主题色 */',
+      '.card { color: #ff7043; padding: 12px; }',
+      '```', '',
+      '```json',
+      '{ "name": "kuikly", "debug": true, "port": 18090 }',
+      '```', '',
+      ''
+    ].join('\n');
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_CODE}`, content: Buffer.from(codeMd, 'utf8').toString('base64') });
 
     // 超过 SftpTextLoader 分块大小（96KB）的 Markdown：验证第二次 read 的 offset 生效。
     // 回归背景：Kotlin/JS 下 `Long` 不是 JS Number，浏览器模块 `arr[1] as? Number` 恒为 null →
@@ -420,6 +459,20 @@ setTimeout(() => {
       cv.close();
     }
     check('T13 文档缓存（二次打开同一文件直接渲染）', cacheOk, cacheOk ? '命中缓存并渲染' : '未渲染');
+
+    // ---- T15 代码块语法高亮：多语言代码块出现多种 token 颜色（参考 MarkText 多色渲染）----
+    const hl = await openFixture(FIX_MD_CODE);
+    let hlColors = 0, hlInfo = '';
+    if (hl.win) {
+      const hv = await attach(hl.win.webSocketDebuggerUrl);
+      await hv.send('Page.enable');
+      await waitFor(async () => ((await hv.body()).includes('代码高亮样例') ? true : null), 25000, 600);
+      hlColors = Number(await hv.ev("(()=>{const set=new Set();for(const e of [...document.querySelectorAll('*')]){if(getComputedStyle(e).backgroundColor==='rgb(30, 30, 30)'){for(const c of e.querySelectorAll('*'))set.add(getComputedStyle(c).color);}}return set.size;})()"));
+      hlInfo = String(await hv.ev("(()=>{const set=new Set();for(const e of [...document.querySelectorAll('*')]){if(getComputedStyle(e).backgroundColor==='rgb(30, 30, 30)'){for(const c of e.querySelectorAll('*'))set.add(getComputedStyle(c).color);}}return [...set].join(',');})()"));
+      await hv.shot('text-viewer-code-highlight.png');
+      hv.close();
+    }
+    check('T15 代码块语法高亮（多语言 ≥3 种 token 颜色）', hlColors >= 3, `颜色数=${hlColors} [${hlInfo}]`);
 
     // ---- T14 超过 96KB 的 Markdown：分块读取 offset 正确（回归：offset 丢失导致重复前缀损坏）----
     const big96 = await openFixture(FIX_MD_BIG96);

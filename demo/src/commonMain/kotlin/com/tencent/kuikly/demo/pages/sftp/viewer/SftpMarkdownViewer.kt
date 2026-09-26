@@ -25,6 +25,8 @@ import com.tencent.kuikly.core.views.Span
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
+import com.tencent.kuikly.demo.pages.sftp.viewer.md.CodeHighlighter
+import com.tencent.kuikly.demo.pages.sftp.viewer.md.CodeTokenType
 import com.tencent.kuikly.demo.pages.sftp.viewer.md.MarkdownParser
 import com.tencent.kuikly.demo.pages.sftp.viewer.md.MdBlock
 import com.tencent.kuikly.demo.pages.sftp.viewer.md.MdItem
@@ -214,17 +216,54 @@ private fun ViewContainer<*, *>.MdCode(
                 }
             }
         }
-        Text {
-            attr {
-                text(block.code)
-                fontSize(12f * fontScaleProvider())
-                color(Color(0xFFE6E6E6))
-                lineHeight(18f * fontScaleProvider())
-                fontFamily("monospace")
-                if (!wrapProvider()) lines(1)
+        // 语法高亮（参考 MarkText / VS Code Dark+ 配色）：按 token 上色。
+        // 每个源码行一个 RichText（保留换行与缩进），最多高亮 MAX_HIGHLIGHT_LINES 行。
+        val hlLines = CodeHighlighter.highlight(block.lang, block.code)
+        hlLines.forEach { toks ->
+            RichText {
+                attr {
+                    fontSize(12f * fontScaleProvider())
+                    color(codeTokenColor(CodeTokenType.PLAIN))
+                    lineHeight(18f * fontScaleProvider())
+                    fontFamily("monospace")
+                    if (!wrapProvider()) lines(1)
+                }
+                toks.forEach { tk ->
+                    Span {
+                        text(tk.text.ifEmpty { " " })   // 空行给一个空格，保持行高
+                        color(codeTokenColor(tk.type))
+                    }
+                }
+            }
+        }
+        // 超出高亮上限的部分：单色纯文本（避免为超大代码块建过多视图）
+        if (CodeHighlighter.lineCount(block.code) > hlLines.size) {
+            Text {
+                attr {
+                    text(CodeHighlighter.tailPlain(block.code, hlLines.size))
+                    fontSize(12f * fontScaleProvider())
+                    color(codeTokenColor(CodeTokenType.PLAIN))
+                    lineHeight(18f * fontScaleProvider())
+                    fontFamily("monospace")
+                    if (!wrapProvider()) lines(1)
+                }
             }
         }
     }
+}
+
+/** 代码 token → 颜色（Dark+ 主题，配合 #1E1E1E 代码底色）。 */
+private fun codeTokenColor(t: CodeTokenType): Color = when (t) {
+    CodeTokenType.KEYWORD -> Color(0xFF569CD6.toInt())
+    CodeTokenType.STRING -> Color(0xFFCE9178.toInt())
+    CodeTokenType.COMMENT -> Color(0xFF6A9955.toInt())
+    CodeTokenType.NUMBER -> Color(0xFFB5CEA8.toInt())
+    CodeTokenType.FUNCTION -> Color(0xFFDCDCAA.toInt())
+    CodeTokenType.TYPE -> Color(0xFF4EC9B0.toInt())
+    CodeTokenType.ANNOTATION -> Color(0xFFDCDCAA.toInt())
+    CodeTokenType.ATTR -> Color(0xFF9CDCFE.toInt())
+    CodeTokenType.PUNCT -> Color(0xFFD4D4D4.toInt())
+    CodeTokenType.PLAIN -> Color(0xFFD4D4D4.toInt())
 }
 
 private fun ViewContainer<*, *>.MdList(
