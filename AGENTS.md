@@ -155,7 +155,8 @@
 11. **仅 `zhaojian` 分支执行「打 dmg + 存 Downloads + 覆盖安装到本机」**（固定交付动作，不可省；**其它分支一律不做**）：
    - **`zhaojian`**：每次功能开发/修复收尾必须完成下面三件事，缺一不可；
    - **其它分支**（feature/agent/`.kilo/worktrees/*`）：**只验证，不打包、不安装、不执行任何全局动作** ——
-     跑受影响用例（规则 9）+ 编译/构建通过即可；需要本机跑新构建时，先把成果同步到 `zhaojian`（规则 7），
+     跑受影响用例（规则 9）+ 编译/构建通过即可；**即使是 debug 也不构建 dmg、不覆盖安装**（省开发时间，
+     且避免抢 `/Applications`）。需要本机跑新构建时，先把成果同步到 `zhaojian`（规则 7），
      再由 `zhaojian` 侧统一执行本节三步。违反会造成多 worktree 抢 `/Applications`、互相踩踏。
    `zhaojian` 侧三件事：
    1. 构建 dmg：**默认用 debug 产物（快）**：`cd electron && npm run build:web && npm run dist`
@@ -206,12 +207,12 @@
    - 若确实没有任何未提交改动（都已按规则 14 本地提交），也要**显式说明「无未提交改动」**，不要默认省略。
    - **只列本 worktree 的改动**，不要汇总其它 worktree；发现未提交内容里混有凭据/产物（`.kr-test/`、`electron/resources/` 等）要指出并纠正。
     - 列清单与本地提交并不冲突：规则 14 要求该提交的节点先提交，**再**把剩余未提交项如实告知。
- 16. **构建产物默认 debug；release 构建仅在 `zhaojian` 分支执行**：
-   - **默认（所有分支、日常验证、本机打包安装）用 debug 产物**：`npm run build:web`（debug）+ `npm run dist`
-     （`dist` 内部 `sync` 默认也是 debug 产物）。debug 构建快，足够本机验证与覆盖安装。
-   - **`npm run dist:release`（release 产物）太慢**（Kotlin/JS production + electron-builder，通常数分钟），
-     **仅 `zhaojian` 分支**在确有需要（正式发版）时才跑；其它分支一律不跑 release。
-   - 原因：debug 与 release 只差 Web 产物的优化/体积，功能一致；本机验证无需 release。
+ 16. **打包/安装只在 `zhaojian`；构建产物默认 debug，release 仅 `zhaojian` 且必要时**：
+   - **非 `zhaojian` 分支（feature/agent/worktree）**：只跑受影响用例 + 编译通过，**不构建 dmg、不覆盖安装**
+     （debug 也不做）—— 这是纯耗时动作，本机应用只有一份，省开发时间也避免互相踩踏。
+   - **`zhaojian` 分支**：打 dmg + 覆盖安装**默认用 debug 产物**（`npm run build:web` + `npm run dist`，快）；
+     `npm run dist:release`（release 产物）**太慢**，仅正式发版时才用。
+   - 原因：debug 与 release 只差 Web 产物的优化/体积，功能一致；本机验证/安装用 debug 足够。
 
 ---
 
