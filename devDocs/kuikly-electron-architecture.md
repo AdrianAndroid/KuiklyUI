@@ -76,7 +76,8 @@ flowchart LR
 - **网关由主进程 fork**：`utilityProcess.fork(sftp-gateway, { SFTP_GATEWAY_PORT: '0', SFTP_GATEWAY_DATA_DIR, SFTP_GATEWAY_LOCAL_ROOT })`，
   端口由 OS 分配，回传后经 preload 的 `additionalArguments: ['--gateway=...']` 注入 `window.__SFTP_GATEWAY_URL__`。
 - **打包版网关路径**：`extraResources` 把 `sftp-gateway` 放到 `Resources/gateway`；`main.js` 按 `app.isPackaged` 解析入口。
-- **独立窗口**：播放/终端/文本查看器都是新 `BrowserWindow`，query 带 `standalone=1`（只有它允许「返回=关窗」）。
+- **独立窗口**：播放/终端是新 `BrowserWindow`，query 带 `standalone=1`（只有它允许「返回=关窗」）。
+  **文本/Markdown 查看器改为页内路由**（查看与修改同界面，不再开窗）。
 - **测试用的「外部网关」**：跑用例前执行 `cd electron && npm run gateway`（端口由实例计算，见 §13），用于直连 SFTP 造远端夹具；
   它和**应用自带网关是两套数据目录**（见 §11 坑 4）。
 
@@ -138,7 +139,7 @@ flowchart LR
 
 ---
 
-## 8. 独立窗口（播放/终端/文本查看器）
+## 8. 独立窗口（播放/终端；文本查看器已改页内）
 
 - **打开**：页面调 `BridgeModule.openPlayerWindow(query)`；`query` 至少含 `page_name`（**宿主不会补**，页内路由由 RouterModule 补）+ 业务参数。`main.js` 复制为 `standalone=1` 并 `loadFile`。
 - **上限**：播放窗口有 `MAX_PLAYER_WINDOWS`（多开同播，逐个关闭）。

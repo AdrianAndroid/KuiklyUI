@@ -647,23 +647,24 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                     }
                 }
             }
-            // 块编辑浮层：格式工具条（对齐 Vditor 工具栏）+ 编辑区 + 实时预览（即时渲染）
+            // 块编辑**页内底部面板**：文档仍在上方可见 → 同一界面「查看 + 修改」；
+            // 不再用全屏模态遮挡、也不再新开窗口。格式工具条 + 编辑区 + 实时预览（即时渲染，含 Mermaid）。
             vif({ ctx.editTargetBlock >= 0 }) {
                 View {
                     attr {
-                        positionAbsolute(); left(0f); top(0f)
-                        size(pagerData.pageViewWidth, pagerData.pageViewHeight)
-                        backgroundColor(Color(0x99000000))
+                        positionAbsolute(); left(0f); bottom(0f)
+                        width(pagerData.pageViewWidth)
+                        height(pagerData.pageViewHeight * 0.62f)
+                        backgroundColor(SftpColorTokens.cardBg)
+                        borderRadius(14f)
                         flexDirectionColumn()
-                        padding(14f, 14f, 14f, 14f)
+                        padding(12f, 10f, 12f, 12f)
+                        zIndex(50)
                     }
                     View {
                         attr {
-                            width(pagerData.pageViewWidth - 28f)
+                            width(pagerData.pageViewWidth - 24f)
                             flex(1f)
-                            backgroundColor(SftpColorTokens.cardBg)
-                            borderRadius(10f)
-                            padding(10f, 8f, 10f, 8f)
                             flexDirectionColumn()
                         }
                         // 标题行
@@ -709,7 +710,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                         TextArea {
                             attr {
                                 text(ctx.editBuffer)
-                                height(120f)
+                                height(150f)
                                 fontSize(12.5f)
                                 color(SftpColorTokens.textPrimary)
                                 backgroundColor(SftpColorTokens.bg)

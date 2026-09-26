@@ -163,11 +163,16 @@ setTimeout(() => {
     await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
     await waitFor(async () => (await main.body()).includes(FIX_MD), 45000, 700);
 
-    // T1 点 md → 独立窗口
+    // T1 点 md → **页内**打开查看器（同一界面，不再新开窗口）
+    const targetsBefore = (await listTargets()).length;
     const clickedMd = await main.clickText(FIX_MD);
-    const w1 = await waitFor(async () => (await viewerTargets())[0], 20000);
-    check('T1 点 .md → 独立窗口打开查看器（主窗口留在列表）', clickedMd && !!w1 && (await main.body()).includes(FIX_MD),
-      `clicked=${clickedMd} 新窗口=${!!w1} 主窗口仍在列表=${(await main.body()).includes(FIX_MD)}`);
+    const w1 = await waitFor(async () => {
+      const ts = await listTargets();
+      const cur = ts.find((t) => t.url.includes('page_name=SftpViewerDispatcherPage'));
+      return (cur && ts.length === targetsBefore) ? cur : null;
+    }, 20000);
+    check('T1 点 .md → 页内打开查看器（同一界面，不新开窗口）', clickedMd && !!w1,
+      `clicked=${clickedMd} 页内查看器=${!!w1} target数=${targetsBefore}->${(await listTargets()).length}`);
 
     if (w1) {
       const md = await attach(w1.webSocketDebuggerUrl);
@@ -218,9 +223,14 @@ setTimeout(() => {
       md.close();
     }
 
-    // T4 纯文本：行号
+    // T4 纯文本：行号（查看器现已页内；先返回文件列表，再点 txt）
+    await main.send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${FIX_DIR}` });
+    await waitFor(async () => (await main.body()).includes(FIX_TXT), 30000, 700);
     await main.clickText(FIX_TXT);
-    const w2 = await waitFor(async () => { const l = await viewerTargets(); return l.find((t) => !t.url.includes(encodeURIComponent(FIX_MD)) && l.length >= 1) || null; }, 20000);
+    const w2 = await waitFor(async () => {
+      const ts = await listTargets();
+      return ts.find((t) => t.url.includes('page_name=SftpViewerDispatcherPage') && (t.url.includes(encodeURIComponent(FIX_TXT)) || t.url.includes(FIX_TXT))) || null;
+    }, 20000);
     if (w2) {
       const tx = await attach(w2.webSocketDebuggerUrl);
       const txtBody = await waitFor(async () => { const t = await tx.body(); return t.includes('第一行') ? t : null; }, 25000, 700);
@@ -230,7 +240,7 @@ setTimeout(() => {
       await tx.shot('text-viewer-txt.png');
       tx.close();
     } else {
-      check('T4 纯文本窗口打开', false, '未找到第二个查看器窗口');
+      check('T4 纯文本查看（页内）', false, '未进入纯文本查看器');
     }
 
     // ---- Vditor 对照用例 ----
@@ -373,18 +383,18 @@ setTimeout(() => {
     }
     check('T13 文档缓存（二次打开同一文件直接渲染）', cacheOk, cacheOk ? '命中缓存并渲染' : '未渲染');
 
-    // T5 多窗口并存 + 逐个关闭
-    const before = (await viewerTargets()).length;
-    const first = (await viewerTargets())[0];
-    if (first) {
-      const f = await attach(first.webSocketDebuggerUrl);
+    // T5 页内返回：查看器返回键回到文件列表（同一界面，不新开窗口），可再次进入
+    const backToList = await (async () => {
+      const v = (await viewerFor(FIX_MD))[0] || (await viewerTargets())[0];
+      if (!v) return false;
+      const f = await attach(v.webSocketDebuggerUrl);
+      await f.send('Page.enable');
       await f.clickText('<');
-      const closed = await waitFor(async () => ((await viewerTargets()).length < before ? true : null), 12000, 600);
-      check('T5 多文本窗口并存，返回键只关自身窗口', before >= 2 && !!closed, `${before} → ${(await viewerTargets()).length}`);
+      const ok = await waitFor(async () => ((await listTargets()).some((t) => t.url.includes('page_name=SftpBrowserPage')) ? true : null), 12000, 600);
       f.close();
-    } else {
-      check('T5 多窗口', false, 'no viewer windows');
-    }
+      return ok;
+    })();
+    check('T5 页内查看器返回 → 回到文件列表（同界面，不新开窗口）', backToList, `返回列表=${backToList}`);
 
     check('T6 无 JS 未捕获异常', main.errs.length === 0, main.errs.slice(0, 2).join('; '));
   } catch (e) {

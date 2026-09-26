@@ -146,7 +146,7 @@
 | **Android** | ✅ `./gradlew :androidApp:assembleDebug` | JSch 0.1.55 | NanoHTTPD | ✅ 模拟器 **74/74 × 10 轮零失败** + ExoPlayer 经代理播放 | **全链路可用** |
 | **HarmonyOS** | ✅ 渲染器 `libkuikly.so` + 业务 `libshared.so` | libssh2 + 自 vendored mbedTLS 2.28.8 | ❌ 桩（未进 CMake） | ❌ 运行时未验证（无设备） | **核心可用、播放未实现** |
 | **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | 浏览器无 socket → Node 网关代持（ssh2） | 网关直接出 HTTP Range | ✅ 浏览器实测（连接 / 浏览 / Range / 拖动 seek） | **全链路可用** |
-| **桌面壳 (Electron)** | ✅ `npm run dist:release`（dmg + `/Applications` 覆盖安装） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 25/25`、`smoke 21/21`、`player 8/8`、`text 16/16`、`dual 28/28`、`term 7/7` | **全链路可用（含独立窗口：播放/终端/文本查看器）** |
+| **桌面壳 (Electron)** | ✅ `npm run dist:release`（dmg + `/Applications` 覆盖安装） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 25/25`、`smoke 21/21`、`player 8/8`、`text 16/16`、`dual 28/28`、`term 7/7` | **全链路可用（独立窗口：播放/终端；文本查看器已改页内查看+底部面板编辑）** |
 | **小程序** | ✅ 同 Web（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | 复用 Web 的 JS 模块 | 需网关 | ❌ 未验证（需微信域名白名单） | **未验证** |
 
 ---
@@ -446,7 +446,7 @@ release dmg 实测：拖动 `1.55s → 49.42s`（目标≈48s）、抽屉打开 
 
 ---
 
-## 本轮新增：文本文件查看器（独立窗口，含 Markdown）
+## 本轮新增：文本文件查看器（页内查看+修改，含 Markdown）
 
 **参考实现**：MarkText（MIT，Electron Markdown 阅读/编辑器，渲染范围）+ VS Code/Monaco（只读查看：行号/换行/字号/字数）。
 
@@ -454,7 +454,7 @@ release dmg 实测：拖动 `1.55s → 49.42s`（目标≈48s）、抽屉打开 
 
 | 能力 | 说明 |
 |---|---|
-| 独立窗口 | 浏览页点文本类（md/html/txt/代码）→ 另开窗口（`standalone=1`，返回键关窗）；其它端回退页内路由 |
+| 页内查看+修改 | 浏览页点文本类（md/html/txt/代码）→ **统一页内路由**（不再另开窗口）；块编辑为**页内底部面板**（文档仍可见）+ 实时预览（含 Mermaid） |
 | Markdown 渲染 | 标题(色条)/段落行内样式(`RichText+Span` 单文本流)/代码块/引用/列表(含任务)/表格/分隔线 |
 | 阅读器工具 | 目录(TOC) 抽屉、源码⇄预览、换行开关、A−/A+ 字号（实测 26→33.8px）、状态栏(编码·大小·行·字) |
 | 纯文本 | 行号槽 + 等宽 + 换行/字号；渲染上限 1500 行；>2MB 只读前 2MB 并提示 |

@@ -845,14 +845,15 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   ② 浮层里的按钮**不要与工具条同名**（曾把浮层「完成」和工具条「编辑/完成」撞名，自动化会点到开关）；
   ③ Kotlin/JS 下**不要用正则**解析 Markdown（unicode 模式会抛 `Lone quantifier brackets`）。
   用例：`npm run test:text` → **16/16**（含 T7 即时渲染：工具条 B → 实时预览自动加粗**不点应用**；T8 保存后**读回远端**校验含加粗标记；T9 工具栏 51px 单行；T3d 目录弹窗）。
-- **文本文件查看器（含 Markdown，桌面壳独立窗口，2026-09）**：参考 **MarkText**（MIT，Electron 富功能 Markdown 阅读/编辑器）
+- **文本文件查看器（含 Markdown，页内查看+修改，2026-09）**：参考 **MarkText**（MIT，Electron 富功能 Markdown 阅读/编辑器）
   的渲染范围 + **VS Code/Monaco** 的只读查看（行号/换行/字号/字数），实现子集：
   标题(左侧色条) / 段落行内(粗体·斜体·删除线·行内代码·链接，用 `RichText + Span` 单文本流保证跨行折行) /
   围栏代码块 / 引用 / 有序无序列表 / 任务列表 / 表格 / 分隔线；**目录(TOC)** 抽屉（近似跳转）、
   **源码⇄预览**、**换行开关**、**A−/A+ 字号**、状态栏（编码·大小·行数·字数）、大文件截断提示（>2MB 只读前 2MB）。
   纯文本：行号槽 + 等宽字体 + 换行/字号（渲染上限 1500 行）。
-  - 入口：浏览页点文本类（md/html/txt/代码）→ `SftpViewerLauncher.openViewerPage()`，桌面壳**另开独立窗口**
-    （`standalone=1`，返回键关窗）；其它端自动回退页内路由。
+  - 入口：浏览页点文本类（md/html/txt/代码）→ `SftpViewerLauncher.openViewerPage()`，**统一页内路由**
+    （查看与修改在**同一界面**完成，不再为文本查看另开独立窗口）。
+  - **块编辑为页内**底部面板（文档仍在上方可见，不再全屏模态遮挡）：格式工具条 + 编辑区 + 实时预览（即时渲染，含 Mermaid）。
   - 装载：`SftpTextLoader` 分块流式读（96KB/块）+ 跨端解码（UTF-8 含 4 字节 emoji / UTF-16 BOM）。
   - 服务端不受限：Markdown 解析器在 **commonMain**（纯 Kotlin），六端共用，无平台依赖。
   ⚠️ 三个踩过的坑（勿回退）：
@@ -862,8 +863,8 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
      `Lone quantifier brackets` → 解析中断、正文空白。任务/有序/无序列表项一律用字符串解析。
   3. **查看器状态必须 provider + 在 `attr{}`/`vif` 内读**：加载完成后正文/工具条标签/字号/目录数若不这样写，
      依赖不被收集 → 永远停在「加载中…」或空态/开关不生效（含 `vif({ mdSourceView })` 切换源码⇄预览）。
-  用例：`cd electron && npm run test:text` → **T0–T6 11/11**（真实点击：独立窗口/Markdown 渲染+目录 46 项/
-  换行/源码⇄预览/字号 26→33.8px/纯文本行号/多窗口关闭），测试目录 `/home/zhaojian/ks-cr-doc`。
+  用例：`cd electron && npm run test:text` → **T0–T6 11/11**（真实点击：页内查看器/Markdown 渲染+目录 46 项/
+  换行/源码⇄预览/字号 26→33.8px/纯文本行号/页内返回），测试目录 `/home/zhaojian/ks-cr-doc`。
 
 - **独立窗口播放（桌面壳，2026-09）**：视频在 Electron 下开**独立窗口**（可同时播多个、互不影响）。
   能力经 `BridgeModule.supportsPlayerWindow()/openPlayerWindow()`（Web 端读 preload 暴露的 `window.kuiklyHost`），

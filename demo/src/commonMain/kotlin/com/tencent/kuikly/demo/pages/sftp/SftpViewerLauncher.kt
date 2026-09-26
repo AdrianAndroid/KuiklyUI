@@ -17,28 +17,18 @@ package com.tencent.kuikly.demo.pages.sftp
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.demo.pages.sftp.viewer.SftpViewerDispatcherPage
 
 /**
  * 打开「查看器」页（文本 / Markdown / HTML 等）。
  *
- * 桌面壳（Electron）支持独立窗口 → 文本阅读时**另开窗口**（可与列表并存、可同时读多篇）；
- * 其它端由宿主返回 supported=false，自动回退为页内路由。
+ * **统一页内路由**：查看与修改都在**同一个界面**完成，不再为文本查看另开独立窗口
+ * （独立窗口会导致「编辑要新窗口、与列表割裂」的体验问题）。
  *
- * 注：宿主能力方法名沿用 `supportsPlayerWindow/openPlayerWindow`（实现是通用的独立窗口），
- * 避免改动各端原生模块（iOS 未实现的方法会触发 NSAssert）。
+ * 注：`BridgeModule.supportsPlayerWindow` 仍被 `save()` 用作「是否 Web/桌面宿主」的探测，
+ * 与本函数的打开方式无关（保存路径不受影响）。
  */
 internal fun Pager.openViewerPage(viewerParams: JSONObject) {
-    val bridge = acquireModule<BridgeModule>(BridgeModule.MODULE_NAME)
-    val supported = runCatching { bridge.supportsPlayerWindow() }.getOrDefault(false)
-    if (supported) {
-        val hostParams = JSONObject(viewerParams.toString())
-        // 宿主直接开窗口不会补 page_name（页内路由才由 RouterModule 补）
-        hostParams.put("page_name", SftpViewerDispatcherPage.PAGE_NAME)
-        bridge.openPlayerWindow(hostParams)
-        return
-    }
     acquireModule<RouterModule>(RouterModule.MODULE_NAME)
         .openPage(SftpViewerDispatcherPage.PAGE_NAME, viewerParams)
 }
