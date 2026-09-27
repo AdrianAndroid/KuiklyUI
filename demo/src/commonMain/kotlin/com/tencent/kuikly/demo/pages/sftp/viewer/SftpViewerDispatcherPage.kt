@@ -16,17 +16,21 @@ package com.tencent.kuikly.demo.pages.sftp.viewer
 
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
+import com.tencent.kuikly.core.base.ViewRef
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.velseif
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.directives.scrollToPosition
 import com.tencent.kuikly.core.module.FileModule
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.module.sftp.OverwriteMode
 import com.tencent.kuikly.core.timer.clearTimeout
 import com.tencent.kuikly.core.timer.setTimeout
+import com.tencent.kuikly.core.views.List
+import com.tencent.kuikly.core.views.ListView
 import com.tencent.kuikly.core.views.TextArea
 import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.core.views.Scroller
@@ -86,20 +90,17 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private var textTruncated: Boolean by observable(false)
     private var mdBlocks: List<MdBlock> by observable(emptyList())
     private var mdOutline: List<Pair<Int, String>> by observable(emptyList())
-    /** 已渲染的 Markdown 块数上限（增量渲染；滚动/点按后按批追加） */
-    private var mdRenderLimit: Int by observable(INITIAL_MD_BLOCKS)
-    /** 已渲染窗口（vforIndex 的数据源：追加时只渲染新增块，避免整篇重建） */
-    private var mdVisibleBlocks: ObservableList<MdBlock> by observableList()
+    /** Markdown 虚拟列表数据源（`vforLazy`）：整篇块都在其中，只物化视口附近的条目 */
+    private var mdVforBlocks: ObservableList<MdBlock> by observableList()
     private var textLines: List<String> by observable(emptyList())
-    /** 纯文本已渲染行数上限（增量渲染；追加后可达全文，避免一次建出上千行视图卡死） */
-    private var textRenderLimit: Int by observable(INITIAL_TEXT_LINES)
-    /** 纯文本已渲染窗口（vforIndex 数据源） */
-    private var textVisibleLines: ObservableList<String> by observableList()
+    /** 纯文本虚拟列表数据源（`vforLazy`） */
+    private var textVforLines: ObservableList<String> by observableList()
     private var mdSourceView: Boolean by observable(false)
     private var wrapLines: Boolean by observable(true)
     private var fontScale: Float by observable(1f)
     private var tocVisible: Boolean by observable(false)
-    private var readerScrollTo: ((Float) -> Unit)? = null
+    /** 阅读器列表 ref（目录跳转用 `scrollToPosition`） */
+    private var readerList: ViewRef<ListView<*, *>>? = null
     // ---- 编辑 / 保存（对齐 Vditor 的即时渲染 + 显式保存）----
     private var editing: Boolean by observable(false)
     private var editTargetBlock: Int by observable(-1)
@@ -107,10 +108,8 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private var dirty: Boolean by observable(false)
     private var saving: Boolean = false
     private var saveMsg: String by observable("")
-    /** 编辑区的「实时预览」块（输入后防抖刷新 = Vditor 即时渲染） */
-    private var editPreviewBlocks: List<MdBlock> by observable(emptyList())
-    /** 编辑浮层实时预览的 vforIndex 数据源 */
-    private var editPreviewVisibleBlocks: ObservableList<MdBlock> by observableList()
+    /** 编辑区的「实时预览」块（输入后防抖刷新 = Vditor 即时渲染）的虚拟列表数据源 */
+    private var editPreviewVforBlocks: ObservableList<MdBlock> by observableList()
     private var editDebounceRef: String? = null
 
     /** 文档缓存键（连接 + 路径 + 大小）：同一文件重复打开直接复用缓存 */
@@ -252,15 +251,13 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
             mdBlocks = blocks
             mdOutline = outline
             textLines = text.split('\n')
-            mdRenderLimit = minOf(maxOf(mdRenderLimit, INITIAL_MD_BLOCKS), blocks.size)
-            refreshVisibleBlocks()
+            // 虚拟列表数据源：整篇块一次性给出，由 vforLazy 只物化视口附近的条目
+            mdVforBlocks = ObservableList(blocks.toMutableList())
             if (mdBlocks.isEmpty()) mdSourceView = true   // 解析失败 → 显示源码，避免空白
         } else {
             textLines = text.split('\n')
         }
-        // 新文档装载：文本窗口回到初始批量（源码视图/纯文本首屏都要快）
-        textRenderLimit = minOf(INITIAL_TEXT_LINES, textLines.size)
-        refreshVisibleLines()
+        textVforLines = ObservableList(textLines.toMutableList())
     }
 
     private fun parseCapped(body: String): List<MdBlock> {
@@ -307,7 +304,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         dirty = true
         editTargetBlock = -1
         editBuffer = ""
-        editPreviewBlocks = emptyList()
+        editPreviewVforBlocks = ObservableList()
         reparse()
     }
 
@@ -319,13 +316,12 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     }
 
     private fun refreshEditPreview() {
-        editPreviewBlocks = try {
+        val blocks = try {
             MarkdownParser.parse(editBuffer)
         } catch (e: Throwable) {
             emptyList()
         }
-        editPreviewVisibleBlocks.clear()
-        editPreviewVisibleBlocks.addAll(editPreviewBlocks)
+        editPreviewVforBlocks = ObservableList(blocks.toMutableList())
     }
 
     /** 拆出块级前缀（引用 / 列表 / 任务 / 标题），返回 (前缀, 正文) */
@@ -402,7 +398,7 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     private fun cancelBlockEdit() {
         editTargetBlock = -1
         editBuffer = ""
-        editPreviewBlocks = emptyList()
+        editPreviewVforBlocks = ObservableList()
     }
 
     /** 重新解析并刷新（编辑后即时渲染），同时把最新内容回写缓存 */
@@ -413,12 +409,8 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
         mdBlocks = capped
         mdOutline = outline
         textLines = body.split('\n')
-        // 已渲染窗口至少保持初始批量，且不超过总块数（编辑后不塌回顶部）
-        mdRenderLimit = minOf(maxOf(mdRenderLimit, INITIAL_MD_BLOCKS), capped.size)
-        refreshVisibleBlocks()
-        // 编辑可能改动了行数：保持当前窗口规模并夹取到新行数
-        textRenderLimit = minOf(textRenderLimit.coerceAtLeast(INITIAL_TEXT_LINES), textLines.size)
-        refreshVisibleLines()
+        mdVforBlocks = ObservableList(capped.toMutableList())
+        textVforLines = ObservableList(textLines.toMutableList())
         // 编辑/保存后缓存与远端保持一致
         SftpDocCache.put(
             cacheKey,
@@ -431,77 +423,6 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                 outline = outline
             )
         )
-    }
-
-    /**
-     * 按当前窗口上限刷新 mdVisibleBlocks。
-     *
-     * - 前缀一致（只是窗口变大）→ 增量 `addAll`，vforIndex 只渲染新增块；
-     * - 内容变化（编辑/重新解析）→ 换一个**新实例**，走 vforIndex 明确支持的「整体替换」路径。
-     *   不用 `clear()+addAll()`：同一帧内两个操作与 vforIndex 的惰性同步存在竞态，曾导致正文偶发空白。
-     */
-    private fun refreshVisibleBlocks() {
-        val limit = mdRenderLimit.coerceAtLeast(1)
-        val want = if (mdBlocks.size > limit) mdBlocks.subList(0, limit) else mdBlocks
-        val canAppend = mdVisibleBlocks.size <= want.size &&
-            (0 until mdVisibleBlocks.size).all { mdVisibleBlocks[it] == want[it] }
-        if (canAppend) {
-            if (want.size > mdVisibleBlocks.size) {
-                mdVisibleBlocks.addAll(want.subList(mdVisibleBlocks.size, want.size))
-            }
-            return
-        }
-        mdVisibleBlocks = ObservableList(want.toMutableList())
-    }
-
-    /** 按当前窗口上限刷新 textVisibleLines（同 refreshVisibleBlocks 的增量/整体替换策略） */
-    private fun refreshVisibleLines() {
-        val limit = textRenderLimit.coerceAtLeast(1)
-        val want = if (textLines.size > limit) textLines.subList(0, limit) else textLines
-        val canAppend = textVisibleLines.size <= want.size &&
-            (0 until textVisibleLines.size).all { textVisibleLines[it] == want[it] }
-        if (canAppend) {
-            if (want.size > textVisibleLines.size) {
-                textVisibleLines.addAll(want.subList(textVisibleLines.size, want.size))
-            }
-            return
-        }
-        textVisibleLines = ObservableList(want.toMutableList())
-    }
-
-    /** 点击底部提示：追加一批块（web/Electron 的 Scroller 不上报滚动偏移，故显式触发） */
-    private fun loadMoreBlocks() {
-        if (mdRenderLimit < mdBlocks.size) {
-            mdRenderLimit = minOf(mdRenderLimit + MD_BLOCK_BATCH, mdBlocks.size)
-            refreshVisibleBlocks()
-        }
-    }
-
-    /** 点击底部提示：追加一批文本行（源码视图 / 纯文本共用） */
-    private fun loadMoreTextLines() {
-        if (textRenderLimit < textLines.size) {
-            textRenderLimit = minOf(textRenderLimit + TEXT_LINE_BATCH, textLines.size)
-            refreshVisibleLines()
-        }
-    }
-
-    /** 滚动到接近「已渲染底部」时追加一批（原生端上报偏移时自动生效；Web 用底部点按） */
-    private fun onReaderScroll(offsetY: Float) {
-        val viewport = pagerData.pageViewHeight
-        // Markdown 预览态：按块追加；源码视图/纯文本：按行追加
-        if (viewer == ViewerKind.MARKDOWN && !mdSourceView) {
-            if (mdBlocks.isEmpty() || mdRenderLimit >= mdBlocks.size) return
-            if (offsetY + viewport >= mdRenderLimit * AVG_MD_BLOCK_H - MD_LOAD_MARGIN) {
-                mdRenderLimit = minOf(mdRenderLimit + MD_BLOCK_BATCH, mdBlocks.size)
-                refreshVisibleBlocks()
-            }
-        } else {
-            if (textLines.isEmpty() || textRenderLimit >= textLines.size) return
-            if (offsetY + viewport >= textRenderLimit * AVG_TEXT_LINE_H * fontScale - TEXT_LOAD_MARGIN) {
-                textRenderLimit = minOf(textRenderLimit + TEXT_LINE_BATCH, textLines.size)
-                refreshVisibleLines()
-            }
-        }
     }
 
     /**
@@ -569,13 +490,8 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
             }
         }
         if (blockIndex < 0) blockIndex = 0
-        // 目标块可能还没渲染（增量渲染）：先把窗口撑到覆盖它，再滚动，避免跳到占位区
-        if (blockIndex + 1 > mdRenderLimit) {
-            mdRenderLimit = minOf(blockIndex + INITIAL_MD_BLOCKS, mdBlocks.size)
-            refreshVisibleBlocks()
-        }
-        // 块高不固定，按平均块高近似定位
-        readerScrollTo?.invoke(blockIndex * AVG_MD_BLOCK_H)
+        // 虚拟列表：直接按条目下标跳转（ListView 会物化目标附近并滚动过去）
+        readerList?.view?.scrollToPosition(blockIndex, animate = false)
     }
 
     override fun body(): ViewBuilder {
@@ -632,53 +548,64 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                                 onZoomOut = { ctx.zoom(-0.15f) },
                                 wrapProvider = { ctx.wrapLines },
                                 onToggleWrap = { ctx.wrapLines = !ctx.wrapLines },
-                                onScrollerReady = { ctx.readerScrollTo = it },
-                                onScroll = { ctx.onReaderScroll(it) },
+                                onListReady = { ctx.readerList = it },
                                 dirtyProvider = { ctx.dirty },
                                 onSave = { ctx.save() },
                                 saveMsgProvider = { ctx.saveMsg },
+                                noticeProvider = {
+                                    if (ctx.textTruncated) "⚠ 文件较大，仅显示前一部分内容" else ""
+                                },
                             ) {
-                                SftpTextViewer(
-                                    { ctx.textVisibleLines }, { ctx.textLines.size },
-                                    { ctx.fontScale }, { ctx.wrapLines }, { ctx.textTruncated },
-                                    onLoadMore = { ctx.loadMoreTextLines() },
-                                )
+                                SftpTextViewer({ ctx.textVforLines }, { ctx.fontScale }, { ctx.wrapLines })
                             }
-                            ViewerKind.MARKDOWN -> SftpReaderScaffold(
-                                metaProvider = { ctx.readerMeta() },
-                                onZoomIn = { ctx.zoom(0.15f) },
-                                onZoomOut = { ctx.zoom(-0.15f) },
-                                wrapProvider = { ctx.wrapLines },
-                                onToggleWrap = { ctx.wrapLines = !ctx.wrapLines },
-                                mdSourceProvider = { ctx.mdSourceView },
-                                onToggleSource = { ctx.mdSourceView = !ctx.mdSourceView },
-                                tocCountProvider = { ctx.mdOutline.size },
-                                onToggleToc = { ctx.tocVisible = !ctx.tocVisible },
-                                onScrollerReady = { ctx.readerScrollTo = it },
-                                onScroll = { ctx.onReaderScroll(it) },
-                                editingProvider = { ctx.editing },
-                                onToggleEditing = { ctx.toggleEditing() },
-                                dirtyProvider = { ctx.dirty },
-                                onSave = { ctx.save() },
-                                saveMsgProvider = { ctx.saveMsg },
-                            ) {
-                                // 源码/预览分支必须用 vif/velse（结构层 if 不会被依赖收集 → 切换不生效）
+                            ViewerKind.MARKDOWN -> {
+                                // 源码/预览各自一个虚拟列表：结构层 when 只在首帧求值，必须用 vif/velse。
                                 vif({ ctx.mdSourceView }) {
-                                    SftpTextViewer(
-                                        { ctx.textVisibleLines }, { ctx.textLines.size },
-                                        { ctx.fontScale }, { ctx.wrapLines }, { ctx.textTruncated },
-                                        onLoadMore = { ctx.loadMoreTextLines() },
-                                    )
+                                    SftpReaderScaffold(
+                                        metaProvider = { ctx.readerMeta() },
+                                        onZoomIn = { ctx.zoom(0.15f) },
+                                        onZoomOut = { ctx.zoom(-0.15f) },
+                                        wrapProvider = { ctx.wrapLines },
+                                        onToggleWrap = { ctx.wrapLines = !ctx.wrapLines },
+                                        mdSourceProvider = { ctx.mdSourceView },
+                                        onToggleSource = { ctx.mdSourceView = !ctx.mdSourceView },
+                                        onListReady = { ctx.readerList = it },
+                                        dirtyProvider = { ctx.dirty },
+                                        onSave = { ctx.save() },
+                                        saveMsgProvider = { ctx.saveMsg },
+                                        noticeProvider = {
+                                            if (ctx.textTruncated) "⚠ 文件较大，仅显示前一部分内容" else ""
+                                        },
+                                    ) {
+                                        SftpTextViewer({ ctx.textVforLines }, { ctx.fontScale }, { ctx.wrapLines })
+                                    }
                                 }
                                 velse {
-                                    SftpMarkdownViewer(
-                                        { ctx.mdBlocks }, { ctx.mdVisibleBlocks }, { ctx.fontScale }, { ctx.wrapLines },
-                                        onLink = { /* 链接暂不外跳 */ },
+                                    SftpReaderScaffold(
+                                        metaProvider = { ctx.readerMeta() },
+                                        onZoomIn = { ctx.zoom(0.15f) },
+                                        onZoomOut = { ctx.zoom(-0.15f) },
+                                        wrapProvider = { ctx.wrapLines },
+                                        onToggleWrap = { ctx.wrapLines = !ctx.wrapLines },
+                                        mdSourceProvider = { ctx.mdSourceView },
+                                        onToggleSource = { ctx.mdSourceView = !ctx.mdSourceView },
+                                        tocCountProvider = { ctx.mdOutline.size },
+                                        onToggleToc = { ctx.tocVisible = !ctx.tocVisible },
+                                        onListReady = { ctx.readerList = it },
                                         editingProvider = { ctx.editing },
-                                        editTargetProvider = { ctx.editTargetBlock },
-                                        onBlockTap = { ctx.onBlockTap(it) },
-                                        onLoadMore = { ctx.loadMoreBlocks() },
-                                    )
+                                        onToggleEditing = { ctx.toggleEditing() },
+                                        dirtyProvider = { ctx.dirty },
+                                        onSave = { ctx.save() },
+                                        saveMsgProvider = { ctx.saveMsg },
+                                    ) {
+                                        SftpMarkdownViewer(
+                                            { ctx.mdVforBlocks }, { ctx.fontScale }, { ctx.wrapLines },
+                                            onLink = { /* 链接暂不外跳 */ },
+                                            editingProvider = { ctx.editing },
+                                            editTargetProvider = { ctx.editTargetBlock },
+                                            onBlockTap = { ctx.onBlockTap(it) },
+                                        )
+                                    }
                                 }
                             }
                             ViewerKind.HTML -> SftpHtmlViewer(ctx.sessionId, ctx.remotePath, ctx.size)
@@ -789,13 +716,17 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
                                 margin(6f, 0f, 6f, 2f)
                             }
                         }
-                        Scroller {
-                            attr { flex(1f); flexDirectionColumn(); backgroundColor(SftpColorTokens.bg); borderRadius(6f); padding(6f, 6f, 6f, 6f) }
-                            SftpMarkdownViewer(
-                                { ctx.editPreviewBlocks }, { ctx.editPreviewVisibleBlocks },
-                                { ctx.fontScale }, { ctx.wrapLines },
-                                onLink = { },
-                            )
+                        // 实时预览虚拟列表：圆角/底色放外层，List 自身不设 borderRadius
+                        View {
+                            attr { flex(1f); backgroundColor(SftpColorTokens.bg); borderRadius(6f) }
+                            List {
+                                attr { flex(1f); padding(6f, 6f, 6f, 6f) }
+                                SftpMarkdownViewer(
+                                    { ctx.editPreviewVforBlocks },
+                                    { ctx.fontScale }, { ctx.wrapLines },
+                                    onLink = { },
+                                )
+                            }
                         }
                     }
                 }
@@ -892,27 +823,11 @@ internal class SftpViewerDispatcherPage : SftpBasePager() {
     companion object {
         const val PAGE_NAME = "SftpViewerDispatcherPage"
         /**
-         * Markdown 解析结果的**防御性**上限：只防病态超大文档把内存撑爆，
-         * 不再是「只渲染前 N 块」的显示截断（旧实现 700 会让大文档永远看不到后半段）。
-         * 渲染由 `mdVisibleBlocks` 增量窗口控制，正常文档可一直追加到全文。
+         * Markdown 解析结果的**防御性**上限：只防病态超大文档把内存撑爆。
+         * 显示交给虚拟列表（`vforLazy`）：整篇块都可渲染，只物化视口附近的条目，
+         * 拉到末尾也不会累积成上万个视图（旧版按窗口增量渲染会在几千块时卡死/空白）。
          */
         private const val MAX_MD_BLOCKS = 20000
-        /** 首屏渲染块数（增量渲染，控制存活视图数） */
-        private const val INITIAL_MD_BLOCKS = 40
-        /** 每次滚动/点按追加的块数（批量大于首屏，减少大文档的点击次数） */
-        private const val MD_BLOCK_BATCH = 200
-        /** 平均块高估算（目录跳转/滚动追加的近似定位，块高不固定） */
-        private const val AVG_MD_BLOCK_H = 58f
-        /** 距已渲染底部多少像素时追加下一批 */
-        private const val MD_LOAD_MARGIN = 240f
-        /** 纯文本/源码视图首屏渲染行数（一次建 1500 行会明显卡顿） */
-        private const val INITIAL_TEXT_LINES = 300
-        /** 每次滚动/点按追加的行数（比首屏大，减少大文档的点击次数） */
-        private const val TEXT_LINE_BATCH = 800
-        /** 单行等宽文本的估算行高（滚动追加的近似定位，随字号缩放） */
-        private const val AVG_TEXT_LINE_H = 20f
-        /** 距已渲染底部多少像素时追加下一批文本行 */
-        private const val TEXT_LOAD_MARGIN = 240f
         /** 保存时写入宿主/沙盒的临时文件名 */
         private const val TMP_FILE_NAME = "kuikly_viewer_edit_tmp.md"
     }

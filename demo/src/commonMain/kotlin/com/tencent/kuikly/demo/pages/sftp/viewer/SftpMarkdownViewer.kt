@@ -16,10 +16,9 @@ package com.tencent.kuikly.demo.pages.sftp.viewer
 
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.directives.velse
-import com.tencent.kuikly.core.directives.vforIndex
-import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.directives.vforLazy
 import com.tencent.kuikly.core.reactive.collection.ObservableList
+import com.tencent.kuikly.core.views.ListView
 import com.tencent.kuikly.core.views.RichText
 import com.tencent.kuikly.core.views.Span
 import com.tencent.kuikly.core.views.Text
@@ -36,103 +35,43 @@ import com.tencent.kuikly.demo.pages.sftp.viewer.md.MdRun
  * Markdown 渲染（参考 MarkText 的渲染范围子集）。
  *
  * 行内样式用 `RichText + Span`（单一文本流，能正确跨行折行）。
+ * **虚拟列表**：作为 `ListView` 的扩展用 `vforLazy` 只物化视口附近的块并循环复用，
+ * 大文档拉到末尾也不会累积成上万个视图（修复卡顿/滚轮失效/空白）。
  * 响应式约定：**所有可变状态都以 provider 传入，并在 `attr {}` / `vif` 条件内读取**
  * —— 否则依赖不会被收集，加载完成或切换字号后不会重渲染（本仓库的经典坑）。
  */
-internal fun ViewContainer<*, *>.SftpMarkdownViewer(
-    blocksProvider: () -> List<MdBlock>,
-    /** 已渲染窗口（ObservableList）：增量追加时由 vforIndex 只重建新增的块 */
-    visibleBlocksProvider: () -> ObservableList<MdBlock>,
+internal fun ListView<*, *>.SftpMarkdownViewer(
+    blocksProvider: () -> ObservableList<MdBlock>,
     fontScaleProvider: () -> Float,
     wrapProvider: () -> Boolean,
     onLink: (String) -> Unit,
     editingProvider: () -> Boolean = { false },
     editTargetProvider: () -> Int = { -1 },
     onBlockTap: (Int) -> Unit = { },
-    /** 追加一批块（点击底部提示触发；原生端若上报滚动偏移也会自动触发） */
-    onLoadMore: (() -> Unit)? = null,
 ) {
-    vif({ blocksProvider().isNotEmpty() }) {
-        SftpMarkdownBody(
-            visibleBlocksProvider,
-            totalCountProvider = { blocksProvider().size },
-            renderedCountProvider = { visibleBlocksProvider().size },
-            fontScaleProvider, wrapProvider, onLink,
-            editingProvider, editTargetProvider, onBlockTap, onLoadMore
-        )
-    }
-    velse {
+    // maxLoadItem 需覆盖「视口条目数 / (2/3)」：块高不固定、小屏/大字号时一屏块数可能不少，
+    // 取 60 留余量（否则列表尾部若干块会因窗口偏小物化不到）。
+    vforLazy({ blocksProvider() }, maxLoadItem = 60) { block, index, _ ->
+        // 编辑模式：每个块可点（进来改这一块的 Markdown 源码，完成即重渲染 = 即时渲染）
         View {
-            attr { flex(1f); allCenter() }
-            Text { attr { text("(空文档)"); fontSize(13f); color(SftpColorTokens.textSecondary) } }
-        }
-    }
-}
-
-private fun ViewContainer<*, *>.SftpMarkdownBody(
-    visibleBlocksProvider: () -> ObservableList<MdBlock>,
-    totalCountProvider: () -> Int,
-    renderedCountProvider: () -> Int,
-    fontScaleProvider: () -> Float,
-    wrapProvider: () -> Boolean,
-    onLink: (String) -> Unit,
-    editingProvider: () -> Boolean,
-    editTargetProvider: () -> Int,
-    onBlockTap: (Int) -> Unit,
-    onLoadMore: (() -> Unit)?,
-) {
-    View {
-        attr {
-            flex(1f)
-            flexDirectionColumn()
-            backgroundColor(SftpColorTokens.cardBg)
-            borderRadius(8f)
-            padding(14f, 14f, 14f, 14f)
-        }
-        // 用 vforIndex 驱动：增量窗口变化时只重建/追加变化的块（依赖能被正确收集）
-        vforIndex({ visibleBlocksProvider() }) { block, index, _ ->
-            // 编辑模式：每个块可点（进来改这一块的 Markdown 源码，完成即重渲染 = 即时渲染）
-            View {
-                attr {
-                    backgroundColor(
-                        if (editingProvider() && editTargetProvider() == index) Color(0x22007AFF)
-                        else Color.TRANSPARENT
-                    )
-                    borderRadius(4f)
-                }
-                event { click { if (editingProvider()) onBlockTap(index) } }
-                when (block) {
-                    is MdBlock.Heading -> MdHeading(block, fontScaleProvider)
-                    is MdBlock.Paragraph -> MdInlineText(block.runs, 14f, fontScaleProvider, wrapProvider, onLink, 6f)
-                    is MdBlock.Code -> MdCode(block, fontScaleProvider)
-                    is MdBlock.Quote -> MdQuote(block.runs, fontScaleProvider, wrapProvider, onLink)
-                    is MdBlock.ListBlock -> MdList(block.items, fontScaleProvider, wrapProvider, onLink)
-                    is MdBlock.Diagram -> MdDiagram(block, fontScaleProvider)
-                    is MdBlock.Table -> MdTable(block, fontScaleProvider)
-                    is MdBlock.Hr -> View {
-                        attr { height(1f); backgroundColor(SftpColorTokens.divider); margin(10f, 0f, 10f, 0f) }
-                    }
-                }
+            attr {
+                backgroundColor(
+                    if (editingProvider() && editTargetProvider() == index) Color(0x22007AFF)
+                    else Color.TRANSPARENT
+                )
+                borderRadius(4f)
             }
-        }
-        // 增量渲染占位：还有未渲染的块时给出提示（点按或原生端滚动自动追加）
-        vif({ totalCountProvider() > renderedCountProvider() }) {
-            View {
-                attr { height(40f); allCenter() }
-                if (onLoadMore != null) { event { click { onLoadMore.invoke() } } }
-                Text {
-                    attr {
-                        text(
-                            if (onLoadMore != null) {
-                                "点此加载更多 · 已渲染 ${renderedCountProvider()}/${totalCountProvider()} 块"
-                            } else {
-                                "已渲染 ${renderedCountProvider()}/${totalCountProvider()} 块"
-                            }
-                        )
-                        fontSize(11f)
-                        color(SftpColorTokens.textSecondary)
-                        accessibility("md_more")
-                    }
+            event { click { if (editingProvider()) onBlockTap(index) } }
+            when (block) {
+                is MdBlock.Heading -> MdHeading(block, fontScaleProvider)
+                is MdBlock.Paragraph -> MdInlineText(block.runs, 14f, fontScaleProvider, wrapProvider, onLink, 6f)
+                is MdBlock.Code -> MdCode(block, fontScaleProvider)
+                is MdBlock.Quote -> MdQuote(block.runs, fontScaleProvider, wrapProvider, onLink)
+                is MdBlock.ListBlock -> MdList(block.items, fontScaleProvider, wrapProvider, onLink)
+                is MdBlock.Diagram -> MdDiagram(block, fontScaleProvider)
+                is MdBlock.Table -> MdTable(block, fontScaleProvider)
+                is MdBlock.Hr -> View {
+                    attr { height(1f); backgroundColor(SftpColorTokens.divider); margin(10f, 0f, 10f, 0f) }
                 }
             }
         }

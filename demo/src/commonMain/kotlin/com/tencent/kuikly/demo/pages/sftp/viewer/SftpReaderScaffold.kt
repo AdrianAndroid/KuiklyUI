@@ -14,10 +14,11 @@
  */
 package com.tencent.kuikly.demo.pages.sftp.viewer
 
-import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.base.ViewRef
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.views.List
+import com.tencent.kuikly.core.views.ListView
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
@@ -27,6 +28,10 @@ import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
  *
  * 一行内：字号 A−/A+ · 换行 · 源码/预览 · 编辑/完成 · 目录(n) · 保存*（dirty 时显示 *）
  * 右侧同一行显示状态（编码 · 大小 · 行数 · 字数），不再单独占一行。
+ *
+ * **内容区用 `List`（虚拟列表）+ `vforLazy`**：只物化视口附近的条目并循环复用，
+ * 大文档（几千块/几万行）滚动到底也不会累积成上万个视图 —— 修复「拉到底异常卡顿、滚轮失效、
+ * 大片空白」。内容用 `content: ListView<*, *>.() -> Unit` 由调用方用 `vforLazy` 填充。
  */
 internal fun ViewContainer<*, *>.SftpReaderScaffold(
     metaProvider: () -> String,
@@ -34,9 +39,8 @@ internal fun ViewContainer<*, *>.SftpReaderScaffold(
     onZoomOut: () -> Unit,
     wrapProvider: () -> Boolean,
     onToggleWrap: () -> Unit,
-    onScrollerReady: (scrollTo: (Float) -> Unit) -> Unit,
-    /** 滚动回调（传当前 contentOffsetY）：用于增量渲染，避免一次性建出全部块视图 */
-    onScroll: ((Float) -> Unit)? = null,
+    /** 列表就绪：拿到 ListView 的 ref，用于目录跳转等（`scrollToPosition`） */
+    onListReady: (ViewRef<ListView<*, *>>) -> Unit = {},
     mdSourceProvider: (() -> Boolean)? = null,
     onToggleSource: (() -> Unit)? = null,
     tocCountProvider: (() -> Int)? = null,
@@ -46,7 +50,9 @@ internal fun ViewContainer<*, *>.SftpReaderScaffold(
     dirtyProvider: (() -> Boolean)? = null,
     onSave: (() -> Unit)? = null,
     saveMsgProvider: (() -> String)? = null,
-    content: ViewBuilder,
+    /** 顶部提示（如读取阶段超限「仅显示前一部分」），有才显示 */
+    noticeProvider: (() -> String)? = null,
+    content: ListView<*, *>.() -> Unit,
 ) {
     View {
         attr { flex(1f); flexDirectionColumn() }
@@ -102,24 +108,33 @@ internal fun ViewContainer<*, *>.SftpReaderScaffold(
                 }
             }
         }
-
-        // 内容（可滚动）
-        Scroller {
-            attr {
-                flex(1f)
-                flexDirectionColumn()
-                padding(10f, 8f, 10f, 8f)
-                showScrollerIndicator(true)
-            }
-            ref { v ->
-                onScrollerReady { y -> v.view?.setContentOffset(0f, y, true) }
-            }
-            if (onScroll != null) {
-                event {
-                    scroll { onScroll.invoke(it.offsetY) }
+        // 读取/内容提示（有才显示）
+        if (noticeProvider != null) {
+            vif({ noticeProvider().isNotEmpty() }) {
+                Text {
+                    attr {
+                        text(noticeProvider())
+                        fontSize(11f)
+                        color(SftpColorTokens.danger)
+                        margin(10f, 2f, 10f, 2f)
+                    }
                 }
             }
-            content()
+        }
+
+        // 内容卡片：圆角/底色放外层 View；**List 自身不设 borderRadius**
+        // （web 渲染器会对设了圆角的元素强制 overflow:hidden → 滚动容器滚不动）。
+        View {
+            attr { flex(1f); backgroundColor(SftpColorTokens.cardBg); borderRadius(8f) }
+            List {
+                ref { onListReady(it) }
+                attr {
+                    flex(1f)
+                    padding(10f, 8f, 10f, 8f)
+                    showScrollerIndicator(true)
+                }
+                content()
+            }
         }
     }
 }

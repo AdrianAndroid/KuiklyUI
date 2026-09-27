@@ -320,9 +320,23 @@ setTimeout(() => {
       check('T3d 目录二级弹窗可打开并列出条目', !!tocOpen && tocCount > 0 && entriesVisible,
         `弹窗头=「目录 · N 项」${!!tocOpen} 条目数=${tocCount}`);
       if (tocOpen) await md.shot('text-viewer-toc-sheet.png');
+
+      // T3e 目录点击跳转（虚拟列表 scrollToPosition）：先滚到底，再点目录里的已知标题应跳回其位置
+      let tocJumped = false, tocJumpInfo = '未打开目录';
+      if (tocOpen) {
+        await md.ev("(()=>{const l=document.querySelector('.isList');l.scrollTop=l.scrollHeight;return true})()");
+        await sleep(800);
+        const topBefore = Number(await md.ev("Math.round(document.querySelector('.isList').scrollTop)"));
+        // '业务背景' 是文档靠前的小节标题（T3d 已确认它在目录里）；滚到底后正文里已不在 DOM，只会命中抽屉条目
+        await md.clickText('业务背景');
+        await sleep(900);
+        const topAfter = Number(await md.ev("Math.round(document.querySelector('.isList').scrollTop)"));
+        tocJumped = topBefore > 200 && topAfter < Math.max(80, topBefore * 0.5);
+        tocJumpInfo = `before=${topBefore} after=${topAfter}`;
+      }
+      check('T3e 目录点击跳转（虚拟列表 scrollToPosition 生效）', tocJumped, tocJumpInfo);
       await md.clickText('关闭');
-      await sleep(500);
-      await md.clickText('关闭');
+      await sleep(400);
       md.close();
     }
 
@@ -444,35 +458,34 @@ setTimeout(() => {
     check('T11 Mermaid 流程图渲染（节点/边标签/箭头）', diaOk,
       diaOk ? '含 开始/处理数据/结束 + 是/否 + ▼' : `未渲染：${diaText.slice(0, 100)}`);
 
-    // ---- T12 增量渲染：大文档首屏只渲染一批并给出提示，滚动后追加 ----
+    // ---- T12 虚拟列表：长文档可滚到末尾，且存活视图数有界（不再累积卡顿/空白） ----
+    // 回归背景：旧实现把已加载的块全部保留为视图，几千块时 DOM 达 2 万+ →
+    // 追加一次要 30s、页面变空白、滚轮失效。现改为 `List` + `vforLazy` 循环复用。
     const big = await openFixture(FIX_MD_BIG);
-    let incFirst = false, incGrew = false, incText = '';
+    let virtRendered = false, virtReachedEnd = false, virtMaxNodes = 0, virtNoMoreHint = false, virtInfo = '';
     if (big.win) {
       const bv = await attach(big.win.webSocketDebuggerUrl);
       await bv.send('Page.enable');
-      const t1 = await waitFor(async () => {
-        const b = await bv.body();
-        return b.includes('点此加载更多') ? b : null;
-      }, 30000, 600);
-      incText = t1 || '';
-      incFirst = !!t1 && /已渲染 (40|4[0-9])\//.test(incText);
-      if (incFirst) {
-        // web/Electron 的 Scroller 不上报滚动偏移 → 用底部「点此加载更多」显式追加
-        for (let k = 0; k < 3 && !incGrew; k++) {
-          await bv.clickText('点此加载更多');
-          await sleep(700);
-          const b = await bv.body();
-          const m = /已渲染 (\d+)\//.exec(b);
-          // 追加后要么计数增长，要么一次追加即加载完（提示消失，内容含末尾小节）
-          if (m && Number(m[1]) > 40) incGrew = true;
-          else if (!b.includes('点此加载更多') && b.includes('小节 90')) incGrew = true;
-        }
+      const t1 = await waitFor(async () => { const b = await bv.body(); return b.includes('小节 1') ? b : null; }, 30000, 600);
+      virtRendered = !!t1;
+      virtNoMoreHint = !(t1 || '').includes('点此加载更多'); // 虚拟列表不再需要「点此加载更多」
+      // 连续下滚到底：统计 DOM 节点数峰值，并确认能看到末尾小节
+      let maxNodes = 0;
+      for (let k = 0; k < 120; k++) {
+        await bv.ev("(()=>{const l=document.querySelector('.isList');l.scrollTop=l.scrollTop+1500;return true})()");
+        await sleep(70);
+        const s = JSON.parse(await bv.ev("(()=>{const l=document.querySelector('.isList');return JSON.stringify({n:document.querySelectorAll('*').length,t:l.scrollTop,h:l.scrollHeight,c:l.clientHeight})})()"));
+        maxNodes = Math.max(maxNodes, s.n);
+        if (s.t + s.c >= s.h - 4 && (await bv.body()).includes('小节 90')) { virtReachedEnd = true; break; }
       }
-      await bv.shot('text-viewer-incremental.png');
+      virtMaxNodes = maxNodes;
+      virtInfo = `渲染=${virtRendered} 到底=${virtReachedEnd} 节点峰值=${virtMaxNodes} 无增量提示=${virtNoMoreHint}`;
+      await bv.shot('text-viewer-virtual-list.png');
       bv.close();
     }
-    check('T12 增量渲染（首屏只渲染一批 + 提示，点按后追加）', incFirst && incGrew,
-      `首屏提示=${incFirst} 追加后增长=${incGrew} 文案=${((incText.split('\n').find((l) => l.includes('点此加载更多')) || '').trim()).slice(0, 60)}`);
+    check('T12 虚拟列表：长文档可滚到末尾且存活视图数有界（回归卡顿/空白）',
+      virtRendered && virtReachedEnd && virtMaxNodes > 0 && virtMaxNodes < 3000,
+      virtInfo || '未打开大文档查看器窗口');
 
     // ---- T13 文档缓存：同一文件二次打开命中缓存（无需重新装载即可渲染）----
     const again = await openFixture(FIX_MD);
@@ -526,57 +539,50 @@ setTimeout(() => {
     }
     check('T14 超过 96KB 的 Markdown 分块读取 offset 正确（不退源码/无重复前缀）', big96Ok, big96Info);
 
-    // ---- T16 大文档可完整加载到末尾 ----
-    // 回归：预览曾硬截 700 块、源码曾硬截 1500 行（拉到底也看不全）；切源码时一次建 1500 行视图导致卡死。
+    // ---- T16 大文档（超 700 块 / 1500 行）预览与源码都能滚动到末尾，且视图数有界 ----
+    // 回归：旧实现预览硬截 700 块、源码硬截 1500 行；改用虚拟列表后全部可滚到末尾。
     const lg = await openFixture(FIX_MD_LARGE);
-    let previewTotal = 0, previewBeyond = false, srcTotal = 0, srcBeyond = false, toggleMs = -1;
+    let previewEnd = false, previewMaxNodes = 0, previewInfo = '', srcEnd = false, srcMaxNodes = 0, srcInfo = '', toggleMs = -1;
+    const scrollToEnd = async (tv, marker, maxSteps) => {
+      let maxNodes = 0, lastTop = -1, stall = 0, info = '', tail = '';
+      for (let k = 0; k < maxSteps; k++) {
+        await tv.ev("(()=>{const l=document.querySelector('.isList');l.scrollTop=l.scrollTop+2000;return true})()");
+        await sleep(110);
+        const s = JSON.parse(await tv.ev("(()=>{const l=document.querySelector('.isList');return JSON.stringify({n:document.querySelectorAll('*').length,t:Math.round(l.scrollTop),h:l.scrollHeight,c:l.clientHeight})})()"));
+        maxNodes = Math.max(maxNodes, s.n);
+        const b = await tv.body();
+        info = `top=${s.t} h=${s.h} c=${s.c}`;
+        tail = b.slice(-120).replace(/\n/g, '|');
+        if (b.includes(marker)) return { ok: true, maxNodes, info };
+        if (s.t === lastTop) stall++; else stall = 0;
+        lastTop = s.t;
+        if (stall >= 3) break;
+      }
+      return { ok: false, maxNodes, info: info + ' tail=' + tail };
+    };
     if (lg.win) {
       const lv = await attach(lg.win.webSocketDebuggerUrl);
       await lv.send('Page.enable');
-      // 预览：总量必须 > 700（旧实现永久截断），且能追加渲染超过 700 块
-      const p1 = await waitFor(async () => {
-        const b = await lv.body();
-        const m = /已渲染 (\d+)\/(\d+) 块/.exec(b);
-        return (b.includes('源码') && m) ? { b, m } : null;
-      }, 30000, 600);
+      const p1 = await waitFor(async () => { const b = await lv.body(); return (b.includes('源码') && b.includes('章节 1')) ? b : null; }, 30000, 600);
       if (p1) {
-        previewTotal = Number(p1.m[2]);
-        for (let k = 0; k < 6 && !previewBeyond; k++) {
-          await lv.clickText('点此加载更多');
-          await sleep(700);
-          const b = await lv.body();
-          const m = /已渲染 (\d+)\//.exec(b);
-          if (m && Number(m[1]) > 700) previewBeyond = true;
-          if (!b.includes('点此加载更多') && b.includes('章节 500')) previewBeyond = true;
-        }
+        const r = await scrollToEnd(lv, '章节 500', 140);
+        previewEnd = r.ok; previewMaxNodes = r.maxNodes; previewInfo = r.info;
       }
-      // 源码：总量应等于全文行数（旧实现硬截 1500 行），且切换耗时可接受（不再一次建 1500 行视图）
+      await lv.shot('text-viewer-large-preview.png');
+      // 源码：切换到源码，滚动到末尾（旧实现硬截 1500 行）
       const t0 = Date.now();
       await lv.clickText('源码');
-      const s1 = await waitFor(async () => {
-        const b = await lv.body();
-        const m = /已渲染 (\d+)\/(\d+) 行/.exec(b);
-        return (m && b.includes('点此加载更多')) ? { b, m } : null;
-      }, 20000, 500);
+      await waitFor(async () => (await lv.body()).includes('章节 500') || (await lv.body()).includes('预览') ? true : null, 20000, 500);
       toggleMs = Date.now() - t0;
-      if (s1) {
-        srcTotal = Number(s1.m[2]);
-        for (let k = 0; k < 6 && !srcBeyond; k++) {
-          await lv.clickText('点此加载更多');
-          await sleep(700);
-          const b = await lv.body();
-          const m = /已渲染 (\d+)\//.exec(b);
-          if (m && Number(m[1]) > 1500) srcBeyond = true;
-          if (!b.includes('点此加载更多') && b.includes('章节 500')) srcBeyond = true;
-        }
-      }
+      const s = await scrollToEnd(lv, '章节 500', 240);
+      srcEnd = s.ok; srcMaxNodes = s.maxNodes; srcInfo = s.info;
       await lv.shot('text-viewer-large-source.png');
       lv.close();
     }
-    check('T16a 大文档预览不再按 700 块永久截断（可追加到 700 块以上）',
-      previewTotal > 700 && previewBeyond, `预览总块=${previewTotal} 追加超过700=${previewBeyond}`);
-    check('T16b 大文档源码总量=全文行数且可加载到末尾（旧实现硬截 1500 行）',
-      srcTotal === largeLines && srcBeyond, `源码总行=${srcTotal}/${largeLines} 追加超过1500=${srcBeyond} 切源码耗时=${toggleMs}ms`);
+    check('T16a 大文档预览可滚动到末尾且视图数有界（旧实现硬截 700 块）',
+      previewEnd && previewMaxNodes > 0 && previewMaxNodes < 3000, `到底=${previewEnd} 节点峰值=${previewMaxNodes} ${previewInfo}`);
+    check('T16b 大文档源码可滚动到末尾且视图数有界（旧实现硬截 1500 行）',
+      srcEnd && srcMaxNodes > 0 && srcMaxNodes < 3000, `到底=${srcEnd} 节点峰值=${srcMaxNodes} 切源码耗时=${toggleMs}ms ${srcInfo}`);
     // ---- T18/T19 超长代码行：显示折行不裁切 + 编辑区可滚轮滚动（用户报「长的代码显示不全」的回归）----
     const lc = await openFixture(FIX_MD_LONGCODE);
     if (lc.win) {
