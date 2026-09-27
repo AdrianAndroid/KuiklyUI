@@ -165,7 +165,8 @@
       （`dist` 内置 `sync` + electron-builder + `copy-dmg.mjs`）。**`npm run dist:release` 太慢，
       仅在 `zhaojian` 分支且确有需要（正式发版）时才跑**；其它分支/日常验证一律不跑 release（见规则 16）；
    2. `~/Downloads` 留副本：`copy-dmg.mjs` 已自动另存为
-      `~/Downloads/Kuikly SFTP-<版本>-<功能slug>-<yyyyMMdd-HHmmss>.dmg`（便于回滚/对比）；
+      `~/Downloads/Kuikly SFTP-<版本>-<yyyyMMdd-HHmmss>-<功能slug>.dmg`
+      —— **时间在前、描述在后**，便于在 `~/Downloads` 里按文件名直接按时间排序；
    3. **覆盖安装到本机**：`npm run install:app`（见 `electron/scripts/install-app.mjs`）——
       退出正在运行的客户端后，把 `electron/dist/mac*/Kuikly SFTP.app` 覆盖到 `/Applications/Kuikly SFTP.app`，
       保证本机跑的始终是最新构建（自动化用例/人工验证都以它为准）。

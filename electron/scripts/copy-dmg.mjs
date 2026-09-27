@@ -43,7 +43,8 @@ const desc = pkgDesc();
 for (const f of dmgs) {
   const src = path.join(distDir, f);
   const base = f.replace(/\.dmg$/i, '');
-  const dest = path.join(os.homedir(), 'Downloads', `${base}-${desc}-${stamp}.dmg`);
+  // 命名顺序：时间在前、描述在后 —— 便于在 ~/Downloads 按名称直接按时间排序
+  const dest = path.join(os.homedir(), 'Downloads', `${base}-${stamp}-${desc}.dmg`);
   try {
     fs.copyFileSync(src, dest);
     console.log(`[copy-dmg] ${dest}`);
