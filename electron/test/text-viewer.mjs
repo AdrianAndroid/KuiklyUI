@@ -42,6 +42,7 @@ const FIX_MD_BIG96 = 'e_big_over_96k.md'; // 超过 96KB 分块大小的回归�
 const FIX_MD_CODE = 'f_code.md';          // 多语言代码块夹具（验证语法高亮）
 const FIX_MD_LARGE = 'g_large_doc.md';    // 大文档回归：预览 >700 块 / 源码 >1500 行都能加载到末尾
 const FIX_MD_LONGCODE = 'f_long_code.md'; // 超长代码行夹具（验证折行不裁切 + 编辑区可滚动）
+const FIX_MD_MIXED = 'h_mixed_size.md';   // 混合高度夹具（短段落 + 超长代码块，回归滚动抖动/跳回/白屏）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -161,6 +162,7 @@ setTimeout(() => {
       '  B -->|是| C[处理数据]',
       '  B -->|否| D[结束]',
       '  C --> D',
+      '  D --> E[长节点文字开始：这是一段很长的说明，需要在固定宽度的节点里完整折行显示出来，不能被截断；长节点文字结束]',
       '```',
       '',
       '以上。',
@@ -233,6 +235,17 @@ setTimeout(() => {
       Array.from({ length: 30 }, (_, i) =>
         `const longLine${i} = "${'y'.repeat(220)}"; // LONGCODE_TAIL_${i}\n`).join('') + '```\n';
     await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_LONGCODE}`, content: Buffer.from(longCodeMd, 'utf8').toString('base64') });
+
+    // 混合高度夹具：短小节 + 超长代码块，制造极大的块高方差，
+    // 回归「滚动时内容总高随窗口均值抖动 → 突然白屏并跳回前面」。
+    const mixedParts = ['# 混合高度\n\n'];
+    for (let i = 0; i < 160; i++) {
+      mixedParts.push(`## 小节 ${i}\n\n一句话内容。\n\n`);
+      if (i % 4 === 0) {
+        mixedParts.push('```js\n' + Array.from({ length: 55 }, (_, k) => `const v${i}_${k} = compute(${i}, ${k});`).join('\n') + '\n```\n\n');
+      }
+    }
+    await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${FIX_DIR}/${FIX_MD_MIXED}`, content: Buffer.from(mixedParts.join(''), 'utf8').toString('base64') });
 
     check('T0a 夹具就绪（样例 md + txt + 图表 + 大文档）', !!mdB64, `${FIX_DIR}（md ${Math.round(mdB64.length / 1024)}KB）`);
     check('T0c 超过 96KB 分块的 Markdown 夹具就绪', big96Bytes > 96 * 1024, `${FIX_MD_BIG96} ${Math.round(big96Bytes / 1024)}KB / ${big96Lines} 行`);
@@ -440,7 +453,7 @@ setTimeout(() => {
     const openFixture = (fileName) => openFreshViewer(fileName);
 
     const dia = await openFixture(FIX_MD_DIAGRAM);
-    let diaOk = false, diaText = '';
+    let diaOk = false, diaText = '', diaLongOk = false, diaLongInfo = '';
     if (dia.win) {
       const dv = await attach(dia.win.webSocketDebuggerUrl);
       await dv.send('Page.enable');
@@ -452,11 +465,21 @@ setTimeout(() => {
       // 节点标签（开始/处理数据/结束）+ 边标签（是/否）+ 箭头字形（▼）
       diaOk = !!t && diaText.includes('结束') && diaText.includes('是') &&
         diaText.includes('否') && diaText.includes('▼');
+      // 长节点文字完整折行显示（回归：固定 132x40 节点 + lines(2) 会把长文字裁掉）
+      const longInfo = await dv.ev("(()=>{let node=null;for(const e of document.querySelectorAll('*')){const s=(e.textContent||'');if(s.includes('长节点文字开始')&&s.includes('长节点文字结束')){if(e.clientWidth>50&&e.clientWidth<400){const c=e.getBoundingClientRect();if(!node||c.height<node.h){node={h:Math.round(c.height),w:Math.round(c.width),txt:s.slice(0,20)}}}}}return node?JSON.stringify(node):'none'})()");
+      if (longInfo && longInfo !== 'none') {
+        const n = JSON.parse(longInfo);
+        diaLongOk = n.h > 50; // 基础节点高 40；折行后应明显更高
+        diaLongInfo = `节点高=${n.h} 宽=${n.w}`;
+      } else {
+        diaLongInfo = '未找到含完整长标签的节点';
+      }
       await dv.shot('text-viewer-mermaid.png');
       dv.close();
     }
     check('T11 Mermaid 流程图渲染（节点/边标签/箭头）', diaOk,
       diaOk ? '含 开始/处理数据/结束 + 是/否 + ▼' : `未渲染：${diaText.slice(0, 100)}`);
+    check('T11b Mermaid 长节点文字完整折行显示（回归 lines(2) 裁切）', diaLongOk, diaLongInfo);
 
     // ---- T12 虚拟列表：长文档可滚到末尾，且存活视图数有界（不再累积卡顿/空白） ----
     // 回归背景：旧实现把已加载的块全部保留为视图，几千块时 DOM 达 2 万+ →
@@ -583,6 +606,52 @@ setTimeout(() => {
       previewEnd && previewMaxNodes > 0 && previewMaxNodes < 3000, `到底=${previewEnd} 节点峰值=${previewMaxNodes} ${previewInfo}`);
     check('T16b 大文档源码可滚动到末尾且视图数有界（旧实现硬截 1500 行）',
       srcEnd && srcMaxNodes > 0 && srcMaxNodes < 3000, `到底=${srcEnd} 节点峰值=${srcMaxNodes} 切源码耗时=${toggleMs}ms ${srcInfo}`);
+
+    // ---- T20 滚轮滚动稳定性：不白屏、不跳回、内容高估算稳定 ----
+    // 回归：核心 LazyLoop 只用「当前窗口均值」估算未物化区间高度，块高方差大时
+    // scrollHeight 剧烈抖动、scrollEnd 偏移修正按错误均值跳回前面（实测 RN 文档 h 抖动 ±25%）。
+    // 现改为逐项实测高度缓存 + 全局均值，h 抖动 <10%。
+    const mx = await openFixture(FIX_MD_MIXED);
+    if (mx.win) {
+      const w = await attach(mx.win.webSocketDebuggerUrl);
+      await w.send('Page.enable');
+      await waitFor(async () => (await w.body()).includes('混合高度') ? true : null, 30000, 600);
+      const rect = JSON.parse(await w.ev("(()=>{const e=document.querySelector('.isList');const r=e.getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2})})()"));
+      let blank = 0, jumps = 0, hMin = Infinity, hMax = 0, samples = 0, reached = false, prevSec = 0, stall = 0, prevTop = -1, blankCtx = '';
+      for (let i = 0; i < 900; i++) {
+        const dy = [120, 320, 560, 780, 240][i % 5];
+        await w.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: rect.x, y: rect.y, deltaX: 0, deltaY: dy });
+        // 采样前留出 90ms 让本轮 DOM 变动完成布局/上屏，避免把「帧中间态」当成白屏
+        await sleep(i % 11 === 0 ? 220 : 90);
+        const s = JSON.parse(await w.ev("(()=>{const l=document.querySelector('.isList');const t=(l.innerText||'').trim();return JSON.stringify({st:Math.round(l.scrollTop),sh:l.scrollHeight,txt:t.slice(0,40),n:document.querySelectorAll('*').length})})()"));
+        samples++;
+        // 预热期（未物化项还很多，估算本就偏小）不计入高度稳定性
+        if (i >= 80) { hMin = Math.min(hMin, s.sh); hMax = Math.max(hMax, s.sh); }
+        if (s.txt.length < 3) {
+          blank++;
+          if (!blankCtx) {
+            const dom = await w.ev("(()=>{const l=document.querySelector('.isList');const w=l.firstElementChild;const ch=w?[...w.children]:[];const sample=ch.slice(0,10).map(e=>{const r=e.getBoundingClientRect();return Math.round(r.top)+'/'+Math.round(r.height)+':'+(e.textContent||'').slice(0,8)});return 'wrapKids='+ch.length+' ['+sample.join(' , ')+']'})()");
+            blankCtx = `首次@i=${i} top=${s.st} h=${s.sh} nodes=${s.n} ${dom}`;
+          }
+        }
+        const m = /(\d{1,3})/.exec(s.txt.replace(/\s/g, ''));
+        const sec = m ? Number(m[1]) : 0;
+        if (sec > 0 && prevSec > 0 && sec < prevSec - 3) jumps++;
+        if (sec > 0) prevSec = sec;
+        if (s.st === prevTop) stall++; else stall = 0;
+        prevTop = s.st;
+        if (s.txt.includes('小节 159')) { reached = true; break; }
+        if (stall >= 6) break; // 已到底或不再前进
+      }
+      const ratio = hMin > 0 ? hMax / hMin : 99;
+      check('T20 滚轮滚动稳定（不白屏 / 不跳回 / 内容高估算稳定）',
+        blank === 0 && jumps === 0 && ratio < 1.5,
+        `samples=${samples} 白屏=${blank} 跳回=${jumps} 稳态hRatio=${ratio.toFixed(2)} 到末尾=${reached} ${blankCtx}`);
+      await w.shot('text-viewer-wheel-stable.png');
+      w.close();
+    } else {
+      check('T20 滚轮滚动稳定（不白屏 / 不跳回 / 内容高估算稳定）', false, '未打开混合高度查看器窗口');
+    }
     // ---- T18/T19 超长代码行：显示折行不裁切 + 编辑区可滚轮滚动（用户报「长的代码显示不全」的回归）----
     const lc = await openFixture(FIX_MD_LONGCODE);
     if (lc.win) {

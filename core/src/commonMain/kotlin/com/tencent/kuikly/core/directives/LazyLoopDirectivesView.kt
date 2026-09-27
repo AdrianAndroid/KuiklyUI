@@ -64,6 +64,8 @@ class LazyLoopDirectivesView<T>(
         private const val KEY_SCROLL_EVENT_FILTER_RULE = "lazy_loop_scroll_event_filter_rule"
         private const val KEY_VIEW_SIZE_EXTRA = "lazy_loop_view_size_extra"
         private const val FILTER_TIMEOUT = 2000L
+        /** 滚动事件偏移超出过滤区间该阈值即视为「真实用户滚动」，作废过滤规则并放行 */
+        private const val SCROLL_FILTER_ESCAPE = 40f
         private const val DEBUG_LOG = false
         private const val TAG = "LazyLoop"
 
@@ -154,6 +156,18 @@ class LazyLoopDirectivesView<T>(
                 extProps.remove(KEY_SCROLL_EVENT_FILTER_RULE)
                 return false
             }
+            if (info.disabled) {
+                // 临时禁用滚动期间：继续过滤
+                return true
+            }
+            // 规则只用于吞掉「setContentOffset 的回声」以及在目标附近抑制动画中间态。
+            // 偏移与规则区间相差很大 = 真实用户滚动（不是回声）：必须作废规则并放行，
+            // 否则后续 2s 内的滚动事件全被过滤 → 懒加载窗口不更新 → 用户看到白屏（本 bug）。
+            if (offset < info.from - SCROLL_FILTER_ESCAPE || offset > info.to + SCROLL_FILTER_ESCAPE) {
+                logInfo { "scroll far from rule ($offset), drop rule and pass" }
+                extProps.remove(KEY_SCROLL_EVENT_FILTER_RULE)
+                return false
+            }
             return true
         }
 
@@ -231,6 +245,17 @@ class LazyLoopDirectivesView<T>(
     private var currentStart: Int = 0
     private var currentEnd: Int = 0
     private var avgItemSize: Float = DEFAULT_ITEM_SIZE
+    /**
+     * 逐项实测高度缓存（含 margin）：为「未物化区间」的高度估算提供实测值。
+     *
+     * 旧实现只用**当前窗口**的均值 `avgItemSize` 估算未物化区间高度，块高差异大时
+     * （如 Markdown 里标题 ~30px、代码块可达数千 px）窗口均值会剧烈抖动 →
+     * 内容总高随之抖动、`correctScrollOffsetInScrollEnd` 按错误均值修正偏移 →
+     * 表现为滚动中「突然白屏 + 跳回前面的位置」（web 大文档实测 scrollHeight 抖动 ±20k）。
+     * 记下实测值后，未物化区间用「已测项实测值 + 未测项全局均值」，估算稳定且更准。
+     */
+    private val measuredItemSize = HashMap<Int, Float>()
+    private var measuredSum: Float = 0f
 
     private var listView: ListView<*, *>? = null
     private var listViewContent: ListContentView? = null
@@ -313,6 +338,8 @@ class LazyLoopDirectivesView<T>(
                     }
 
                     curList = list
+                    measuredItemSize.clear()
+                    measuredSum = 0f
                     lastProcessedSeq = list.collectionOperation.lastOrNull()?.seq ?: -1
                     // 先根据原先的currentStart确定currentEnd
                     if (currentStart + maxLoadItem >= list.count()) {
@@ -395,6 +422,9 @@ class LazyLoopDirectivesView<T>(
         if (realParent === null) {
             return
         }
+        // 列表增删/更新会使下标位移、旧高度失效：清空逐项高度缓存，重新按实测积累
+        measuredItemSize.clear()
+        measuredSum = 0f
         var needRefreshRange = false
         if (operation.isAddOperation()) {
             if (operation.index < currentStart) { // add到前面
@@ -827,7 +857,7 @@ class LazyLoopDirectivesView<T>(
 
     private fun correctScrollOffsetInScrollEnd(offset: Float) {
         val isRow = isRowDirection()
-        val correctSize = if (startSize >= 0f) startSize else avgItemSize * currentStart
+        val correctSize = if (startSize >= 0f) startSize else estimateRangeSize(0, currentStart)
         val currentSize = itemStart.sizeExtra.takeIf { it < 0f } ?: itemStart.frame.size
         val diff = correctSize - currentSize
         logInfo { "correctScrollOffset $currentSize->$correctSize size" }
@@ -965,16 +995,26 @@ class LazyLoopDirectivesView<T>(
         return true
     }
 
+    /** 估算 [from, to) 区间的总高度：已测项用实测值，未测项用全局均值（稳定、不随窗口抖动） */
+    private fun estimateRangeSize(from: Int, to: Int): Float {
+        if (to <= from) return 0f
+        var sum = 0f
+        for (i in from until to) {
+            sum += measuredItemSize[i] ?: avgItemSize
+        }
+        return sum
+    }
+
     private fun updatePadding(before: Boolean, removedSize: Float = INVALID_DIMENSION) {
         if (before && ::itemStart.isInitialized) {
             val newSize = when {
                 startSize >= 0f -> startSize
                 removedSize != INVALID_DIMENSION -> itemStart.frame.size + removedSize
-                else -> return
+                else -> estimateRangeSize(0, currentStart)
             }
             setItemStartSize(newSize)
         } else if (::itemEnd.isInitialized) {
-            setItemEndSize(if (endSize >= 0f) endSize else avgItemSize * (curList.size - currentEnd))
+            setItemEndSize(if (endSize >= 0f) endSize else estimateRangeSize(currentEnd, curList.size))
         }
     }
 
@@ -1125,8 +1165,31 @@ class LazyLoopDirectivesView<T>(
             return
         }
         if (currentEnd > currentStart) {
-            avgItemSize = (itemEnd.frame.start - itemStart.frame.end) / (currentEnd - currentStart)
-            logInfo { "avgItemSize=$avgItemSize" }
+            // 记录本次物化条目的实测高度（含 margin），并维护全局均值
+            val isRow = isRowDirection()
+            for (i in 0 until (currentEnd - currentStart)) {
+                val ci = BEFORE_COUNT + i
+                if (ci < 0 || ci >= children.size) continue
+                val child = children[ci]
+                val frame = child.frame
+                if (frame.isDefaultValue()) continue
+                val size = if (isRow) {
+                    child.flexNode.getMargin(StyleSpace.Type.LEFT) + frame.width +
+                        child.flexNode.getMargin(StyleSpace.Type.RIGHT)
+                } else {
+                    child.flexNode.getMargin(StyleSpace.Type.TOP) + frame.height +
+                        child.flexNode.getMargin(StyleSpace.Type.BOTTOM)
+                }
+                if (size <= 0f) continue
+                val idx = currentStart + i
+                val old = measuredItemSize.put(idx, size)
+                if (old != null) measuredSum -= old
+                measuredSum += size
+            }
+            if (measuredItemSize.isNotEmpty()) {
+                avgItemSize = measuredSum / measuredItemSize.size
+            }
+            logInfo { "avgItemSize=$avgItemSize measured=${measuredItemSize.size}" }
         }
         if (listView?.getNextScrollToParams() != null) {
             getPager().addNextTickTask {
