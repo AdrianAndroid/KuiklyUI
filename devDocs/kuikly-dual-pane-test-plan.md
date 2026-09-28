@@ -488,22 +488,24 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
 
 ---
 
-## 7. 实测用例（D0–D25，已 28/28 通过）
+## 7. 实测用例（D0–D25，34/34 通过）
 
 > 运行：`cd electron && npm run build:web`（或先跑 Gradle 打包）→ `npm run sync` → `npm run test:dual`
 > 脚本：`electron/test/dual-pane.mjs`；截图：`electron/test/artifacts/*.png`（关键步骤自动存图）
 > 前置：外部网关已起：`cd electron && npm run gateway`（端口按实例计算；脚本连它做断言/清理；Electron 主进程另起自带网关供页面使用）
-> **夹具自建自清**：本地夹具建在 `.kr-test/local-<instance>/000_kuikly_dual_<instance>.*`（经 `KR_LOCAL_ROOT` 隔离），
-> 远端夹具名带实例前缀；结束时全部删除（不留残余）。并行 worktree 说明见 `electron/test/env.mjs` 与 `AGENTS.md §3.1 规则 13`。
+> **默认自包含远端**：未设置 `SFTP_HOST` 且未设置 `KR_DUAL_REAL=1` 时，脚本自动启动 `sftp-gateway/test/fixture-sftp-server.mjs`（127.0.0.1、端口/根目录/稳定 ed25519 主机密钥均由 `electron/test/env.mjs` 按 worktree 实例隔离）。设置 `SFTP_HOST` 或 `KR_DUAL_REAL=1` 才连接真实测试机。
+> **夹具自建自清**：本地夹具建在 `.kr-test/local-<instance>/000_kuikly_dual_<instance>.*`（经 `KR_LOCAL_ROOT` 隔离），远端夹具根在 `.kr-test/sftp-fixture-<instance>`，结束时清理 Electron 与夹具进程。并行 worktree 说明见 `electron/test/env.mjs` 与 `AGENTS.md §3.1 规则 13`。
 
 | ID | 用例 | 断言方式 |
 |----|------|----------|
-| D0 | 网关连接真实服务器 | RPC `connect` 返回 sessionId |
+| D0 | 网关连接内置夹具或显式真实服务器 | RPC `connect` 返回 sessionId |
 | D1 | Electron 可见窗口 + CDP | `/json/version` |
 | D2–D4 | 双栏渲染；本地栏列出真实主目录；远端栏列出真实远端目录 | 页面文本包含真实条目 |
 | D5 | **真实点击**本地文件 → 选中 1 项 | 状态行「本地已选 1 项」 |
 | D6–D7 | 点击「上传 →」；**字节级**校验远端内容 | 远端 `stat` + `openRead/read` 与本地文件 `equals` |
 | D8 | 256KB 随机二进制上传**字节级**一致 | 同上 |
+| D8a–D8b | 上传详情标题与任务方向一致 | 上传任务显示「上传详情」，任务卡片方向为「上传」 |
+| D9a–D9c | 下载详情入口、弹层、进度与速率字段 | 下载任务显示「下载详情」；截图 `D2-下载详情.png` |
 | D9–D10 | 点击「← 下载」；**字节级**校验本地文件 | `fs.readFileSync` 与远端内容 `equals` |
 | D11–D12 | 远端栏「+」→ 弹层 → 键入名称 → 确定 → 远端真实建目录 | 真实点击 + `Input` 键入 + RPC `stat` |
 | D13 | 点击目录行「▶」→ 进入下一级 | 远端栏路径变为 `<home>/<new>` |

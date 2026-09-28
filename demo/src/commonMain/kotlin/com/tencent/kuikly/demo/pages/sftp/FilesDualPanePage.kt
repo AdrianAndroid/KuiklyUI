@@ -17,6 +17,7 @@ package com.tencent.kuikly.demo.pages.sftp
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
+import com.tencent.kuikly.core.datetime.DateTime
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.velseif
 import com.tencent.kuikly.core.directives.vif
@@ -35,12 +36,27 @@ import com.tencent.kuikly.core.module.sftp.SftpConnection
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.timer.clearTimeout
+import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.demo.pages.base.BridgeModule
 import com.tencent.kuikly.demo.pages.sftp.theme.SftpColorTokens
+
+data class DualTransferTask(
+    val id: String,
+    val direction: TransferDirection,
+    val name: String,
+    val totalBytes: Long,
+    val doneBytes: Long = 0L,
+    val progress: Float = 0f,
+    val rateBytesPerSecond: Long = 0L,
+    val status: String = "排队中",
+    val error: String? = null,
+    val updatedAt: Long = 0L,
+)
 
 /**
  * 双栏文件管理器（桌面版：Electron / H5）。
@@ -77,6 +93,11 @@ internal class FilesDualPanePage : SftpBasePager() {
     private var connecting: Boolean by observable(true)
     private var errorMsg: String? by observable(null)
     private var status: String by observable("")
+    /** 双栏传输任务：下载/上传均显示，下载额外显示实时速率。 */
+    private var transferTasks by observableList<DualTransferTask>()
+    private var transferDetailsVisible: Boolean by observable(false)
+    private var transferPollRef: String? = null
+    private var transferPollToken: String? = null
     /** 活动栏：工具条（新建/重命名/删除）作用于它；避免「在远端选中、却删了本地同名文件」。 */
     private var activePane: Pane by observable(Pane.Local)
     /** 已保存的远端主机（切换器数据源） */
@@ -103,6 +124,13 @@ internal class FilesDualPanePage : SftpBasePager() {
         initialRemotePath = params.optString("remotePath", "")
         loadConnections()
         doConnect()
+    }
+
+    override fun pageWillDestroy() {
+        transferPollRef?.let { clearTimeout(it) }
+        transferPollRef = null
+        transferPollToken = null
+        super.pageWillDestroy()
     }
 
     // ==================== 连接 & 初始化 ====================
@@ -452,7 +480,89 @@ internal class FilesDualPanePage : SftpBasePager() {
         }
         if (items.isEmpty()) { status = "目录暂不支持传输，请选择文件"; return }
         val reqs = core.planTransfer(items, direction)
+        transferTasks.clear()
+        reqs.forEachIndexed { index, req ->
+            val name = req.localPath.substringAfterLast('/').ifEmpty { req.remotePath.substringAfterLast('/') }
+            val size = items.firstOrNull { it.name == name }?.size ?: 0L
+            transferTasks.add(
+                DualTransferTask(
+                    id = "transfer_${DateTime.currentTimestamp()}_$index",
+                    direction = direction,
+                    name = name,
+                    totalBytes = size,
+                    updatedAt = DateTime.currentTimestamp(),
+                ),
+            )
+        }
+        transferDetailsVisible = true
         execSeq(direction, reqs, 0)
+    }
+
+    private fun transferDetailsTitle(): String {
+        val directions = transferTasks.map { it.direction }.toSet()
+        return when {
+            directions.isEmpty() -> "传输详情"
+            directions.size > 1 -> "传输详情"
+            directions.first() == TransferDirection.Download -> "下载详情"
+            else -> "上传详情"
+        }
+    }
+
+    private fun startTransferPolling(index: Int, localPath: String) {
+        stopTransferPolling()
+        val token = "poll_${DateTime.currentTimestamp()}_$index"
+        transferPollToken = token
+
+        fun schedule() {
+            transferPollRef = setTimeout(300) {
+                if (transferPollToken != token) return@setTimeout
+                val parent = localPath.substringBeforeLast('/').ifEmpty { "/" }
+                val name = localPath.substringAfterLast('/')
+                localFsBridge().lfList(parent) { entries, _ ->
+                    if (transferPollToken != token) return@lfList
+                    val size = entries?.firstOrNull { it.optString("name") == name }?.optLong("size", -1L)?.takeIf { it >= 0L }
+                    val total = transferTasks.getOrNull(index)?.totalBytes ?: 0L
+                    if (size != null && total > 0L) {
+                        updateProgress(index, (size.toFloat() / total.toFloat()).coerceIn(0f, 0.999f), null)
+                    }
+                    if (transferTasks.getOrNull(index)?.status == "进行中") schedule()
+                }
+            }
+        }
+        schedule()
+    }
+
+    private fun stopTransferPolling() {
+        transferPollRef?.let { clearTimeout(it) }
+        transferPollRef = null
+        transferPollToken = null
+    }
+
+    private fun updateProgress(
+        index: Int,
+        progress: Float,
+        error: String?
+    ) {
+        val now = DateTime.currentTimestamp()
+        val old = transferTasks.getOrNull(index) ?: return
+        val p = progress.coerceIn(0f, 1f)
+        val done = if (old.totalBytes > 0L) (old.totalBytes * p).toLong() else old.doneBytes
+        val elapsed = now - old.updatedAt
+        val rate = if (elapsed > 0L && done > old.doneBytes) {
+            (done - old.doneBytes) * 1000L / elapsed
+        } else old.rateBytesPerSecond
+        transferTasks[index] = old.copy(
+            doneBytes = done,
+            progress = p,
+            rateBytesPerSecond = rate,
+            status = when {
+                error != null -> "失败"
+                p >= 1f -> "已完成"
+                else -> "进行中"
+            },
+            error = error,
+            updatedAt = now,
+        )
     }
 
     private fun execSeq(direction: TransferDirection, reqs: List<TransferRequest>, idx: Int) {
@@ -469,12 +579,16 @@ internal class FilesDualPanePage : SftpBasePager() {
         status = "$label …"
         if (direction == TransferDirection.Upload) {
             sftpModule().upload(sid, req.localPath, req.remotePath, overwrite = overwrite) { p, _, err ->
+                updateProgress(idx, p, err?.msg)
                 status = if (err != null) "$label 失败: ${err.msg}" else "$label ${(p * 100).toInt()}%"
                 if (err != null) { status = "$label 失败"; listBoth() } else execSeq(direction, reqs, idx + 1)
             }
         } else {
             // 下载：网关/宿主把远端文件写到该本地绝对路径（localName 传绝对路径）
+            startTransferPolling(idx, req.localPath)
             sftpModule().download(sid, req.remotePath, req.localPath, overwrite = overwrite) { p, _, err ->
+                stopTransferPolling()
+                updateProgress(idx, p, err?.msg)
                 status = if (err != null) "$label 失败: ${err.msg}" else "$label ${(p * 100).toInt()}%"
                 if (err != null) { status = "$label 失败"; listBoth() } else execSeq(direction, reqs, idx + 1)
             }
@@ -591,6 +705,92 @@ internal class FilesDualPanePage : SftpBasePager() {
                         backgroundColor(SftpColorTokens.cardBg)
                     }
                     Text { attr { text(ctx.status); fontSize(12f); color(SftpColorTokens.textSecondary) } }
+                }
+
+                // 传输状态栏：点击可展开下载/上传详情
+                View {
+                    attr {
+                        size(pagerData.pageViewWidth, 42f)
+                        padding(8f, 10f, 8f, 10f)
+                        backgroundColor(SftpColorTokens.cardBg)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                    }
+                    event { click { if (ctx.transferTasks.isNotEmpty()) ctx.transferDetailsVisible = true } }
+                    Text {
+                        attr {
+                            text(ctx.transferSummary())
+                            fontSize(12f)
+                            color(SftpColorTokens.textSecondary)
+                            flex(1f)
+                            lines(1)
+                        }
+                    }
+                    if (ctx.transferTasks.isNotEmpty()) {
+                        Text { attr { text(ctx.transferDetailsTitle() + " ›"); fontSize(12f); color(SftpColorTokens.primary); marginLeft(8f) } }
+                    }
+                }
+
+                // 弹层：传输详情（下载进度、实时速率、错误信息）
+                vif({ ctx.transferDetailsVisible }) {
+                    View {
+                        attr {
+                            positionAbsolute(); left(0f); top(0f)
+                            size(pagerData.pageViewWidth, pagerData.pageViewHeight)
+                            backgroundColor(Color(0x66000000)); zIndex(100); allCenter()
+                        }
+                        View {
+                            attr {
+                                size(pagerData.pageViewWidth - 48f, pagerData.pageViewHeight * 0.58f)
+                                backgroundColor(SftpColorTokens.bg)
+                                borderRadius(12f)
+                                padding(16f, 14f, 16f, 14f)
+                                flexDirectionColumn()
+                            }
+                            View {
+                                attr { flexDirectionRow(); alignItemsCenter() }
+                                Text { attr { text(ctx.transferDetailsTitle()); fontSize(15f); fontWeightBold(); color(SftpColorTokens.textPrimary); flex(1f) } }
+                                Text {
+                                    attr { text("关闭"); fontSize(13f); color(SftpColorTokens.textSecondary) }
+                                    event { click { ctx.transferDetailsVisible = false } }
+                                }
+                            }
+                            Scroller {
+                                attr { flex(1f); marginTop(10f); flexDirectionColumn(); showScrollerIndicator(true) }
+                                vfor({ ctx.transferTasks }) { task ->
+                                    View {
+                                        attr {
+                                            width(pagerData.pageViewWidth - 76f)
+                                            padding(10f, 10f, 10f, 10f)
+                                            marginBottom(8f)
+                                            backgroundColor(SftpColorTokens.cardBg)
+                                            borderRadius(8f)
+                                            flexDirectionColumn()
+                                        }
+                                        View {
+                                            attr { flexDirectionRow(); alignItemsCenter() }
+                                            Text { attr { text(if (task.direction == TransferDirection.Download) "下载" else "上传"); fontSize(12f); color(SftpColorTokens.primary); marginRight(6f) } }
+                                            Text { attr { text(task.name); fontSize(13f); color(SftpColorTokens.textPrimary); flex(1f); lines(1) } }
+                                            Text { attr { text(task.status); fontSize(12f); color(if (task.error == null) SftpColorTokens.textSecondary else SftpColorTokens.danger) } }
+                                        }
+                                        Text {
+                                            attr {
+                                                text("${formatTransferSize(task.doneBytes)} / ${formatTransferSize(task.totalBytes)} · ${(task.progress * 100).toInt()}%" + if (task.rateBytesPerSecond > 0L) " · ${formatTransferRate(task.rateBytesPerSecond)}" else "")
+                                                fontSize(11f); color(SftpColorTokens.textSecondary); marginTop(5f)
+                                            }
+                                        }
+                                        View {
+                                            attr { width(pagerData.pageViewWidth - 96f); height(5f); marginTop(7f); backgroundColor(SftpColorTokens.divider); borderRadius(3f) }
+                                            View { attr { width((pagerData.pageViewWidth - 96f) * task.progress); height(5f); backgroundColor(SftpColorTokens.primary); borderRadius(3f) } }
+                                        }
+                                        if (task.error != null) {
+                                            Text { attr { text(task.error ?: ""); fontSize(11f); color(SftpColorTokens.danger); marginTop(5f) } }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // 弹层：切换远端主机（多个远端在此切换）
@@ -725,6 +925,18 @@ internal class FilesDualPanePage : SftpBasePager() {
                 }
             }
         }
+    }
+
+    private fun transferSummary(): String {
+        if (transferTasks.isEmpty()) return status
+        val active = transferTasks.count { it.status == "进行中" || it.status == "排队中" }
+        val finished = transferTasks.count { it.status == "已完成" }
+        val failed = transferTasks.count { it.status == "失败" }
+        val current = transferTasks.firstOrNull { it.status == "进行中" }
+        val currentText = current?.let {
+            "${it.name} ${(it.progress * 100).toInt()}%" + if (it.rateBytesPerSecond > 0L) " · ${formatTransferRate(it.rateBytesPerSecond)}" else ""
+        }
+        return (currentText ?: "传输任务") + " · 进行中 $active · 完成 $finished" + if (failed > 0) " · 失败 $failed" else ""
     }
 
     private fun onBack() {
@@ -871,6 +1083,21 @@ private fun com.tencent.kuikly.core.base.ViewContainer<*, *>.DualBtn(label: Stri
         }
         event { click { onClick() } }
     }
+}
+
+private fun formatTransferSize(bytes: Long): String = when {
+    bytes < 1024L -> "${bytes}B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L}KB"
+    bytes < 1024L * 1024L * 1024L -> "${bytes / (1024L * 1024L)}MB"
+    else -> "${bytes / (1024L * 1024L * 1024L)}GB"
+}
+
+private fun formatTransferRate(bytesPerSecond: Long): String = when {
+    bytesPerSecond <= 0L -> "0B/s"
+    bytesPerSecond < 1024L -> "${bytesPerSecond}B/s"
+    bytesPerSecond < 1024L * 1024L -> "${bytesPerSecond / 1024L}KB/s"
+    bytesPerSecond < 1024L * 1024L * 1024L -> "${bytesPerSecond / (1024L * 1024L)}MB/s"
+    else -> "${bytesPerSecond / (1024L * 1024L * 1024L)}GB/s"
 }
 
 private fun fmtSize(bytes: Long): String = when {

@@ -1054,8 +1054,9 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   **目录优先**排序；弹层（新建/重命名/删除确认）。
 - **传输**：`SftpModule.upload`（网关支持无 `content` 时读 `localPath`）/ `SftpModule.download`
   （`localName` 传绝对路径 → 网关直写该路径）；仅网关**绑回环**时可用。
-- **验证**：`cd electron && npm run sync && npm run test:dual` → **D0–D19 共 22/22 通过**，真实 CDP 鼠标点击 +
-  截图（`electron/test/artifacts/`）；夹具自建自清，不留残余。用例与技法见 `devDocs/kuikly-dual-pane-test-plan.md` §7。
+- **验证**：`cd electron && npm run sync && npm run test:dual` → 双栏用例覆盖真实 CDP 鼠标点击、上传/下载字节一致性、进度/速率/详情弹层、目录 CRUD、越界安全与 URL 凭据检查；截图保存到 `electron/test/artifacts/`。默认使用 `sftp-gateway/test/fixture-sftp-server.mjs` 自包含 SSH/SFTP 夹具，不依赖外部测试机；夹具自建自清，不留残余。用例与技法见 `devDocs/kuikly-dual-pane-test-plan.md` §7。
+- **内置 SFTP 夹具**：`electron/test/dual-pane.mjs` 在未设置 `SFTP_HOST` 且 `KR_DUAL_REAL` 不为 `1` 时自动启动夹具。`SSH_FIXTURE_PORT`、`FIXTURE_ROOT`、`FIXTURE_KEY` 和实例隔离均来自 `electron/test/env.mjs`；持久化 ed25519 主机密钥用于保持 TOFU 指纹稳定。需要真实服务器时设置 `SFTP_HOST`（以及可选 `SFTP_PORT`/`SFTP_USER`/`SFTP_PASSWORD`/`SFTP_HOME`），或设置 `KR_DUAL_REAL=1`。
+- **夹具验证**：夹具服务端实现双栏所需的 SFTP 文件/目录操作、沙盒路径校验和协议状态码映射；独立 ssh2 客户端验证为 15/15 通过，覆盖主机密钥稳定、随机读、目录/文件 CRUD、路径遍历、错误密码和越界写入。
 - **勿回退的 5 个坑**（详见测试规程 §7.2）：依赖必须用 provider 在 `attr{}`/`vif` 内读；分隔线不能吃 `flex`；
   栏内 `Scroller` 必须限宽；工具条必须绑活动栏（默认活动栏=本地）；目录须可选中（`▶` 才进入）。
 - **本地路径三道闸门 + 凭据不进 URL**（详见测试规程 §8）：Electron `localfs:*` 与网关 `localPath`/绝对路径下载

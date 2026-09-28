@@ -252,6 +252,9 @@ env -u ELECTRON_RUN_AS_NODE open "/Applications/Kuikly SFTP.app"
 | 本地文件根 | `.kr-test/local-<instance>` | `KR_LOCAL_ROOT` → `main.js` 的 `localfs:*` 根；缓存/临时文件随之隔离 |
 | 外部网关 | `npm run gateway` | 端口 18090+slot*100，与套件 `GATEWAY_URL` 同源 |
 | 远端夹具 | `kr_<instance>_*` 等 | 同一台测试机上多 worktree 并行不互删 |
+| SFTP fixture SSH 端口 | `SSH_FIXTURE_PORT`（默认 `19000 + SLOT*100`） | 每个 worktree 独立端口；`dual-pane.mjs` 默认自动启动/结束 fixture |
+| SFTP fixture 文件根 | `FIXTURE_ROOT`（默认 `.kr-test/sftp-fixture-<instance>`） | 沙盒根目录；路径遍历不能访问宿主机 |
+| SFTP fixture 主机密钥 | `FIXTURE_KEY`（默认 `.kr-test/sftp-fixture-hostkey-<instance>`） | 持久化 ed25519 密钥，避免 TOFU 指纹因重启变化 |
 
 **标准用法**：
 
@@ -261,6 +264,8 @@ npm run sync                 # 构建产物（每个 worktree 各自一份）
 npm run gateway              # 终端 A：本实例外部网关（打印实例与端口）
 npm test                     # 终端 B：本实例测试（自动用本实例端口/userData/本地根）
 ```
+
+**双栏测试的远端来源**：`npm run test:dual` 默认使用 `sftp-gateway/test/fixture-sftp-server.mjs` 自包含 SSH/SFTP 服务，监听 `SSH_FIXTURE_PORT`，根目录为 `FIXTURE_ROOT`，主机密钥为 `FIXTURE_KEY`。fixture 仅提供测试所需协议子集并将所有路径限制在沙盒根内；独立 ssh2 验证覆盖 15 项基础协议/安全断言且全部通过。设置 `SFTP_HOST` 或 `KR_DUAL_REAL=1` 时，`dual-pane.mjs` 才切换到真实服务器。
 
 **主进程配合**（`main.js`）：窗口标题 `Kuikly SFTP [<instance>]`（多应用一眼区分）；`KR_USER_DATA_DIR`
 → `app.setPath('userData')`；`KR_LOCAL_ROOT` → `localfs:*` 根。

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
-import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, LOCAL_ROOT, REPO_ROOT, SSH_FIXTURE_PORT, FIXTURE_ROOT, FIXTURE_KEY, FIXTURE_USER, FIXTURE_PASS, FIXTURE_HOME, isPortListening } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -22,11 +22,14 @@ fs.mkdirSync(artifacts, { recursive: true });
 
 const PORT = cdpPort('dual');
 const GW = GATEWAY_URL;
-const HOST = process.env.SFTP_HOST || '192.168.2.2';
-const PORT_SSH = process.env.SFTP_PORT || '22';
-const USER = process.env.SFTP_USER || 'zhaojian';
-const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
-const HOME = SFTP_HOME;
+// 远端目标：默认使用**内置 SSH/SFTP 夹具**（127.0.0.1，自包含、不依赖内网测试机）。
+// 需要连真实机器时显式指定 SFTP_HOST（或 KR_DUAL_REAL=1）。
+const USE_FIXTURE = !process.env.SFTP_HOST && process.env.KR_DUAL_REAL !== '1';
+const HOST = process.env.SFTP_HOST || '127.0.0.1';
+const PORT_SSH = process.env.SFTP_PORT || (USE_FIXTURE ? String(SSH_FIXTURE_PORT) : '22');
+const USER = process.env.SFTP_USER || (USE_FIXTURE ? FIXTURE_USER : 'zhaojian');
+const PASS = process.env.SFTP_PASSWORD || (USE_FIXTURE ? FIXTURE_PASS : 'zhaojian');
+const HOME = process.env.SFTP_HOME || (USE_FIXTURE ? FIXTURE_HOME : '/home/zhaojian');
 const LOCAL_HOME = LOCAL_ROOT;   // 本实例隔离的本地文件根（经 KR_LOCAL_ROOT 传给主进程）
 
 // 夹具名带实例前缀：多个 worktree 并行时在共享测试机上不互删
@@ -45,6 +48,40 @@ const rpc = async (module, method, params) => {
   const r = await fetch(GW + '/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ module, method, params }) });
   return r.json();
 };
+
+/*
+ * 拉起内置 SSH/SFTP 夹具（ssh2 服务端 + 沙盒目录）。
+ * 目的：让双栏端到端用例**不依赖内网测试机**，任何机器上都能跑出真实 SFTP 链路结果。
+ * 若端口已有夹具在监听（并发/复跑）则直接复用，不重复启动。
+ */
+async function startFixture() {
+  if (!USE_FIXTURE) return null;
+  if (await isPortListening(SSH_FIXTURE_PORT)) {
+    console.log(`      夹具已在监听 127.0.0.1:${SSH_FIXTURE_PORT}，复用`);
+    return null;
+  }
+  const gatewayDir = path.join(REPO_ROOT, 'sftp-gateway');
+  const script = path.join(gatewayDir, 'test', 'fixture-sftp-server.mjs');
+  const child = spawn(
+    process.execPath,
+    [script, '--port', String(SSH_FIXTURE_PORT), '--root', FIXTURE_ROOT, '--key', FIXTURE_KEY, '--user', FIXTURE_USER, '--pass', FIXTURE_PASS, '--home', FIXTURE_HOME],
+    { cwd: gatewayDir, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  const ready = await new Promise((resolve) => {
+    let out = '';
+    const timer = setTimeout(() => resolve(false), 15000);
+    child.stdout.on('data', (d) => {
+      out += d.toString();
+      if (out.includes('FIXTURE_READY')) { clearTimeout(timer); resolve(true); }
+    });
+    child.stderr.on('data', (d) => { const s = d.toString().trim(); if (s) console.log('      [fixture]', s); });
+    child.on('exit', () => { clearTimeout(timer); resolve(false); });
+  });
+  if (!ready) { try { child.kill('SIGKILL'); } catch (e) { /* ignore */ } }
+  if (!ready) throw new Error(`SFTP 夹具启动失败（端口 ${SSH_FIXTURE_PORT}）`);
+  console.log(`      夹具已启动 127.0.0.1:${SSH_FIXTURE_PORT} home=${FIXTURE_HOME} root=${FIXTURE_ROOT}`);
+  return child;
+}
 
 async function waitCdp() {
   for (let i = 0; i < 80; i++) {
@@ -65,6 +102,7 @@ setTimeout(() => {
 (async () => {
   logInstance('dual');
   ensureDirs();
+  const fixture = await startFixture();   // 自包含 SFTP 服务（USE_FIXTURE=false 时为 null）
   // ---------- 夹具（本脚本自建自清，运行结束不留残余）----------
   const localFixtures = [UPLOAD_TXT, UPLOAD_BIN, DL_TXT].map((n) => path.join(LOCAL_HOME, n));
   fs.rmSync(path.join(LOCAL_HOME, LOCAL_NEW_DIR), { recursive: true, force: true });
@@ -74,7 +112,7 @@ setTimeout(() => {
   const txtBuf = fs.readFileSync(localFixtures[0]);
   const dlContent = Buffer.from('download-by-real-click\n'.repeat(64));
   const conn = await rpc('sftp', 'connect', { host: HOST, port: Number(PORT_SSH), user: USER, password: PASS });
-  check('D0 网关连接真实服务器', !!conn.sessionId, conn.sessionId || JSON.stringify(conn).slice(0, 120));
+  check(`D0 网关连接${USE_FIXTURE ? '内置夹具' : '真实服务器'}（${HOST}:${PORT_SSH}）`, !!conn.sessionId, conn.sessionId || JSON.stringify(conn).slice(0, 120));
   const sid = conn.sessionId;
   const cleanRemote = async () => { for (const p of [`${HOME}/${UPLOAD_TXT}`, `${HOME}/${UPLOAD_BIN}`, `${HOME}/${DL_TXT}`, `${HOME}/${NEW_DIR}`]) { try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: p, recursive: true }); } catch (e) {} } };
   await cleanRemote();
@@ -218,19 +256,43 @@ setTimeout(() => {
     check('D6 点击「上传 →」→ 远端出现该文件（真实点击）', upOk, lastClick);
     check('D7 上传内容字节级一致', !!upBytes && upBytes.equals(txtBuf), upBytes ? `local=${txtBuf.length}B remote=${upBytes.length}B equal=${upBytes.equals(txtBuf)}` : 'no bytes');
     console.log('      截图:', await shot('D1-上传完成'));
+    await clickText('关闭');
 
     // ---------- D8 二进制上传（256KB 随机）----------
-    await clickText('刷新');                        // 清空状态行
-    await clickText(UPLOAD_BIN);
+    await clickText('刷新');                        // 刷新不改变核心选择，先显式取消 D6 的文本选择
+    await waitText((x) => x.includes(UPLOAD_TXT) && x.includes(UPLOAD_BIN), 5000);
+    await sleep(1200);                              // 等待列表重排完成，避免读取旧 DOM 状态
+    await clickText(UPLOAD_TXT);
+    await sleep(800);
+    const d8Cleared = /本地已选\s*0\s*项/.test(await bodyText());
+    const d8FileClicked = await clickText(UPLOAD_BIN);
+    await sleep(1000);
+    const d8Selected = /本地已选\s*1\s*项/.test(await bodyText());
+    check('D8 选择二进制文件前清除上一笔选择', d8Cleared && d8FileClicked && d8Selected, `${lastClick} | cleared=${d8Cleared} file=${d8FileClicked} selected=${d8Selected}`);
     await clickText('上传 →');
     const upBinOk = await (async () => { const t1 = Date.now(); while (Date.now() - t1 < 60000) { if (await existsRemote(`${HOME}/${UPLOAD_BIN}`)) { const b = await remoteBytes(`${HOME}/${UPLOAD_BIN}`); if (b && b.length === binBuf.length) return true; } await sleep(1000); } return false; })();
     const upBinBytes = upBinOk ? await remoteBytes(`${HOME}/${UPLOAD_BIN}`) : null;
     check('D8 二进制文件上传(256KB)字节级一致', !!upBinBytes && upBinBytes.equals(binBuf), upBinBytes ? `local=${binBuf.length}B remote=${upBinBytes.length}B equal=${upBinBytes.equals(binBuf)}` : 'no bytes');
+    // 传输任务详情标题必须与方向一致，不能把上传任务误标为「下载详情」。
+    const uploadDetailSummary = await waitText((x) => x.includes('上传详情'), 5000);
+    check('D8a 上传后底部显示「上传详情」入口', uploadDetailSummary.includes('上传详情'), uploadDetailSummary.slice(-300));
+    const uploadDetailClicked = await clickText('上传详情');
+    const uploadDetailText = await waitText((x) => x.includes('上传详情') && x.includes(UPLOAD_BIN), 5000);
+    check('D8b 上传详情面板标题与任务方向一致', uploadDetailClicked && uploadDetailText.includes(UPLOAD_BIN), uploadDetailText.slice(-400));
+    await clickText('关闭');
 
     // ---------- D9 真实点击：远端文件 → 下载到本地栏 ----------
     await clickText('刷新');
     await clickText(DL_TXT);
     await clickText('← 下载');
+    const detailSummary = await waitText((x) => x.includes('下载详情'), 5000);
+    check('D9a 下载后底部出现「下载详情」入口', detailSummary.includes('下载详情'), detailSummary.slice(-300));
+    const detailClicked = await clickText('下载详情');
+    const detailText = await waitText((x) => x.includes('下载详情') && x.includes(DL_TXT), 5000);
+    check('D9b 点击底部状态打开下载详情面板', detailClicked && detailText.includes(DL_TXT), detailText.slice(-500));
+    check('D9c 下载详情显示进度与速率字段', /\d+%|B\/s|KB\/s|MB\/s/.test(detailText), detailText.slice(-500));
+    console.log('      截图:', await shot('D2-下载详情'));
+    await clickText('关闭');
     const dlLocal = path.join(LOCAL_HOME, DL_TXT);
     const dlOk = await (async () => { const t1 = Date.now(); while (Date.now() - t1 < 30000) { try { const b = fs.readFileSync(dlLocal); if (b.length === dlContent.length) return true; } catch (e) {} await sleep(800); } return false; })();
     const dlBytes = dlOk ? fs.readFileSync(dlLocal) : null;
@@ -259,7 +321,7 @@ setTimeout(() => {
     check('D13 点击目录行「▶」→ 进入下一级（真实点击）', opened && !!afterPath, `${beforePath} -> ${afterPath} | ${lastClick}`);
 
     // ---------- D14 真实点击：返回上级 → 选中新建目录 → 删除（弹层确认）----------
-    const upClicked = await clickIn('↑', '远端');     // 远端栏「↑」返回上级
+    const upClicked = await clickIn('↑', HOME);     // 限定包含远端当前路径的栏头，避免命中本地栏按钮
     const backTxt = await waitText((x) => x.includes('文件管理') && !x.includes(`${HOME}/${NEW_DIR}`), 10000);
     check('D14a 远端栏「↑」返回上级（真实点击）', upClicked && !backTxt.includes(`${HOME}/${NEW_DIR}`), lastClick);
     const rowSel = await clickRow(NEW_DIR);         // 行点击 = 选中（按 ▶ 定位所在行）
@@ -335,6 +397,7 @@ setTimeout(() => {
     cleanupChild();   // 测试结束立即杀掉本实例应用（双保险：pre/post hook）
     await cleanRemote();
     for (const f of localFixtures) { try { fs.unlinkSync(f); } catch (e) {} }   // 删除测试文件
+    if (fixture) { try { fixture.kill('SIGKILL'); } catch (e) { /* ignore */ } }
     const fail = results.filter((r) => !r.ok).length;
     console.log(`\n[dual-pane] ${results.length - fail}/${results.length} 通过；截图目录 ${artifacts}`);
     process.exit(fail ? 1 : 0);

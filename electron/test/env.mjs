@@ -20,6 +20,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
+import net from 'node:net';
 import { execFileSync } from 'node:child_process';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
@@ -83,10 +84,41 @@ export function remoteFixture(name) {
   return `${SFTP_HOME}/kr_${INSTANCE}_${name}`;
 }
 
-/** 建好本实例目录（userData / 本地文件根），幂等 */
+/*
+ * 内置 SSH/SFTP 夹具服务（自包含端到端测试用，不依赖外部测试机）
+ *
+ * 背景：内网测试机不可达时，依赖真实 SFTP 的套件会在第一步就失败，功能正确性无法验证。
+ * 夹具由 `sftp-gateway/test/fixture-sftp-server.mjs` 提供（ssh2 服务端 + 沙盒目录），
+ * 端口同样按实例隔离，避免多 worktree 并行时撞车（AGENTS §3.1 规则 13）。
+ */
+export const SSH_FIXTURE_PORT = Number(process.env.KR_SSH_FIXTURE_PORT || 19000 + SLOT * 100);
+export const FIXTURE_ROOT = path.resolve(process.env.KR_FIXTURE_ROOT || path.join(TEST_ROOT, `sftp-fixture-${INSTANCE}`));
+/** 主机密钥持久化：页面连接恒为 TOFU，密钥必须跨运行稳定，否则第二次指纹不匹配 */
+export const FIXTURE_KEY = path.join(TEST_ROOT, `sftp-fixture-hostkey-${INSTANCE}`);
+export const FIXTURE_USER = 'fixture';
+export const FIXTURE_PASS = 'fixture';
+export const FIXTURE_HOME = '/home/fixture';
+
+/** 探测某端口是否已有服务在监听（用于复用已在运行的夹具） */
+export function isPortListening(port, host = '127.0.0.1', timeout = 600) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ port, host });
+    const done = (v) => {
+      try { sock.destroy(); } catch (e) { /* ignore */ }
+      resolve(v);
+    };
+    sock.setTimeout(timeout);
+    sock.on('connect', () => done(true));
+    sock.on('timeout', () => done(false));
+    sock.on('error', () => done(false));
+  });
+}
+
+/** 建好本实例目录（userData / 本地文件根 / 夹具根），幂等 */
 export function ensureDirs() {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
   fs.mkdirSync(LOCAL_ROOT, { recursive: true });
+  fs.mkdirSync(FIXTURE_ROOT, { recursive: true });
 }
 
 /**
