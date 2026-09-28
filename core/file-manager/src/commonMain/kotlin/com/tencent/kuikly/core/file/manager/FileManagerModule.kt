@@ -111,8 +111,27 @@ class FileManagerModule(
         update { it.copyPane(pane) { p -> p.copy(sort = key, order = order, entries = applyView(p.copy(sort = key, order = order), rawEntries[pane].orEmpty())) } }
     }
 
+    /**
+     * 切换「显示隐藏文件」。**默认 false（不显示 `.` 开头的条目）**。
+     *
+     * 就地基于原始列表重算视图（不重新拉取后端），并把「刚被隐藏、但仍处于选中态」的条目
+     * 剔出选中集合，避免出现「看不见却被上传/删除」的幽灵操作。
+     */
+    fun setShowHidden(pane: Pane, show: Boolean) {
+        update { s ->
+            s.copyPane(pane) { p ->
+                val next = p.copy(showHidden = show)
+                val entries = applyView(next, rawEntries[pane].orEmpty())
+                val visible = entries.mapTo(mutableSetOf()) { it.name }
+                next.copy(entries = entries, selection = next.selection.filterTo(mutableSetOf()) { it in visible })
+            }
+        }
+    }
+
     private fun applyView(st: PaneState, raw: List<BackendEntry>): List<BackendEntry> {
-        val filtered = if (st.filter.isEmpty()) raw else raw.filter { it.name.contains(st.filter, ignoreCase = true) }
+        var filtered = if (st.filter.isEmpty()) raw else raw.filter { it.name.contains(st.filter, ignoreCase = true) }
+        // 隐藏文件（`.` 开头）默认不显示；开关打开后才参与视图
+        if (!st.showHidden) filtered = filtered.filter { !isHiddenName(it.name) }
         val keyCmp: Comparator<BackendEntry> = when (st.sort) {
             SortKey.Name -> compareBy({ it.name.lowercase() }, { it.name })
             SortKey.Size -> compareBy { it.size }
@@ -273,9 +292,14 @@ data class PaneState(
     val sort: SortKey = SortKey.Name,
     val order: SortOrder = SortOrder.Asc,
     val filter: String = "",
+    /** 是否显示隐藏文件（`.` 开头）；默认 false = 不显示。 */
+    val showHidden: Boolean = false,
     val loading: Boolean = false,
     val errorMsg: String? = null,
 )
+
+/** 隐藏文件判定：`.` 开头（排除 `.`/`..` 自身）。 */
+private fun isHiddenName(name: String): Boolean = name.startsWith(".") && name != "." && name != ".."
 
 data class FileManagerState(
     val local: PaneState,

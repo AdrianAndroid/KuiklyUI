@@ -1045,7 +1045,7 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
 
 ### 13.1.4 双栏文件管理器（Web / 桌面，2026-09 新增）
 
-`core/file-manager/`（纯状态机，jvm+js，76/76 单测）+ `demo/src/jsMain/.../FilesDualPanePage.kt`（双栏 UI）
+`core/file-manager/`（纯状态机；jvm + js 各 **42/42** 单测通过）+ `demo/src/jsMain/.../FilesDualPanePage.kt`（双栏 UI）
 + Electron `localfs:*` IPC（`window.localFs`，根 = 用户主目录，越界拒绝）+ 浏览器模块（网关代持远端）。
 
 - **入口（先有远端，再有双栏）**：首页默认「本地文件管理」（只开本地栏，远端栏待选主机）；首页连接行「⇄」；
@@ -1054,6 +1054,12 @@ xcrun simctl spawn <UDID> log show --last 3m --style compact --predicate 'proces
   **目录优先**排序；弹层（新建/重命名/删除确认）。
 - **传输**：`SftpModule.upload`（网关支持无 `content` 时读 `localPath`）/ `SftpModule.download`
   （`localName` 传绝对路径 → 网关直写该路径）；仅网关**绑回环**时可用。
+- **隐藏文件开关**：工具条末尾「显示隐藏:关/开」（标签反映**当前状态**，对齐阅读器「换行/不换行」约定），
+  **默认关 = 不显示 `.` 开头的条目**，点一下显示、再点一下隐藏，**两栏同时生效**。
+  过滤在核心 `FileManagerModule.setShowHidden()`（`PaneState.showHidden`，`applyView` 里过滤），
+  因此**不重新拉取列表**、切换即时；被隐藏且仍在选中集合里的条目会被剔除（防「看不见却被上传/删除」）。
+  标签必须用 provider 版 `DualBtn({ ... })`（在 `attr{}` 内求值），否则 observable 依赖收集不到、点了标签不刷新。
+  用例 **D26a/D26b/D26c**（双栏测试规程 §7；`electron/test/dual-pane.mjs` 用 `clickExact` 精确点双态标签）。
 - **验证**：`cd electron && npm run sync && npm run test:dual` → 双栏用例覆盖真实 CDP 鼠标点击、上传/下载字节一致性、进度/速率/详情弹层、目录 CRUD、越界安全与 URL 凭据检查；截图保存到 `electron/test/artifacts/`。默认使用 `sftp-gateway/test/fixture-sftp-server.mjs` 自包含 SSH/SFTP 夹具，不依赖外部测试机；夹具自建自清，不留残余。用例与技法见 `devDocs/kuikly-dual-pane-test-plan.md` §7。
 - **内置 SFTP 夹具**：`electron/test/dual-pane.mjs` 在未设置 `SFTP_HOST` 且 `KR_DUAL_REAL` 不为 `1` 时自动启动夹具。`SSH_FIXTURE_PORT`、`FIXTURE_ROOT`、`FIXTURE_KEY` 和实例隔离均来自 `electron/test/env.mjs`；持久化 ed25519 主机密钥用于保持 TOFU 指纹稳定。需要真实服务器时设置 `SFTP_HOST`（以及可选 `SFTP_PORT`/`SFTP_USER`/`SFTP_PASSWORD`/`SFTP_HOME`），或设置 `KR_DUAL_REAL=1`。
 - **夹具验证**：夹具服务端实现双栏所需的 SFTP 文件/目录操作、沙盒路径校验和协议状态码映射；独立 ssh2 客户端验证为 15/15 通过，覆盖主机密钥稳定、随机读、目录/文件 CRUD、路径遍历、错误密码和越界写入。

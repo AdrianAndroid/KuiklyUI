@@ -4,7 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** D-L1-05/06/07：排序 / 过滤 / 加载与错误态。 */
+/** D-L1-05/06/07：排序 / 过滤 / 加载与错误态；D-L1-43：隐藏文件默认不显示（可切换）。 */
 class ViewTest {
 
     private fun mod(entries: List<BackendEntry>) =
@@ -54,6 +54,50 @@ class ViewTest {
         m.setFilter(Pane.Local, "log")
         assertEquals(setOf("app.log", "LOG.txt"), m.state.value.local.entries.map { it.name }.toSet())
         m.setFilter(Pane.Local, "")                    // 清空过滤应恢复全部（原始列表被保留）
+        assertEquals(3, m.state.value.local.entries.size)
+    }
+
+    private val mixed = listOf(
+        BackendEntry("visible.txt", EntryType.File, 0, 0),
+        BackendEntry(".secret.txt", EntryType.File, 0, 0),
+        BackendEntry(".config", EntryType.Dir, 0, 0),
+    )
+
+    @Test
+    fun hiddenFilesHiddenByDefault() {
+        val m = mod(mixed)
+        // 默认不显示隐藏文件（`.` 开头），且状态字段默认 false —— 与 UI 初始态一致
+        assertTrue(!m.state.value.local.showHidden)
+        assertEquals(listOf("visible.txt"), m.state.value.local.entries.map { it.name })
+    }
+
+    @Test
+    fun setShowHiddenTogglesWithoutRefetch() {
+        val m = mod(mixed)
+        m.setShowHidden(Pane.Local, true)
+        // 目录优先：.config 在文件之前
+        assertEquals(listOf(".config", ".secret.txt", "visible.txt"), m.state.value.local.entries.map { it.name })
+        m.setShowHidden(Pane.Local, false)             // 再次点击回到隐藏
+        assertEquals(listOf("visible.txt"), m.state.value.local.entries.map { it.name })
+    }
+
+    @Test
+    fun hidingDropsSelectionOfHiddenEntries() {
+        val m = mod(mixed)
+        m.setShowHidden(Pane.Local, true)
+        m.setSelection(Pane.Local, setOf(".secret.txt", "visible.txt"))
+        m.setShowHidden(Pane.Local, false)
+        // 被隐藏的条目不能留在选中集合里（否则会「看不见却被上传/删除」）
+        assertEquals(setOf("visible.txt"), m.state.value.local.selection)
+    }
+
+    @Test
+    fun navigationKeepsShowHidden() {
+        val m = mod(mixed)
+        m.setShowHidden(Pane.Local, true)
+        m.navigateTo(Pane.Local, "/L/sub")
+        m.setEntries(Pane.Local, "/L/sub", mixed)
+        assertTrue(m.state.value.local.showHidden)
         assertEquals(3, m.state.value.local.entries.size)
     }
 

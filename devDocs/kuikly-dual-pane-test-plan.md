@@ -305,6 +305,7 @@ class FileManagerModule(          // 纯状态机：不做 IO
 | `D-L1-05` | 排序按名称升序 | 列表含 `["b","A","c"]` + `sort=Name, order=Asc` | 排序后 `["A","b","c"]`（大小写不敏感，稳定） |
 | `D-L1-06` | 过滤 | `setFilter(Local, "log")` | `entries` 仅保留名含 `log` 的大小写不敏感项 |
 | `D-L1-07` | 加载态与错误态 | mock backend 抛 `IOException` | `loading=false`，`errorMsg` 含原因 |
+| `D-L1-43` | **隐藏文件默认不显示（可切换）** | 列表含 `[".secret.txt", ".config", "visible.txt"]`；`setShowHidden(Local, true/false)` | 默认 `showHidden=false` 且 `entries` 只有 `visible.txt`；打开后三条齐全（目录优先）；再关恢复；被隐藏的条目从 `selection` 剔除；`navigateTo` 后开关保持 |
 
 ### 5.2 选择
 | ID | 描述 | 步骤 | 预期 |
@@ -488,7 +489,7 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
 
 ---
 
-## 7. 实测用例（D0–D25，34/34 通过）
+## 7. 实测用例（D0–D26，37/37 通过）
 
 > 运行：`cd electron && npm run build:web`（或先跑 Gradle 打包）→ `npm run sync` → `npm run test:dual`
 > 脚本：`electron/test/dual-pane.mjs`；截图：`electron/test/artifacts/*.png`（关键步骤自动存图）
@@ -521,6 +522,9 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
 | D23 | 本地栏「+」新建目录（活动栏默认本地）| 本地真实出现目录 |
 | D24 | 本地栏删除目录 | 本地目录真实消失 |
 | D25 | **双栏 URL 不含凭据** | `location.href` 无 `password=`/`privateKey=`/`passphrase=` |
+| D26a | **默认不显示隐藏文件**（两栏均无 `.` 开头条目，按钮为「显示隐藏:关」）| 页面文本不含 `.` 夹具 + 按钮文案 |
+| D26b | 点击「显示隐藏:关」→ 两栏显示隐藏文件且按钮变「显示隐藏:开」 | 文本出现本地/远端隐藏夹具（截图 `D9-隐藏文件已显示.png`）|
+| D26c | 再次点击 → 隐藏文件重新隐藏且按钮回「显示隐藏:关」 | 文本不再含隐藏夹具（截图 `D10-隐藏文件已重新隐藏.png`）|
 
 ### 7.1 真实点击技法（CDP，已验证可用）
 
@@ -530,6 +534,9 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
   ⚠️ 祖先必须限制层级并校验**文本长度**：否则会命中整个滚动容器/页面根，把「远端栏的 +」误判成「本地栏的 +」。
 - **`clickRow(name)`**：按「`▶` 的父元素包含 name」定位行，点行左侧名称区。
   用于避免 `clickText(name)` 误命中**状态栏文字**（例如状态行「已新建 <name>」比行内名称更短、更小 → 被优先选中）。
+- **`clickExact(txt)`**：按 `textContent.trim() === txt` **精确匹配**后点击（取最小命中元素）。
+  开关类按钮（「显示隐藏:关 / 显示隐藏:开」）两者**互为相似文案**，用 `clickText`（`includes` 匹配）
+  会带上父容器/错态标签 → 必须用 `clickExact`。新加互斥双态标签时优先用它。
 - **`typeInto(text)`**：先真实点击输入框（Kuikly Web `Input` 就是真实 `<input>`，监听 `input`），
   优先真实按键（`Input.dispatchKeyEvent` keyDown/keyUp 逐字符），兜底写 `value` 并派发 `input` 事件（等价输入法插入）。
 

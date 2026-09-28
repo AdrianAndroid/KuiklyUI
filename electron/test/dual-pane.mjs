@@ -38,6 +38,9 @@ const UPLOAD_BIN = `000_kuikly_dual_${INSTANCE}.bin`;
 const DL_TXT = `000_kuikly_dual_dl_${INSTANCE}.txt`;
 const NEW_DIR = `000_dual_new_${INSTANCE}`;
 const LOCAL_NEW_DIR = `000_dual_local_${INSTANCE}`;
+// 隐藏文件开关用例的夹具（`.` 开头）：本地栏与远端栏各一个
+const HIDDEN_LOCAL = `.000_kuikly_dual_hidden_${INSTANCE}.txt`;
+const HIDDEN_REMOTE = `.000_kuikly_dual_hidden_remote_${INSTANCE}.txt`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -104,20 +107,24 @@ setTimeout(() => {
   ensureDirs();
   const fixture = await startFixture();   // 自包含 SFTP 服务（USE_FIXTURE=false 时为 null）
   // ---------- 夹具（本脚本自建自清，运行结束不留残余）----------
-  const localFixtures = [UPLOAD_TXT, UPLOAD_BIN, DL_TXT].map((n) => path.join(LOCAL_HOME, n));
+  const localFixtures = [UPLOAD_TXT, UPLOAD_BIN, DL_TXT, HIDDEN_LOCAL].map((n) => path.join(LOCAL_HOME, n));
   fs.rmSync(path.join(LOCAL_HOME, LOCAL_NEW_DIR), { recursive: true, force: true });
   fs.writeFileSync(localFixtures[0], 'hello dual pane\n'.repeat(10));
   if (!fs.existsSync(localFixtures[1])) fs.writeFileSync(localFixtures[1], crypto.randomBytes(262144));
+  // 隐藏文件（默认不应该出现在双栏列表里；点开关后才出现）
+  fs.writeFileSync(localFixtures[3], 'hidden local\n'.repeat(4));
   const binBuf = fs.readFileSync(localFixtures[1]);
   const txtBuf = fs.readFileSync(localFixtures[0]);
   const dlContent = Buffer.from('download-by-real-click\n'.repeat(64));
   const conn = await rpc('sftp', 'connect', { host: HOST, port: Number(PORT_SSH), user: USER, password: PASS });
   check(`D0 网关连接${USE_FIXTURE ? '内置夹具' : '真实服务器'}（${HOST}:${PORT_SSH}）`, !!conn.sessionId, conn.sessionId || JSON.stringify(conn).slice(0, 120));
   const sid = conn.sessionId;
-  const cleanRemote = async () => { for (const p of [`${HOME}/${UPLOAD_TXT}`, `${HOME}/${UPLOAD_BIN}`, `${HOME}/${DL_TXT}`, `${HOME}/${NEW_DIR}`]) { try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: p, recursive: true }); } catch (e) {} } };
+  const cleanRemote = async () => { for (const p of [`${HOME}/${UPLOAD_TXT}`, `${HOME}/${UPLOAD_BIN}`, `${HOME}/${DL_TXT}`, `${HOME}/${NEW_DIR}`, `${HOME}/${HIDDEN_REMOTE}`]) { try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: p, recursive: true }); } catch (e) {} } };
   await cleanRemote();
   // 造一个远端文件用于「下载」用例
   await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${HOME}/${DL_TXT}`, content: dlContent.toString('base64') });
+  // 远端隐藏夹具（同名的 `.` 前缀文件）
+  await rpc('sftp', 'upload', { sessionId: sid, remotePath: `${HOME}/${HIDDEN_REMOTE}`, content: Buffer.from('hidden remote\n').toString('base64') });
 
   const childEnv = buildChildEnv();
   delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -184,6 +191,21 @@ setTimeout(() => {
         "const el=cands.find(ok);if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();" +
         "return {x:r.left+r.width/2,y:r.top+r.height/2,text:String(el.textContent||'').trim()};})()");
       if (!info) { lastClick = `(未找到「${txt}」∈「${anc}」)`; return false; }
+      lastClick = `「${info.text}」@${Math.round(info.x)},${Math.round(info.y)}`;
+      const mouse = (t) => send('Input.dispatchMouseEvent', { type: t, x: info.x, y: info.y, button: 'left', buttons: t === 'mouseReleased' ? 0 : 1, clickCount: 1 });
+      await mouse('mousePressed'); await sleep(70); await mouse('mouseReleased'); await sleep(700);
+      return true;
+    };
+    // 精确文本点击（`trim()===txt`）：用于区分「显示隐藏:关/开」这类**可能互为子串**的开关标签，
+    // 也避免 clickText（includes 匹配）误命中包含该文案的父容器。
+    const clickExact = async (txt) => {
+      const info = await ev(
+        "(()=>{const all=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()}))" +
+        ".filter(o=>o.e.textContent&&o.e.textContent.trim()===" + JSON.stringify(txt) + "&&o.r.width>1&&o.r.height>1);" +
+        "if(!all.length)return null;all.sort((a,b)=>a.r.width*a.r.height-b.r.width*b.r.height);" +
+        "const el=all[0].e;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();" +
+        "return {x:r.left+r.width/2,y:r.top+r.height/2,text:String(el.textContent||'').trim()};})()");
+      if (!info) { lastClick = `(未找到精确文本「${txt}」)`; return false; }
       lastClick = `「${info.text}」@${Math.round(info.x)},${Math.round(info.y)}`;
       const mouse = (t) => send('Input.dispatchMouseEvent', { type: t, x: info.x, y: info.y, button: 'left', buttons: t === 'mouseReleased' ? 0 : 1, clickCount: 1 });
       await mouse('mousePressed'); await sleep(70); await mouse('mouseReleased'); await sleep(700);
@@ -391,6 +413,33 @@ setTimeout(() => {
     const noSecret = !/password=|privateKey=|passphrase=/.test(href);
     check('D25 双栏 URL 不含凭据（不再把密钥写进 history）', noSecret, href.length > 120 ? href.slice(0, 120) + '…' : href);
     console.log('      截图:', await shot('D6-浏览页入口'));
+
+    // ---------- D26 隐藏文件开关（默认不显示 → 点击显示 → 再点隐藏）----------
+    // 默认态：两栏都不应出现 `.` 开头的夹具，且按钮文案为「显示隐藏:关」
+    const defTxt = await bodyText();
+    const defLabel = defTxt.includes('显示隐藏:关');
+    const defLocalHidden = defTxt.includes(HIDDEN_LOCAL);
+    const defRemoteHidden = defTxt.includes(HIDDEN_REMOTE);
+    check('D26a 默认不显示隐藏文件（两栏均无 . 开头条目，按钮为「显示隐藏:关」）',
+      defLabel && !defLocalHidden && !defRemoteHidden,
+      `label=${defLabel} localHidden=${defLocalHidden} remoteHidden=${defRemoteHidden}`);
+    console.log('      截图:', await shot('D8-隐藏文件默认关'));
+
+    const toggleOn = await clickExact('显示隐藏:关');
+    const shownTxt = await waitText((x) => x.includes(HIDDEN_LOCAL) && x.includes(HIDDEN_REMOTE), 12000);
+    const onLabel = shownTxt.includes('显示隐藏:开');
+    check('D26b 点击「显示隐藏:关」→ 两栏显示隐藏文件且标签变「开」',
+      toggleOn && onLabel && shownTxt.includes(HIDDEN_LOCAL) && shownTxt.includes(HIDDEN_REMOTE),
+      `${lastClick} | local=${shownTxt.includes(HIDDEN_LOCAL)} remote=${shownTxt.includes(HIDDEN_REMOTE)} label=${onLabel}`);
+    console.log('      截图:', await shot('D9-隐藏文件已显示'));
+
+    const toggleOff = await clickExact('显示隐藏:开');
+    await sleep(900);
+    const offTxt = await bodyText();
+    check('D26c 再次点击 → 隐藏文件重新隐藏且标签回「关」',
+      toggleOff && offTxt.includes('显示隐藏:关') && !offTxt.includes(HIDDEN_LOCAL) && !offTxt.includes(HIDDEN_REMOTE),
+      `${lastClick} | local=${offTxt.includes(HIDDEN_LOCAL)} remote=${offTxt.includes(HIDDEN_REMOTE)} label=${offTxt.includes('显示隐藏:关')}`);
+    console.log('      截图:', await shot('D10-隐藏文件已重新隐藏'));
 
     check('D16 无 JS 未捕获异常', errs.length === 0, errs.slice(0, 2).join('; '));
   } finally {

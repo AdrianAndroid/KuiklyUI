@@ -107,6 +107,8 @@ internal class FilesDualPanePage : SftpBasePager() {
     private var remoteReady: Boolean by observable(false)
     /** 本地栏不可用时的提示（纯 H5 没有 window.localFs；仍可用远端栏） */
     private var localHint: String? by observable(null)
+    /** 工具条「显示隐藏:关/开」：**默认关 = 不显示隐藏文件**；双栏同时生效。 */
+    private var showHidden: Boolean by observable(false)
     private var initialRemotePath: String = ""
 
     // 弹层（新建/重命名/删除确认）
@@ -241,6 +243,9 @@ internal class FilesDualPanePage : SftpBasePager() {
                 remotePane = FileManagerModule.PaneSpec(serverId = connectionId.ifEmpty { "sftp" }, cwd = remoteRoot),
             )
             fm = core
+            // 重建核心时保留当前的隐藏文件开关（切主机/重连后两栏继续保持用户选择）
+            core.setShowHidden(Pane.Local, showHidden)
+            core.setShowHidden(Pane.Remote, showHidden)
             connecting = false
             if (!preserveLocalCwd.isNullOrEmpty()) {
                 // 切换主机时保留本地栏位置（远端栏重置到新主机根目录）
@@ -366,6 +371,24 @@ internal class FilesDualPanePage : SftpBasePager() {
         val up = core.upPath(pane) ?: run { status = "已到顶层"; return }
         core.navigateTo(pane, up)
         listPane(pane)
+    }
+
+    /**
+     * 工具条：切换「是否显示隐藏文件」（双栏同时生效）。
+     *
+     * 核心做过滤（[FileManagerModule.setShowHidden]），**不重新拉取列表**，
+     * 因此切换是即时的（本地/远端都无需 IO 往返）；被隐藏的条目也会被剔出选中集合。
+     */
+    private fun toggleShowHidden() {
+        showHidden = !showHidden
+        val core = fm
+        if (core != null) {
+            core.setShowHidden(Pane.Local, showHidden)
+            core.setShowHidden(Pane.Remote, showHidden)
+        }
+        syncEntries(Pane.Local)
+        syncEntries(Pane.Remote)
+        status = if (showHidden) "已显示隐藏文件" else "已隐藏隐藏文件"
     }
 
     private fun openDialog(kind: String, pane: Pane) {
@@ -694,6 +717,9 @@ internal class FilesDualPanePage : SftpBasePager() {
                         DualBtn("删除") { ctx.openDialog("delete", ctx.activePane) }
                         DualBtn("上传 →") { ctx.transfer(TransferDirection.Upload) }
                         DualBtn("← 下载") { ctx.transfer(TransferDirection.Download) }
+                        // 隐藏文件开关（标签反映**当前状态**，对齐阅读器的「换行/不换行」约定）：
+                        // 默认「显示隐藏:关」= 不显示隐藏文件；点一下显示，再点一下隐藏
+                        DualBtn({ if (ctx.showHidden) "显示隐藏:开" else "显示隐藏:关" }) { ctx.toggleShowHidden() }
                     }
                 }
 
@@ -1077,6 +1103,23 @@ private fun com.tencent.kuikly.core.base.ViewContainer<*, *>.DualBtn(label: Stri
     Text {
         attr {
             text(label)
+            fontSize(13f)
+            color(SftpColorTokens.textPrimary)
+            margin(8f, 6f, 8f, 6f)
+        }
+        event { click { onClick() } }
+    }
+}
+
+/**
+ * 动态标签版（用于开关类按钮：「显示隐藏:关/开」）。
+ *
+ * 标签必须在 `attr {}` 内求值，否则 observable 依赖收集不到 → 点了不刷新标签（AGENTS §13.4 第 1 条）。
+ */
+private fun com.tencent.kuikly.core.base.ViewContainer<*, *>.DualBtn(labelProvider: () -> String, onClick: () -> Unit) {
+    Text {
+        attr {
+            text(labelProvider())
             fontSize(13f)
             color(SftpColorTokens.textPrimary)
             margin(8f, 6f, 8f, 6f)
