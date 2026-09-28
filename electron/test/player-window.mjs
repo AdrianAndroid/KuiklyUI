@@ -16,7 +16,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME } from './env.mjs';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME, spawnTestElectron } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -25,8 +25,8 @@ fs.mkdirSync(artifacts, { recursive: true });
 
 const PORT = cdpPort('player');
 const GW = GATEWAY_URL;
-const HOST = process.env.SFTP_HOST || '192.168.2.2';
-const PORT_SSH = process.env.SFTP_PORT || '22';
+const HOST = process.env.SFTP_HOST || '8.152.204.58';
+const PORT_SSH = process.env.SFTP_PORT || '50122';
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
 const HOME = SFTP_HOME;
@@ -85,7 +85,7 @@ setTimeout(() => {
   logInstance('player');
   ensureDirs();
   const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', ...cdpArgs('player', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  const child = spawnTestElectron(require('electron'), ['.', ...cdpArgs('player', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
   try {
     const page = await waitFor(async () => (await listTargets())[0], 40000);

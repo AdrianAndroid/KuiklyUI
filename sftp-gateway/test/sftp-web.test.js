@@ -25,8 +25,8 @@ const WEB = process.env.WEB_URL || 'http://127.0.0.1:8080';
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const CDP_PORT = parseInt(process.env.CDP_PORT || '9230', 10);
 
-const HOST = process.env.SFTP_HOST || '192.168.2.2';
-const PORT = parseInt(process.env.SFTP_PORT || '22', 10);
+const HOST = process.env.SFTP_HOST || '8.152.204.58';
+const PORT = parseInt(process.env.SFTP_PORT || '50122', 10);
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
 const HOME = process.env.SFTP_HOME || '/home/zhaojian';

@@ -21,7 +21,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import net from 'node:net';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 export const ELECTRON_DIR = path.resolve(here, '..');
@@ -124,6 +124,10 @@ export function ensureDirs() {
 /**
  * 子进程环境：注入实例隔离变量（child 主进程据此设置窗口标题 / 本地文件根）。
  * 注意：调用方仍需删除 ELECTRON_RUN_AS_NODE（见各套件）。
+ *
+ * KR_TEST_NOFOCUS=1（默认）：被测应用用 showInactive 显示窗口，**不抢用户当前窗口/键盘焦点**，
+ * 并关闭「遮挡即后台化」（见 electron/main.js 的 TEST_NO_FOCUS 注释）。
+ * 需要对比原行为时：`KR_TEST_NOFOCUS=0 npm test`。
  */
 export function buildChildEnv() {
   const env = {
@@ -132,6 +136,7 @@ export function buildChildEnv() {
     KR_TEST_ROOT: TEST_ROOT,
     KR_USER_DATA_DIR: USER_DATA_DIR,
     KR_LOCAL_ROOT: LOCAL_ROOT,
+    KR_TEST_NOFOCUS: process.env.KR_TEST_NOFOCUS === '0' ? '0' : '1',
   };
   // 外部网关（若本套件用）也指向本实例端口，避免误连别的 worktree
   env.SFTP_GATEWAY_PORT = env.SFTP_GATEWAY_PORT || String(GATEWAY_PORT);
@@ -148,21 +153,45 @@ export function logInstance(suite) {
   console.log(`[kr-test] instance=${INSTANCE} slot=${SLOT} suite=${suite} cdp=${cdpPort(suite)} gateway=${GATEWAY_PORT} userData=${USER_DATA_DIR}`);
 }
 
-/**
- * 立即清掉本实例的测试应用（SIGKILL 主进程 + 按 userData 标记兜底 pkill）。
- * 供用例 finally 显式调用；`registerCleanup` 也会在进程退出/信号时自动调用。
- */
+export function buildElectronSpawnOptions(env = buildChildEnv()) {
+  const childEnv = { ...env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  // macOS: 让主进程成为独立进程组，清理时可一次杀掉 renderer/GPU/utility 子进程。
+  // detached 不会把测试放到后台，也不改变窗口前台策略。
+  return { env: childEnv, detached: process.platform === 'darwin' };
+}
+
+/** 启动测试 Electron，并统一使用独立进程组。 */
+export function spawnTestElectron(electronBin, args, options = {}) {
+  return spawn(electronBin, args, { ...options, ...buildElectronSpawnOptions(options.env) });
+}
+
+/** 按本实例的完整 userData 路径兜底清理，避免只杀父进程留下 Chromium 子进程。 */
+function killByUserData() {
+  const marker = `--user-data-dir=${path.resolve(USER_DATA_DIR)}`;
+  // ⚠️ 匹配串以 `--` 开头，必须用 `--` 分隔符，否则 pkill 会把它当成选项：
+  //    `pkill -TERM -f --user-data-dir=/x` → "-TERM: illegal option -- -"（exit 2，什么都没杀）
+  for (const sig of ['-TERM', '-KILL']) {
+    try { execFileSync('pkill', [sig, '-f', '--', marker], { stdio: 'ignore' }); } catch (e) { /* no match */ }
+  }
+}
+
+/** 立即清掉本实例的测试应用（进程组 + 完整 userData 路径）。 */
 export function killInstanceApp(child) {
-  try { if (child && child.pid && !child.killed) child.kill('SIGKILL'); } catch (e) { /* ignore */ }
-  // 兜底：Chromium 的 renderer/GPU/utility 子进程即使主进程被 SIGKILL 也要清干净，
-  // 否则多 worktree 并行会累积大量 Electron 进程把机器拖卡（AGENTS.md §3.1 规则 13）。
-  try { execFileSync('pkill', ['-f', `ud-${INSTANCE}`], { stdio: 'ignore' }); } catch (e) { /* no match */ }
+  try {
+    if (child && child.pid && !child.killed) {
+      if (process.platform === 'darwin') {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { /* group may already be gone */ }
+      }
+      try { child.kill('SIGKILL'); } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* ignore */ }
+  killByUserData();
 }
 
 /**
- * 给测试套件挂「退出/信号兜底清理」：即使用例被 watchdog/ctrl-c 强杀、或异常退出，
- * 也会杀掉本实例的 Electron，绝不留下后台客户端占 CPU。
- * 返回一个可显式调用的清理函数（用例 finally 里调用，形成双保险：pre hook + 用例 + post hook）。
+ * 给测试套件挂「退出/信号兜底清理」：即使用例被 watchdog/ctrl-c 强杀，也会杀掉本实例应用。
+ * 返回一个可显式调用的清理函数（用例 finally 里调用）。
  */
 export function registerCleanup(child) {
   let cleaned = false;

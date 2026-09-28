@@ -21,6 +21,7 @@
     "test:text": "node test/text-viewer.mjs",
     "test:term": "node test/terminal.mjs",
     "test:features": "node test/features.mjs",
+    "check:space": "node scripts/check-window-space.mjs",
     "pretest": "node scripts/pretest-kill.js",
     "pretest:features": "node scripts/pretest-kill.js",
     "pretest:dual": "node scripts/pretest-kill.js",

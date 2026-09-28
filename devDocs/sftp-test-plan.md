@@ -73,15 +73,21 @@
 > 外部网关用 `cd electron && npm run gateway` 启动；清理用 `node electron/scripts/pretest-kill.js`（**只清本实例**，
 > 禁止全局 `pkill`）。详见 `AGENTS.md §3.1 规则 13` 与 `devDocs/kuikly-electron-architecture.md §13`。
 
-### 2.3 测试服务器与素材（内网低敏，`AGENTS.md` §13.6）
+### 2.3 测试服务器与素材（低敏测试机，`AGENTS.md` §13.6）
 
-| 项 | 默认值 | 覆盖变量 |
-|---|---|---|
-| host / port | `192.168.2.2` / `22` | `SFTP_HOST` / `SFTP_PORT` |
-| user / password | `zhaojian` / `zhaojian` | `SFTP_USER` / `SFTP_PASSWORD` |
-| home | `/home/zhaojian` | `SFTP_HOME` |
-| 媒体文件 | `${SFTP_HOME}/sftp_kuikly_media.mp4` | `SFTP_MEDIA` |
-| 媒体大小 | `95627` 字节 | `SFTP_MEDIA_SIZE` |
+两台等价测试机（夹具布局一致）；**套件默认指向公网机**，换机器用环境变量覆盖即可：
+
+| 项 | 默认值（公网机） | 覆盖变量 | 备选（内网机） |
+|---|---|---|---|
+| host / port | `8.152.204.58` / `50122` | `SFTP_HOST` / `SFTP_PORT` | `192.168.2.2` / `22` |
+| user / password | `zhaojian` / `zhaojian` | `SFTP_USER` / `SFTP_PASSWORD` | 同 |
+| home | `/home/zhaojian` | `SFTP_HOME` | 同 |
+| 媒体文件 | `${SFTP_HOME}/sftp_kuikly_media.mp4` | `SFTP_MEDIA` | 同 |
+| 媒体大小 | `95627` 字节 | `SFTP_MEDIA_SIZE` | 同 |
+
+> 连接公网机：`ssh 8.152.204.58 -p 50122`（密码 `zhaojian`，**注意端口不是 22**）。
+> 对 SSH 无 22 端口的机器，`npm test` 等套件已默认带 `50122`；如需旧内网机：
+> `SFTP_HOST=192.168.2.2 SFTP_PORT=22 npm test`。
 
 **字节级校验基准**（证明传输未损坏）：
 

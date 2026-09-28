@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, SFTP_HOME } from './env.mjs';
+import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, SFTP_HOME, spawnTestElectron } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -89,7 +89,7 @@ async function runCommand(view, cmd) {
   logInstance('terminal');
   ensureDirs();
   const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', ...cdpArgs('terminal', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  const child = spawnTestElectron(require('electron'), ['.', ...cdpArgs('terminal', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
   try {
     const page = await waitFor(async () => (await listTargets())[0], 40000);

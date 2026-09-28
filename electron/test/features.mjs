@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT } from './env.mjs';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, SFTP_HOME, LOCAL_ROOT, spawnTestElectron } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -15,7 +15,8 @@ const artifacts = path.join(electronDir, 'test', 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
 const PORT = cdpPort('features');
 const GW = GATEWAY_URL;
-const HOST = process.env.SFTP_HOST || '192.168.2.2';
+const HOST = process.env.SFTP_HOST || '8.152.204.58';
+const PORT_SSH = process.env.SFTP_PORT || '50122';
 const USER = process.env.SFTP_USER || 'zhaojian';
 const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
 const HOME = SFTP_HOME;
@@ -94,10 +95,10 @@ const waitFor = async (fn, ms, step = 500) => {
   logInstance('features');
   ensureDirs();
   const childEnv = buildChildEnv(); delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(require('electron'), ['.', ...cdpArgs('features', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
+  const child = spawnTestElectron(require('electron'), ['.', ...cdpArgs('features', PORT)], { cwd: electronDir, stdio: 'ignore', env: childEnv });
   __child = child;
   const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
-  const conn = await rpc('sftp', 'connect', { host: HOST, port: 22, user: USER, password: PASS });
+  const conn = await rpc('sftp', 'connect', { host: HOST, port: Number(PORT_SSH), user: USER, password: PASS });
   const sid = conn.sessionId;
   const cleanup = async () => {
     try { await rpc('sftp', 'rm', { sessionId: sid, remotePath: FIX, recursive: true }); } catch (e) { }
@@ -230,7 +231,7 @@ const waitFor = async (fn, ms, step = 500) => {
     if (favTab) {
       await main.shot('features-favorites-tab.png');
       // 有效连接的目录收藏 → 打开浏览页（收藏只存 connectionId，需从连接库补凭据）
-      const fdConn = await pageRpc('connection', 'add', { label: 'FavDirConn', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
+      const fdConn = await pageRpc('connection', 'add', { label: 'FavDirConn', host: HOST, port: Number(PORT_SSH), user: USER, password: PASS, authMethod: 'PASSWORD' });
       const fdId = fdConn?.id || '';
       await pageRpc('favorites', 'add', { connectionId: fdId, connectionLabel: 'FavDirConn', remotePath: HOME, name: 'FavDir', isDir: true });
       await main.send('Page.navigate', { url: `${base}?page_name=SftpHomePage` });
@@ -636,7 +637,7 @@ const waitFor = async (fn, ms, step = 500) => {
     // （F26/F31 已前移到收藏用例之后）
 
     // ---- F28 从收藏打开：连接存在但远端文件不存在 → 明确提示（不再打不开/静默）----
-    const favConn = await pageRpc('connection', 'add', { label: 'FavSrv', host: HOST, port: 22, user: USER, password: PASS, authMethod: 'PASSWORD' });
+    const favConn = await pageRpc('connection', 'add', { label: 'FavSrv', host: HOST, port: Number(PORT_SSH), user: USER, password: PASS, authMethod: 'PASSWORD' });
     const favConnId = favConn?.id || '';
     await pageRpc('favorites', 'clearByConnection', { connectionId: favConnId });
     await pageRpc('favorites', 'add', { connectionId: favConnId, connectionLabel: 'FavSrv', remotePath: `${HOME}/__no_such_file__.mp4`, name: '__no_such_file__.mp4', isDir: false, size: 0 });

@@ -270,10 +270,74 @@ npm test                     # 终端 B：本实例测试（自动用本实例�
 **主进程配合**（`main.js`）：窗口标题 `Kuikly SFTP [<instance>]`（多应用一眼区分）；`KR_USER_DATA_DIR`
 → `app.setPath('userData')`；`KR_LOCAL_ROOT` → `localfs:*` 根。
 
-**清理**：`node scripts/pretest-kill.js` 只杀带 `ud-<instance>` 标记的 Electron（**不杀外部网关**，否则套件 fixture 会 ECONNREFUSED）；
+**清理**：`node scripts/pretest-kill.js` 只按**本实例完整 userData 路径**（`--user-data-dir=<绝对路径>/ud-<instance>`）杀 Electron（**不杀外部网关**，否则套件 fixture 会 ECONNREFUSED）；
 **禁止**无差别 `pkill -f "Kuikly SFTP.app"` / `pkill -f "remote-debugging-port="` / `osascript quit`（会误杀其它 worktree）。
 
 **全局动作串行**：`npm run dist*` / 覆盖安装 `/Applications/Kuikly SFTP.app` / 发布推送，**仅在 `zhaojian` 分支执行**（其它分支只验证，见 §3.1 规则 11），一次只在一个 worktree 执行。
+
+> ⚠️ **`pkill` 匹配串以 `--` 开头时必须带 `--` 分隔符**：`pkill -TERM -f --user-data-dir=/x` 会把匹配串当选项，
+> 报 `-TERM: illegal option -- -`（exit 2）且**一个进程都不杀** → 上次测试的窗口/子进程越积越多（已实测踩过并修复）。
+> 正确写法：`pkill -TERM -f -- '--user-data-dir=<绝对路径>'`（`env.mjs` 与 `pretest-kill.js` 均已如此）。
+> 另外 macOS 上测试 Electron 以**独立进程组**启动（`detached: true`，统一走 `spawnTestElectron()`），
+> 清理时先 `process.kill(-pid, 'SIGKILL')` 再按 userData 路径兜底，确保 renderer/GPU/utility 子进程不残留。
+
+---
+
+## 13.1 测试窗口「不抢焦点 / 沉底 / 只在启动桌面」（macOS 多桌面）
+
+跑自动化时测试客户端**不应打扰用户**：不抢键盘焦点、不盖住正在看的窗口、不跑到别的桌面上去。
+
+**开关**（`electron/main.js`，仅测试态生效；生产/安装版行为不变）：
+
+| 环境变量 | 默认 | 作用 |
+|---|---|---|
+| `KR_TEST_NOFOCUS=1` | 测试套件注入（`env.mjs` 的 `buildChildEnv()`） | `showInactive()` 显示（不 activate）+ `backgroundThrottling:false` + 关闭「遮挡即后台化」两个 Chromium switch |
+| `KR_TEST_WINDOW` | `bottom` | `normal`（原行为，抢前台）/ `inactive`（可见不抢焦点）/ `bottom`（再不抢 + 沉到桌面层）/ `hidden`（完全不显示） |
+
+**为什么必须同时关「遮挡即后台化」**：不抢焦点后窗口必然落到用户窗口下面，一旦被完全遮住，Chromium 会把它判为
+后台化 —— `visibilityState=hidden` → h5App 的 `visibilitychange` 会 `pause()`，计时器节流到 1s、rAF 停止、
+`Page.captureScreenshot` 直接挂住（用例卡到看门狗）。开 `disable-backgrounding-occluded-windows` +
+`disable-background-timer-throttling` 后实测恢复：visible / 计时器正常 / rAF 正常 / 截图正常。
+
+**多桌面（Spaces）行为 —— 已实测核对**（4 个桌面，用 `defaults read com.apple.spaces` 的「桌面 → 窗口 ID」映射）：
+
+| 窗口类型 | 桌面归属 |
+|---|---|
+| `showInactive()` | 只在**启动桌面** |
+| `showInactive()` + `setAlwaysOnTop(true,'desktop')` | 只在**启动桌面**（当前默认，无副作用） |
+| `setVisibleOnAllWorkspaces(true)` | **4 个桌面全部出现** ← 测试态禁止使用 |
+
+macOS 新建窗口落在**创建瞬间的活动桌面**：从 Agent 终端拉起测试时即为 Agent 所在桌面，因此
+**「测试客户端与 Agent 同桌面」是默认行为**，不需要读 Agent 进程名、也不需要辅助功能权限
+（`osascript` 常因未授权报 `-25211`，故方案不依赖它；MyFlicker / VS Code / Cursor 等任何 Agent 同理）。
+
+**自证命令**：`cd electron && npm run check:space`
+
+- 主进程测试态把「启动桌面 ID + 各窗口 CGWindowID（`getMediaSourceId()`）+ pid」写入
+  `<userData>/test-window-space.json`；
+- 脚本读 `defaults read com.apple.spaces` 核对：**每个窗口只属于一个桌面，且等于启动桌面**；
+  `--strict` 把「窗口尚未显示」也算失败；非 macOS 自动跳过。
+
+**已知局限（macOS 无公开 API 把窗口移到指定桌面，故只记录不搬迁）**：测试**运行期间**用户切到别的桌面后
+**才新建**的窗口（如 `test:player` 的第二个播放窗口）会落到「当时」的活动桌面；`check:space` 会如实报 FAIL，
+不会假装一直同桌面。要彻底不打扰可用 `KR_TEST_WINDOW=hidden npm test`（代价：不可见时截图可能拿到旧帧）。
+
+**回退原行为**：`KR_TEST_NOFOCUS=0 npm test`（窗口照旧抢前台，便于人工观察）。
+
+## 13.2 播放器控件用例的驱动方式（`smoke` / `test:player`）
+
+**坑（2026-09 定位，勿回退）**：播放页**非全屏**时 mousemove **不会**唤回控制条 —— `SftpPlayerPage.kt:110`
+`EVENT_CONTROLS_ACTIVITY -> if (isFullscreen) showControls()`；自动隐藏（`SftpPlayerTokens.HIDE_TIMEOUT_MS`）后
+☰（选集）/⏮（从头播放）/倍速/❚❚ **在 DOM 中完全不存在**（`vif({ ctx.controlsVisible })`），
+按文本定位必然「找不到元素」（曾表现为 S9b 连点 11s 全失败）。
+
+**正确驱动方式**（已固化为 `electron/test/smoke.mjs` 的 `showControlsByTap()`）：
+1. 先用「**点击画面**」（产品行为 `toggleControls`，无延迟）切换控制条显隐；
+2. 再按文本点击目标控件（`clickText`）。
+
+**路径选择**：播放器**控件类**用例一律走**独立播放窗口**（浏览页点视频 → 宿主开窗，与 `test:player`
+P1/P4a 同一产品路径，控件稳定可点）；页内播放器只保留不依赖标题栏的断言（`<video>.currentTime` 时间前进、
+拖动进度条 seek、切集自播）。smoke 的 `S9b0` 即该产品路径的前置断言。
 
 ---
 

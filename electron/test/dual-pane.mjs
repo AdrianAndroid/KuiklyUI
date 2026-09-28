@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
-import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, LOCAL_ROOT, REPO_ROOT, SSH_FIXTURE_PORT, FIXTURE_ROOT, FIXTURE_KEY, FIXTURE_USER, FIXTURE_PASS, FIXTURE_HOME, isPortListening } from './env.mjs';
+import { INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, GATEWAY_URL, LOCAL_ROOT, REPO_ROOT, SSH_FIXTURE_PORT, FIXTURE_ROOT, FIXTURE_KEY, FIXTURE_USER, FIXTURE_PASS, FIXTURE_HOME, isPortListening, spawnTestElectron } from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -26,7 +26,7 @@ const GW = GATEWAY_URL;
 // 需要连真实机器时显式指定 SFTP_HOST（或 KR_DUAL_REAL=1）。
 const USE_FIXTURE = !process.env.SFTP_HOST && process.env.KR_DUAL_REAL !== '1';
 const HOST = process.env.SFTP_HOST || '127.0.0.1';
-const PORT_SSH = process.env.SFTP_PORT || (USE_FIXTURE ? String(SSH_FIXTURE_PORT) : '22');
+const PORT_SSH = process.env.SFTP_PORT || (USE_FIXTURE ? String(SSH_FIXTURE_PORT) : '50122');
 const USER = process.env.SFTP_USER || (USE_FIXTURE ? FIXTURE_USER : 'zhaojian');
 const PASS = process.env.SFTP_PASSWORD || (USE_FIXTURE ? FIXTURE_PASS : 'zhaojian');
 const HOME = process.env.SFTP_HOME || (USE_FIXTURE ? FIXTURE_HOME : '/home/zhaojian');
@@ -129,7 +129,7 @@ setTimeout(() => {
   const childEnv = buildChildEnv();
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const electronBin = require('electron');
-  const child = spawn(electronBin, ['.', ...cdpArgs('dual', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+  const child = spawnTestElectron(electronBin, ['.', ...cdpArgs('dual', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
   const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
 
   let failures = 0;

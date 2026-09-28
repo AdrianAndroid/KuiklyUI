@@ -216,6 +216,22 @@
    - **`zhaojian` 分支**：打 dmg + 覆盖安装**默认用 debug 产物**（`npm run build:web` + `npm run dist`，快）；
      `npm run dist:release`（release 产物）**太慢**，仅正式发版时才用。
    - 原因：debug 与 release 只差 Web 产物的优化/体积，功能一致；本机验证/安装用 debug 足够。
+17. **测试窗口「三不」：不抢焦点、沉到普通窗口之下、只在启动桌面（macOS 多桌面）**：
+   - 测试套件默认注入 `KR_TEST_NOFOCUS=1`（`electron/test/env.mjs`），窗口用 `showInactive()` 显示
+     （不 activate），并 `setAlwaysOnTop(true, 'desktop')` 沉到桌面层 → 跑自动化时不会把你正在用的窗口/键盘焦点抢走。
+   - macOS 多桌面（Spaces）：新建窗口落在**创建瞬间的活动桌面**，从 Agent 终端启动测试时即为 Agent 所在桌面，
+     且**不会**出现在其它桌面 → 「跟 Agent 同桌面」是默认行为，无需额外实现。
+     **✅ 已实测（4 个桌面，用 `defaults read com.apple.spaces` 的「桌面→窗口 ID」映射核对）**：
+     `showInactive()` 与 `showInactive() + level=desktop` 都**只**出现在启动桌面；
+     `setVisibleOnAllWorkspaces(true)` 则会出现在**全部 4 个桌面** → 测试态**禁止**调用它。
+   - 校验命令：`cd electron && npm run check:space`（读 `<userData>/test-window-space.json` +
+     `defaults read com.apple.spaces`，断言「每个窗口只在一个桌面且等于启动桌面」；`--strict` 把警告也算失败）。
+   - **已知局限（macOS 无公开 API，只记录不搬迁）**：测试**运行期间**你切到别的桌面后**才新建**的窗口
+     （如 `test:player` 的第二个播放窗口）会落在「当时」的活动桌面；`check:space` 会如实报为 FAIL 而不是假装没事。
+   - **窗口/进程数量**：普通套件只有 1 个主窗口；`test:player` 按用例设计会开 2 个播放窗口。若想完全不出现在屏幕上，
+     用 `KR_TEST_WINDOW=hidden npm test`。
+   - ⚠️ 清理必须用 `pkill -f -- '--user-data-dir=<绝对路径>'`：匹配串以 `--` 开头时**必须**带 `--` 分隔符，
+     否则 pkill 报 `-TERM: illegal option -- -`（exit 2）**一个进程都不杀** → 残留窗口越积越多、把机器拖死。
 
 ---
 
@@ -796,9 +812,23 @@ iOS 侧的坑（都已修）：
 （CGEvent 驱动，配合 `screencapture -R` 截窗口）。要点：先 `activate` 应用再点击；滚动列表要用滚轮事件而非拖拽；
 输入用 CGEvent unicode（AppleScript `keystroke` 对数字/符号不可靠）。
 
-### 13.6 测试服务器（内网测试机，凭据见下）
+### 13.6 测试服务器（低敏测试机，凭据见下）
 
-一台局域网内的 Linux/OpenSSH 测试机，真实跑通了连接 / 浏览 / 上传下载 / 批量 / 流式播放：
+两台等价的 Linux/OpenSSH 测试机（同一套夹具布局，均真实跑通连接 / 浏览 / 上传下载 / 批量 / 流式播放）：
+
+**① 公网测试机（推荐默认，本机直连可达）**
+
+| 项 | 值 |
+|----|----|
+| host | `8.152.204.58` |
+| port | `50122`（**非 22**，SSH 端口转发） |
+| user | `zhaojian` |
+| password | `zhaojian` |
+| remoteHome | `/home/zhaojian` |
+| 连接命令 | `ssh 8.152.204.58 -p 50122`（密码 `zhaojian`） |
+| 已有夹具 | `~/sftp_kuikly_media.mp4`、`~/kr_long.mp4`、`~/kr_pw_fixture/{a_first_60s,b_second_60s}.mp4`、`~/ks-cr-doc`（Markdown 用例目录） |
+
+**② 内网测试机（同套夹具，局域网内可用）**
 
 | 项 | 值 |
 |----|----|
@@ -808,15 +838,19 @@ iOS 侧的坑（都已修）：
 | password | `zhaojian` |
 | remoteHome | `/home/zhaojian` |
 
-> 说明：这是**内网低敏测试机**（用户明确同意入库），仅为便于后续开发直接使用。
+> 说明：两台都是**低敏测试机**（用户明确同意入库），仅为便于后续开发直接使用。
 > 真实/生产环境的凭据、token **仍然不得写入仓库**。
+>
+> **Electron 测试套件已默认指向 ①**（`electron/test/{smoke,features,text-viewer,player-window,dual-pane}.mjs`
+> 与 `sftp-gateway/test/sftp-web.test.js` 的 `SFTP_HOST`/`SFTP_PORT` 默认值）；换机器无需改代码，用环境变量覆盖即可：
+> `SFTP_HOST=192.168.2.2 SFTP_PORT=22 npm test`。两台的 `remoteHome` 与夹具路径一致，用例不需要另配。
 
 **跑全量集成自测**（`SftpIntegrationTestPage`，74 项逐条断言）：
 临时把 `macApp/macApp/ContentView.swift` 指向该页并注入参数：
 
 ```swift
 KuiklyNavigationViewPage(pageName: "SftpIntegrationTestPage", data: [
-    "host": "192.168.2.2", "port": 22,
+    "host": "8.152.204.58", "port": 50122,
     "user": "zhaojian", "password": "zhaojian",
     "remoteHome": "/home/zhaojian",
 ])

@@ -3,12 +3,14 @@
  *   前置：npm install（含 electron 二进制）；resources 已 sync（未 sync 会自动提示）
  *   运行：npm test
  */
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup } from './env.mjs';
+import {
+  INSTANCE, cdpPort, cdpArgs, buildChildEnv, ensureDirs, logInstance, registerCleanup, spawnTestElectron,
+} from './env.mjs';
 
 const require = createRequire(import.meta.url);
 const electronDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -68,8 +70,8 @@ setTimeout(() => {
   const childEnv = buildChildEnv();
   delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = binOverride
-    ? spawn(binOverride, cdpArgs('smoke', PORT), { stdio: 'inherit', env: childEnv })
-    : spawn(electronBin, ['.', ...cdpArgs('smoke', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
+    ? spawnTestElectron(binOverride, cdpArgs('smoke', PORT), { stdio: 'inherit', env: childEnv })
+    : spawnTestElectron(electronBin, ['.', ...cdpArgs('smoke', PORT)], { cwd: electronDir, stdio: 'inherit', env: childEnv });
   const cleanupChild = registerCleanup(child);   // 退出/信号兜底杀本实例应用
   try {
     check('S1 Electron 启动 + CDP 可用', await waitCdp());
@@ -86,7 +88,12 @@ setTimeout(() => {
     if (page) {
       const ws = new WebSocket(page.webSocketDebuggerUrl);
       let id = 0; const pend = new Map(); const errs = []; const logs = [];
-      const send = (m, p = {}) => new Promise((r) => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method: m, params: p })); });
+      const sendRaw = (m, p = {}) => new Promise((r) => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method: m, params: p })); });
+      // 当前驱动目标（默认主窗口）；播放器控件用例会切到「独立播放窗口」
+      const mainSession = { send: sendRaw, ev: null };
+      let activeSession = mainSession;
+      const send = (m, p = {}) => activeSession.send(m, p);
+      const ev = (expr, awaitPromise = false) => activeSession.ev(expr, awaitPromise);
       await new Promise((r) => { ws.onopen = r; });
       ws.onmessage = (e) => {
         const m = JSON.parse(e.data);
@@ -104,11 +111,12 @@ setTimeout(() => {
       await send('Log.enable');
       await send('Page.enable');
       // 支持 await 的求值（fetch 等异步表达式）
-      const ev = async (expr, awaitPromise = false) => {
-        const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise });
+      const evRaw = async (expr, awaitPromise = false) => {
+        const r = await sendRaw('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise });
         if (r && r.exceptionDetails) return 'EVAL_ERR: ' + (r.exceptionDetails.text || '');
         return r && r.result ? r.result.value : undefined;
       };
+      mainSession.ev = evRaw;
       // 等待 H5 渲染（36MB bundle 冷启动较慢）
       const waitText = async (pred, ms = 40000) => { const t0 = Date.now(); let t = await ev('document.body.innerText'); while (!pred(String(t || '')) && Date.now() - t0 < ms) { await sleep(500); t = await ev('document.body.innerText'); } return String(t || ''); };
       const text = await waitText((t) => t.includes('SFTP 客户端'));
@@ -130,8 +138,8 @@ setTimeout(() => {
 
 
       // 功能验证：真实服务器（可用 SFTP_* 覆盖）
-      const HOST = process.env.SFTP_HOST || '192.168.2.2';
-      const PORT_SSH = process.env.SFTP_PORT || '22';
+      const HOST = process.env.SFTP_HOST || '8.152.204.58';
+      const PORT_SSH = process.env.SFTP_PORT || '50122';
       const USER = process.env.SFTP_USER || 'zhaojian';
       const PASS = process.env.SFTP_PASSWORD || 'zhaojian';
       const HOME = process.env.SFTP_HOME || '/home/zhaojian';
@@ -152,20 +160,47 @@ setTimeout(() => {
       const browseText = await waitText((t) => t.includes(mediaName));
       check('S8 桌面壳内渲染真实远端目录', browseText.includes(mediaName), 'hasMedia=' + browseText.includes(mediaName));
 
-      // S9 播放页：时间前进
+      // S9 播放页：时间前进（页内路径）
+      // 注意：播放页顶部标题栏/控制条会自动隐藏（SftpPlayerTokens.HIDE_TIMEOUT_MS），
+      //       因此「时间前进」用 <video>.currentTime 判定，不读 innerText 里的时间文本
+      //       （曾因此读成 `00:00 -> none` 误判）。文本定位的控件用例一律走独立播放窗口（见 S9b0）。
+      const wakeControls = async () => {
+        for (const x of [420, 520, 620]) {
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y: 300, button: 'none', buttons: 0 });
+          await sleep(120);
+        }
+        await sleep(400);
+      };
+      const wake = wakeControls;   // 后续用例沿用旧名
+      // ⚠️ 控制条可见性（本轮定位出的真根因）：非全屏时 `EVENT_CONTROLS_ACTIVITY -> if (isFullscreen) showControls()`
+      //    （SftpPlayerPage.kt:110），即 **mousemove 唤不回控制条**；2s 后自动隐藏（HIDE_TIMEOUT_MS）
+      //    就再也不出现 → ☰/⏮/倍速/❚❚ 全部「找不到元素」。产品行为是「点击画面切换控制条」
+      //    （toggleControls，无延迟），因此用例统一用「点画面 + 断言可见」保证控件存在。
+      const controlsShown = async () => !!(await ev("(()=>{const t=document.body.innerText||'';return t.includes('☰')||t.includes('⏮');})()"));
+      const showControlsByTap = async () => {
+        for (let i = 0; i < 4; i++) {
+          if (await controlsShown()) return true;
+          const w = Number(await ev('innerWidth')) || 1200;
+          const h = Number(await ev('innerHeight')) || 800;
+          const x = Math.round(w * 0.5), y = Math.round(h * 0.35);   // 画面中部（避开标题栏/控制条/中央大播放键）
+          await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+          await sleep(50);
+          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+          await sleep(600);
+        }
+        return await controlsShown();
+      };
       await send('Page.navigate', { url: `${base}?page_name=SftpPlayerPage&sessionId=${conn.sessionId}&connectionId=c1&connectionLabel=test&remotePath=${MEDIA}&name=${mediaName}&size=${MEDIA_SIZE}` });
       const pickCur = "(()=>{const t=(document.body.innerText.match(/\\d\\d:\\d\\d/g)||[]);return t.length?t[0]:'none';})()";
       const isTime = (s) => /^\d\d:\d\d$/.test(String(s || ''));
-      const t1 = await (async () => { const t0 = Date.now(); let v = await ev(pickCur); while (!isTime(v) && Date.now() - t0 < 30000) { await sleep(500); v = await ev(pickCur); } return v; })();
+      const vStat = "(()=>{const vs=[...document.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>50&&r.height>50;});const v=vs[0];return v?JSON.stringify({t:+v.currentTime.toFixed(2),d:+(v.duration||0).toFixed(2),err:v.error?v.error.code:0,paused:v.paused}):'none';})()";
+      const vState = async () => { try { return JSON.parse(await ev(vStat)); } catch (e) { return null; } };
+      const s1 = await (async () => { const t0 = Date.now(); let s = await vState(); while (!(s && s.t > 0 && !s.err) && Date.now() - t0 < 30000) { await sleep(500); s = await vState(); } return s; })();
       await sleep(2500);
-      const t2 = await ev(pickCur);
+      const s2 = await vState();
       const toSec = (s) => { const m = (s || '').match(/(\d\d):(\d\d)/); return m ? (+m[1]) * 60 + (+m[2]) : -1; };
-      check('S9 桌面壳内播放(时间前进)', isTime(t1) && isTime(t2) && toSec(t2) > toSec(t1), `${t1} -> ${t2}`);
+      check('S9 桌面壳内播放(时间前进)', !!s1 && !!s2 && s2.t > s1.t, `${s1 ? s1.t : 'none'}s -> ${s2 ? s2.t : 'none'}s (d=${s2 ? s2.d : '-'} err=${s2 ? s2.err : '-'})`);
       // ================= 以下为「模拟人工点击 / 按键」用例 =================
-      const wake = async () => {
-        for (const x of [420, 520, 620]) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y: 300, button: 'none', buttons: 0 }); await sleep(120); }
-        await sleep(400);
-      };
       let lastClickInfo = '';
       const clickText = async (txt) => {
         const info = await ev(
@@ -185,7 +220,11 @@ setTimeout(() => {
       const bodyText = async () => String(await ev('document.body.innerText'));
 
       // S8b 点击「<」返回上一级（真实点击）。
-      // 注意：点击前不要先 mousemove（wake）——会干扰 Kuikly 的 click 判定（实测）
+      // 注意：① 点击前不要先 mousemove（wake）——会干扰 Kuikly 的 click 判定（实测）；
+      //       ② 本用例前提是「当前页 = 浏览页」，而上面的 S9 已把页面导航到播放页，
+      //          且播放页顶部标题栏会自动隐藏，因此这里必须先回到浏览页再点，否则必然找不到 '<'。
+      await send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${HOME}` });
+      { const t0 = Date.now(); let txt = ''; while (Date.now() - t0 < 20000) { txt = await bodyText(); if (txt.includes(mediaName)) break; await sleep(400); } }
       let backClicked = false; let afterBack = '';
       for (let i = 0; i < 3; i++) {
         backClicked = await clickText('<');
@@ -201,27 +240,101 @@ setTimeout(() => {
         await rpc('history', 'remove', { connectionId: 'c1', remotePath: p });
       }
 
-      // 重新进入播放页做交互
-      await send('Page.navigate', { url: `${base}?page_name=SftpPlayerPage&sessionId=${conn.sessionId}&connectionId=c1&connectionLabel=test&remotePath=${MEDIA}&name=${mediaName}&size=${MEDIA_SIZE}` });
-      await waitText((t) => /\d\d:\d\d/.test(t));
-      await sleep(2500);
+      // ── 播放器「控件交互」用例：一律走**独立播放窗口**（桌面壳的产品真实路径）──
+      //    原因：页内播放器顶部标题栏是「自动显隐」的，按文本定位 ☰/✕/倍速 必然时有时无（曾连点 11s 都点不到）；
+      //    独立窗口与 test:player 的 P1/P4a 同一路径（浏览页点视频 → 宿主开窗），控件稳定可点。
+      const VIS_VID = "(function(){const vs=[...document.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>50&&r.height>50;});return vs[0]||null;})()";
+      const videoState = async () => {
+        const raw = await ev("(()=>{const v=" + VIS_VID + ";return v?JSON.stringify({t:+v.currentTime.toFixed(2),d:+(v.duration||0).toFixed(2),rs:v.readyState,err:v.error?v.error.code:0,paused:v.paused}):'none';})()");
+        try { return JSON.parse(raw); } catch (e) { return null; }
+      };
+      // 附加到新开的 CDP 页面目标（独立窗口）；取最后一个匹配项（最新创建的窗口）
+      const attachTarget = async (pats, ms = 20000) => {
+        const arr = Array.isArray(pats) ? pats : [pats];
+        const t0 = Date.now();
+        while (Date.now() - t0 < ms) {
+          const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+          const hits = list.filter((x) => x.type === 'page' && arr.some((p) => String(x.url).includes(p)));
+          const t = hits[hits.length - 1];
+          if (t) {
+            const w = new WebSocket(t.webSocketDebuggerUrl);
+            let sid = 0; const pends = new Map();
+            const s = (m, pp = {}) => new Promise((r) => { const i = ++sid; pends.set(i, r); w.send(JSON.stringify({ id: i, method: m, params: pp })); });
+            await new Promise((r) => { w.onopen = r; });
+            w.onmessage = (e) => {
+              const m = JSON.parse(e.data);
+              if (m.id && pends.has(m.id)) { pends.get(m.id)(m.result); pends.delete(m.id); }
+              if (m.method === 'Runtime.exceptionThrown') {
+                const d = m.params.exceptionDetails || {};
+                errs.push('[player] ' + String((d.exception && d.exception.description) || d.text || 'exception'));
+              }
+            };
+            await s('Runtime.enable'); await s('Page.enable');
+            const e2 = async (expr, ap = false) => {
+              const r = await s('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: ap });
+              if (r && r.exceptionDetails) return 'EVAL_ERR: ' + (r.exceptionDetails.text || '');
+              return r && r.result ? r.result.value : undefined;
+            };
+            return { send: s, ev: e2, ws: w, url: t.url };
+          }
+          await sleep(300);
+        }
+        return null;
+      };
+      // 产品真实路径打开独立播放窗口：主窗口回浏览页 → 点视频行 → 宿主开窗 → 附加 CDP
+      const openStandalonePlayer = async (fileName) => {
+        activeSession = mainSession;
+        await send('Page.navigate', { url: `${base}?page_name=SftpBrowserPage&host=${HOST}&port=${PORT_SSH}&user=${USER}&password=${PASS}&remotePath=${HOME}` });
+        const t0 = Date.now(); let txt = '';
+        while (Date.now() - t0 < 20000) { txt = String(await ev('document.body.innerText')); if (txt.includes(fileName)) break; await sleep(400); }
+        const clicked = await clickText(fileName);
+        const sess = await attachTarget('standalone=1');
+        if (sess) activeSession = sess;
+        return clicked ? sess : null;
+      };
+      // 关掉独立播放窗口（点窗口内「<」；失败时用 CDP 兜底）
+      const closePlayerSession = async (sess) => {
+        const prev = activeSession; if (sess) activeSession = sess;
+        let ok = false;
+        for (let i = 0; i < 4 && !ok; i++) { await showControlsByTap(); ok = await clickText('<'); await sleep(700); }
+        if (!ok && sess) { try { await sess.send('Page.close'); } catch (e) { /* ignore */ } }
+        activeSession = prev;
+        return ok;
+      };
 
-      // S9b 点击 ☰ 打开选集弹层（真实点击）
+      const playerSess = await openStandalonePlayer(mediaName);
+      check('S9b0 浏览页点视频 → 打开独立播放窗口(产品真实路径)', !!playerSess,
+        playerSess ? 'url=…' + String(playerSess.url).slice(-56) : '(未打开独立窗口)');
+      if (playerSess) activeSession = playerSess;
+      { // 等真实起播（无解码错误）
+        const t0 = Date.now(); let st = null;
+        while (Date.now() - t0 < 30000) { st = await videoState(); if (st && st.t > 0 && !st.err) break; await sleep(500); }
+      }
+      await sleep(1500);
+
+      // S9b 点击 ☰ 打开选集弹层（真实点击，独立窗口）
       let opened = false;
-      for (let i = 0; i < 5 && !opened; i++) { await wake(); await clickText('☰'); await sleep(900); opened = (await bodyText()).includes('✕'); }
-      check('S9b 点击☰打开选集弹层(真实点击)', opened, 'opened=' + opened);
+      for (let i = 0; i < 5 && !opened; i++) { await showControlsByTap(); await clickText('☰'); await sleep(900); opened = (await bodyText()).includes('✕'); }
+      check('S9b 点击☰打开选集弹层(真实点击)', opened, 'opened=' + opened + ' | click=' + lastClickInfo);
 
-      // S9c 点击 ✕ 关闭选集弹层（真实点击）
+      // S9c 点击 ✕ 关闭选集弹层（真实点击，独立窗口）
       const xClicked = await clickText('✕');
       const closed = await waitGone('✕', 6000);
       check('S9c 点击✕关闭选集弹层(真实点击)', xClicked && closed, `clicked=${xClicked} closed=${closed}`);
 
-      // S9d 点击倍速打开设置菜单（真实点击）
-      await wake();
+      // S9d 点击倍速打开设置菜单（真实点击，独立窗口）
+      await showControlsByTap();
       const speedClicked = await clickText('1.0×');
       await sleep(800);
       const menuShown = (await bodyText()).includes('1.25×');
-      check('S9d 点击倍速打开设置菜单(真实点击)', speedClicked && menuShown, `clicked=${speedClicked} menu=${menuShown}`);
+      check('S9d 点击倍速打开设置菜单(真实点击)', speedClicked && menuShown, `clicked=${speedClicked} menu=${menuShown} | click=${lastClickInfo}`);
+      if (playerSess) await closePlayerSession(playerSess);
+      activeSession = mainSession;
+
+      // 回到【页内播放器】（主窗口）继续 seek/切集用例（这些在页内路径下稳定，同时覆盖非桌面宿主的回退路径）
+      await send('Page.navigate', { url: `${base}?page_name=SftpPlayerPage&sessionId=${conn.sessionId}&connectionId=c1&connectionLabel=test&remotePath=${MEDIA}&name=${mediaName}&size=${MEDIA_SIZE}` });
+      await waitText((t) => /\d\d:\d\d/.test(t));
+      await sleep(2500);
 
       // 全屏（⛶/⤡）用例按需求暂缓（2026-09）：不进全屏，后续需要时再补
       // S9f 键盘快捷键（模拟人工按键）：按「←」seek。
@@ -253,11 +366,6 @@ setTimeout(() => {
         }
         return true;
       };
-      const VIS_VID = "(function(){const vs=[...document.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>50&&r.height>50;});return vs[0]||null;})()";
-      const videoState = async () => {
-        const raw = await ev("(()=>{const v=" + VIS_VID + ";return v?JSON.stringify({t:+v.currentTime.toFixed(2),d:+(v.duration||0).toFixed(2),rs:v.readyState,err:v.error?v.error.code:0,paused:v.paused}):'none';})()");
-        try { return JSON.parse(raw); } catch (e) { return null; }
-      };
       const wakeBar = async () => {
         const w = await ev('innerWidth'), h = await ev('innerHeight');
         return ev("(()=>{const w=innerWidth,h=innerHeight;const c=[...document.querySelectorAll('*')].map(e=>({e,r:e.getBoundingClientRect()})).filter(o=>o.r.width>w*0.4&&o.r.height>1&&o.r.height<26&&o.r.top>h*0.55&&o.r.top<h-25);if(!c.length)return null;c.sort((a,b)=>a.r.height-b.r.height);const r=c[0].r;return JSON.stringify({x1:r.left+6,x2:r.right-6,y:Math.round(r.top+r.height/2)});})()").then((j) => { try { return JSON.parse(j); } catch (e) { return null; } });
@@ -265,8 +373,8 @@ setTimeout(() => {
       const mouseAt = (type, x, y, buttons) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
 
       // S9g 拖动进度条 seek：真实「按下 → 连续移动 → 松手」，断言视频真的跳转
-      for (let i = 0; i < 4; i++) { const st = await videoState(); if (!st || st.paused) break; await wake(); await clickText('❚❚'); await sleep(700); }
-      await wake(); await sleep(300);
+      for (let i = 0; i < 4; i++) { const st = await videoState(); if (!st || st.paused) break; await showControlsByTap(); await clickText('❚❚'); await sleep(700); }
+      await showControlsByTap(); await sleep(300);
       const stBefore = await videoState();
       const bar = await wakeBar();
       let dragTime = -1;
@@ -323,6 +431,15 @@ setTimeout(() => {
         swap ? `切到 ${swap.name} 标题=${titleOk} paused(前/后)=${pausedNow && pausedNow.paused}/${stB && stB.paused} t:${stA ? stA.t : '-'}->${stB ? stB.t : '-'} 解码错误=${stB ? stB.err : '-'} 自动播放=${autoPlayed}`
              : '未找到第二个视频（测试目录需≥2个 .mp4）');
 
+      // S9i/S9j 也走**独立播放窗口**（标题栏 ☰/⏮ 在独立窗口上稳定）
+      // 换到 kr_long.mp4 的独立窗口并播到 >9s（S9j 的 ⏮ 必须从 >8s 回到 <4s）
+      activeSession = mainSession;
+      const longSess = await openStandalonePlayer('kr_long.mp4');
+      if (longSess) {
+        activeSession = longSess;
+        const t0 = Date.now(); let st = null;
+        while (Date.now() - t0 < 40000) { st = await videoState(); if (st && st.t > 9.5) break; await sleep(700); }
+      }
       // S9i 打开选集抽屉时视频区不得塌陷（video 高度 > 0）
       // 注意：上一集（S9h 播到 ~12s）会写入 >10s 的历史，重进时续播浮层是全屏遮罩会挡住控制条点击
       await clearHistory('kr_long.mp4');
@@ -330,7 +447,7 @@ setTimeout(() => {
       //     曾因浮层未绝对定位，作为列布局子节点吃掉视频区 flex 高度 → video 高度=0 → 上半屏纯黑
       let drawerShown = false;
       for (let i = 0; i < 5 && !drawerShown; i++) {
-        await wake();
+        await showControlsByTap();
         await clickText('☰');
         await sleep(900);
         drawerShown = (await bodyText()).includes('选集');
@@ -343,11 +460,11 @@ setTimeout(() => {
       // S9j 从头播放按钮（真实点击 ⏮）：清掉进度、回到 0 并继续播
       await clearHistory('kr_long.mp4');
       await dismissResume();
-      await wake();
+      await showControlsByTap();
       const beforeRestart = await videoState();
       let restartClicked = false;
       for (let i = 0; i < 5 && !restartClicked; i++) {
-        await wake();
+        await showControlsByTap();
         restartClicked = await clickText('⏮');
         await sleep(300);
       }
@@ -356,6 +473,8 @@ setTimeout(() => {
       check('S9j 点击「⏮ 从头播放」→ 回到开头并继续播放(真实点击)',
         restartClicked && !!beforeRestart && !!afterRestart && beforeRestart.t > 8 && afterRestart.t < 4 && afterRestart.t < beforeRestart.t - 5 && afterRestart.paused === false,
         `clicked=${restartClicked} ${beforeRestart && beforeRestart.t}s -> ${afterRestart && afterRestart.t}s paused=${afterRestart && afterRestart.paused} err=${afterRestart && afterRestart.err}`);
+      if (longSess) await closePlayerSession(longSess);
+      activeSession = mainSession;   // S9k/S9l 回到主窗口（页内播放器）
 
       // S9k 进度记录 + 续播：播放 ≥12s → 返回 → 重新打开同一视频 → 出现续播弹窗 → 继续 → 跳到记录位置
       const longUrl = `${base}?page_name=SftpPlayerPage&sessionId=${conn.sessionId}&connectionId=c1&connectionLabel=test&remotePath=${HOME}/kr_long.mp4&name=kr_long.mp4&size=981183`;
@@ -383,17 +502,16 @@ setTimeout(() => {
       // S9l 视频随窗口自适应：真实改变**窗口**大小 → video 元素尺寸随之变化（可见）
       const sizeOf = async () => Number(await ev("(()=>{const v=" + VIS_VID + ";return v?Math.round(v.getBoundingClientRect().width):-1;})()"));
       const vp = async () => String(await ev('JSON.stringify({w:innerWidth,h:innerHeight})'));
-      const activateApp = () => {
-        try { execFileSync('osascript', ['-e', 'tell application "System Events" to set frontmost of (first process whose name contains "Electron") to true'], { stdio: 'ignore' }); } catch (e) { }
-      };
+      // 只改**本实例**窗口尺寸：不能按 "Electron" 匹配 —— 本机 IDE/IM（MyFlicker/Kim/Kit）同为
+      // Electron 应用，会误激活甚至改掉用户自己的窗口；也不再 activate（activate 会抢用户前台）。
+      const INSTANCE_TITLE = INSTANCE ? `Kuikly SFTP [${INSTANCE}]` : 'Kuikly SFTP';
       const setWinSize = (w, h) => {
-        // 播放页是独立窗口：把所有 Electron 窗口都改到目标尺寸，确保被测窗口一定被改到
-        const script = `tell application "System Events" to tell (first process whose name contains "Electron") to repeat with win in windows\nset size of win to {${w}, ${h}}\nend repeat`;
+        // 播放页是独立窗口：遍历本实例的全部窗口（窗口标题含实例名）逐个改尺寸
+        const script = `tell application "System Events"\nrepeat with p in (every process whose name contains "Electron")\nrepeat with win in (windows of p)\nif (name of win) contains "${INSTANCE_TITLE}" then\nset size of win to {${w}, ${h}}\nend if\nend repeat\nend repeat\nend tell`;
         try { execFileSync('osascript', ['-e', script], { stdio: 'ignore' }); return true; } catch (e) { return false; }
       };
       const resizeAndWait = async (w, h) => {
-        // 1) 先试真实窗口（osascript 需 macOS 自动化权限，环境不稳时可能失败）
-        activateApp();
+        // 1) 先试真实窗口（osascript 需 macOS 辅助功能/自动化权限，环境不稳时可能失败）
         setWinSize(w, h);
         await sleep(1000);
         let v = JSON.parse(await vp());

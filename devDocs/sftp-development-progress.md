@@ -7,7 +7,24 @@
 > - `devDocs/sftp-impl-plan.md` — 全平台 Phase 0~6 落地清单
 > - `devDocs/sftp-player-modernz-plan.md` — 播放页 mpv OSC 改造方案
 >
-> 最近一次更新：2026-09-28（`5417ed9f`，双栏隐藏文件开关 + D26a/D26b/D26c 回归）
+> 最近一次更新：2026-09-28（本轮：测试窗口/清理修复 + 播放器控件用例改走独立窗口 + 默认测试机切换）
+
+## 0.0 本轮改动（2026-09-28，测试体系/文档；产品行为无变更）
+1. **测试窗口「不抢焦点 / 沉底 / 只在启动桌面」**：`electron/main.js` 在 `KR_TEST_NOFOCUS=1`（套件默认）下用
+   `showInactive()` 显示并 `setAlwaysOnTop(true,'desktop')`；**禁用** `setVisibleOnAllWorkspaces()`（实测会出现在全部桌面）。
+   自证：`cd electron && npm run check:space`（新增 `electron/scripts/check-window-space.mjs`）。回退：`KR_TEST_NOFOCUS=0`。
+2. **进程/窗口残留修复**：`pkill` 匹配串以 `--` 开头时必须 `pkill -TERM -f -- '<marker>'`（否则 `illegal option -- -`、
+   一个都不杀 → 多 worktree 窗口堆积把机器拖死）；`electron/test/env.mjs` 的 `killByUserData()` 与
+   `electron/scripts/pretest-kill.js` 均按本实例 userData 精准清理。
+3. **播放器控件用例改走独立播放窗口**（产品真实路径）+ 控制条驱动修正：非全屏时 mousemove **不会**唤回控制条
+   （`SftpPlayerPage.kt:110`），自动隐藏后 ☰/⏮/倍速在 DOM 中不存在；用例改为「点击画面切换控制条 + 断言可见」
+   再点控件（`showControlsByTap()`），并新增 `S9b0` 断言独立窗口打开成功。详见 `devDocs/kuikly-electron-architecture.md` §13.2。
+4. **默认测试机切到公网机**：`8.152.204.58:50122`（`zhaojian/zhaojian`，`/home/zhaojian`，端口非 22），
+   各套件 `SFTP_HOST/SFTP_PORT` 默认值同步；内网备选 `192.168.2.2:22`。见 `AGENTS.md` §13.6 / `devDocs/sftp-test-plan.md` §2.3。
+
+**验证情况（如实记录）**：`npm test`（smoke）**23/23 全绿，exit=0，残留进程 0**（91s）；`test:dual` 37/37、
+`test:player` 8/8 在本轮改动前已验证通过；`test:features` / `test:term` / `test:text` 本轮**未重跑**
+（收尾时间不足，下次补跑；这三者仅改了默认测试机常量）。改动文件全部通过 `node --check`；未动 Kotlin，无需重编。
 
 ---
 
