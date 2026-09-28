@@ -7,7 +7,7 @@
 > - `devDocs/sftp-impl-plan.md` — 全平台 Phase 0~6 落地清单
 > - `devDocs/sftp-player-modernz-plan.md` — 播放页 mpv OSC 改造方案
 >
-> 最近一次更新：2026-09-25（`524a2ebb`，含 §0 最新快照）
+> 最近一次更新：2026-09-28（`5417ed9f`，双栏隐藏文件开关 + D26a/D26b/D26c 回归）
 
 ---
 
@@ -51,7 +51,16 @@
 | **测试防卡死** | `waitFor`/CDP `ev`/`rpc`/页面内 `fetch` 全部加超时（曾因页面 fetch 无超时 + `waitFor` 无超时 → 整体卡死）；看门狗内 `SIGKILL` 子进程；逐条打印耗时 | 规则写入 `AGENTS.md §3.1 规则 7` |
 | **toast 不拦截点击** | `h5App/utils/Ui.kt` toast `pointer-events:none`（否则盖住终端/缓存悬浮条） | — |
 
-### 0.4 测试套件与当前通过数（2026-09-25）
+
+### 0.3.1 双栏隐藏文件开关交付（2026-09-28）
+
+- **产品行为**：双栏工具条显示「显示隐藏:关/开」；默认不显示点文件，点击一次显示，再次点击隐藏；本地栏和远端栏同步生效。
+- **共享实现**：`PaneState.showHidden` 默认 `false`；`FileManagerModule.applyView()` 过滤名称以 `.` 开头但排除 `.`/`..` 的条目；`setShowHidden()` 基于 `rawEntries` 即时重算，不重新拉取目录。
+- **选择一致性**：关闭显示时从 selection 移除不可见点文件，避免隐藏条目继续参与传输和 CRUD。
+- **响应式修复**：动态按钮文案通过 provider 在 `attr {}` 内读取 observable；测试点击使用 `clickExact()`，避免「显示隐藏:关/开」子串误匹配。
+- **回归结果**：核心 JVM **42/42**、JS Node **42/42**；Electron 双栏 **37/37**；安装版 CDP 抽查 **7/7**；DMG 构建成功并已覆盖安装。
+- **证据**：`electron/test/artifacts/`；安装版截图临时保存在 `/tmp/kr-installed-shots/I1-默认关.png`、`I2-已显示.png`、`I3-已重新隐藏.png`。
+
 
 | 套件 | 命令 | 结果 |
 |---|---|---|
@@ -60,8 +69,8 @@
 | 冒烟（首帧/播放/seek/切集/续播/resize） | `npm test` | **22/22**（新增 S3b 首帧非空白；S9l 由 SKIP 转硬断言；S9k 阈值改语义断言） |
 | 独立播放窗口 | `npm run test:player` | **8/8** |
 | 文本/Markdown 查看器 | `npm run test:text` | **16/16** |
-| 双栏文件管理器 | `npm run test:dual` | **28/28** |
-| `core/file-manager` 单测 | `./gradlew :core:file-manager:jvmTest :core:file-manager:jsNodeTest` | BUILD SUCCESSFUL |
+| 双栏文件管理器 | `npm run test:dual` | **37/37**（D0–D26，含隐藏文件开关） |
+| `core/file-manager` 单测 | `./gradlew :core:file-manager:jvmTest :core:file-manager:jsNodeTest` | **42/42 JVM + 42/42 JS Node** |
 | 集成自测页（原生端） | `SftpIntegrationTestPage` | macOS/iOS/Android 74/74（历史结论） |
 
 ### 0.5 已知问题 / 待办（下一个模型优先看）
@@ -122,7 +131,7 @@
 - **双栏文件管理跨端化（本轮完成）**：`core/file-manager` 扩到 `jvm/js/android/ios(x64,arm64,simArm64)/macos(x64,arm64)`，
   OHOS 走**单独 build 文件** `core/file-manager/build.ohos.gradle.kts`（含 `ohosArm64`）+ `settings.2.0.ohos.gradle.kts` 单独 include（标准 Kotlin 不识别 `ohosArm64`）；
   `PlatformTime` 补 android/apple(`NSDate`)/ohos(`posix.time`) actual。`FilesDualPanePage` 迁回 **commonMain**，本地栏改走 `BridgeModule.lfXxx`；
-  Android/iOS/macOS 各实现沙盒本地文件（`filesDir/local`、`Documents/local`，越界拒绝）。用例：`test:dual` **28/28**（Electron）。
+  Android/iOS/macOS 各实现沙盒本地文件（`filesDir/local`、`Documents/local`，越界拒绝）。该阶段用例为 `test:dual` **28/28**（历史结果，后续 D26 隐藏文件开关扩展至 37/37）。
 - **仍待办**：OHOS/MiniApp 的本地文件系统（ETS / 无底座）→ 双栏本地栏在两端隐藏；MiniApp 缓存/终端无底座；OHOS ETS 需 DevEco 内编译验证。
 
 ---
@@ -147,7 +156,7 @@
 | **Android** | ✅ `./gradlew :androidApp:assembleDebug` | JSch 0.1.55 | NanoHTTPD | ✅ 模拟器 **74/74 × 10 轮零失败** + ExoPlayer 经代理播放 | **全链路可用** |
 | **HarmonyOS** | ✅ 渲染器 `libkuikly.so` + 业务 `libshared.so` | libssh2 + 自 vendored mbedTLS 2.28.8 | ❌ 桩（未进 CMake） | ❌ 运行时未验证（无设备） | **核心可用、播放未实现** |
 | **Web (H5)** | ✅ `:demo:packLocalJsBundleDebug` + `:h5App:jsBrowserDevelopmentWebpack` | 浏览器无 socket → Node 网关代持（ssh2） | 网关直接出 HTTP Range | ✅ 浏览器实测（连接 / 浏览 / Range / 拖动 seek） | **全链路可用** |
-| **桌面壳 (Electron)** | ✅ 默认 `npm run build:web && npm run dist`（debug dmg + `/Applications` 覆盖安装；release 仅 zhaojian 发版时） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 33/33`、`smoke 21/21`、`player 8/8`、`text 21/21`、`dual 28/28`、`term 7/7` | **全链路可用（独立窗口：播放/终端/Markdown 查看器；其它文本页内）** |
+| **桌面壳 (Electron)** | ✅ 默认 `npm run build:web && npm run dist`（debug dmg + `/Applications` 覆盖安装；release 仅 zhaojian 发版时） | 复用 Node 网关（打包进 `Resources/gateway`） | 网关 Range | ✅ `features 33/33`、`smoke 21/21`、`player 8/8`、`text 21/21`、`dual 37/37`（含 D26a/b/c）、`term 7/7`；安装版双栏抽查 7/7 | **全链路可用（双栏含隐藏文件开关；独立窗口：播放/终端/Markdown 查看器；其它文本页内）** |
 | **小程序** | ✅ 同 Web（共用 JS bundle）+ `:miniApp:jsMiniAppDevelopmentWebpack` | 复用 Web 的 JS 模块 | 需网关 | ❌ 未验证（需微信域名白名单） | **未验证** |
 
 ---
@@ -369,8 +378,7 @@ be71901c  feat(web): 新增 Web 端 SFTP（Node 网关 + 浏览器模块）并�
 
 **已交付并自动化验证（22/22）**：
 
-- `core/file-manager/`：纯状态机共享核心（路径越界拦截、排序过滤、选中、操作与传输计划），jvm+js **76/76** 单测；
-  目录优先排序。
+- `core/file-manager/`：纯状态机共享核心（路径越界拦截、排序过滤、选中、操作与传输计划），jvm+js **42/42 + 42/42** 单测；目录优先排序。
 - `demo/src/jsMain/.../FilesDualPanePage.kt`：双栏 UI（活动栏、行选中/`▶` 进入、新建/重命名/删除弹层、
   主机会话切换器、未连远端提示）。
 - 入口：首页默认「本地文件管理」；首页连接行「⇄」；浏览页右上「⇄」（带当前目录）。

@@ -292,8 +292,8 @@ class FileManagerModule(          // 纯状态机：不做 IO
 
 ## 5. L1 单元测试用例（Kotlin/JS，commonTest 自动跑）
 
-> 工具：`:core:file-manager:jvmTest`（JVM 跑得更快）+ `:core:file-manager:jsTest`（Node 跑，与 KMP JS 共享同一套 expect/assert）。
-> 标记 `L1`；命名 `D-L1-xxx`。
+> 工具：`:core:file-manager:jvmTest`（JVM 跑得更快）+ `:core:file-manager:jsNodeTest`（Node 跑，与 KMP JS 共享同一套 expect/assert）。
+> 本轮实际结果：JVM **42/42**、JS Node **42/42**，无失败。隐藏文件开关对应 `D-L1-43`。
 
 ### 5.1 状态与导航
 | ID | 描述 | 步骤 | 预期 |
@@ -489,7 +489,51 @@ SKIP_ELECTRON=1 bash scripts/run-all-tests.sh     # 同时跳过 Electron（仅�
 
 ---
 
-## 7. 实测用例（D0–D26，37/37 通过）
+> 本轮交付摘要（2026-09-28）：双栏工具条新增「显示隐藏:关/开」开关。默认关闭隐藏文件；点击一次显示，再次点击恢复隐藏；本地栏和远端栏同步切换。实现位于共享 `core/file-manager` 状态机，不重新请求列表，切换即时。
+>
+> **交付结果**：代码提交 `5417ed9f`，已推送 `origin/zhaojian`；Electron debug DMG 已构建并覆盖安装到 `/Applications/Kuikly SFTP.app`。开发态双栏套件 **37/37** 通过，安装版抽查 **7/7** 通过。
+
+### 7.0 本轮功能总结
+
+| 项目 | 实现与行为 |
+|---|---|
+| 工具条入口 | 双栏工具条新增「显示隐藏:关/开」按钮；标签反映当前状态，使用 provider 在 `attr {}` 内读取 observable，保证点击后标签刷新。 |
+| 默认行为 | `PaneState.showHidden = false`；名称以 `.` 开头且不是 `.`/`..` 的条目默认不显示。 |
+| 切换行为 | 点击「显示隐藏:关」后两栏同时显示点文件；再次点击「显示隐藏:开」后两栏重新隐藏。 |
+| 数据流 | `FileManagerModule.setShowHidden()` 基于 `rawEntries` 重新计算 `applyView`，不重新拉取本地或远端列表。 |
+| 选择安全 | 关闭开关时，从 selection 中剔除刚被隐藏的条目，避免不可见文件继续参与上传、下载、删除或重命名。 |
+| 状态保持 | 进入目录后继续保持开关状态；切换主机/重建核心时恢复当前开关状态。 |
+| 跨栏一致性 | 本地 Electron `localfs:list` 与远端 SFTP 列表都保留原始条目，统一由共享核心过滤，避免两栏语义不一致。 |
+
+### 7.0.1 本轮变更文件
+
+- `core/file-manager/src/commonMain/.../FileManagerModule.kt`：新增 `PaneState.showHidden`、`setShowHidden()` 和点文件过滤。
+- `core/file-manager/src/commonTest/.../ViewTest.kt`：新增默认隐藏、切换、选择剔除、导航保持四项测试。
+- `demo/src/commonMain/.../FilesDualPanePage.kt`：新增 observable 开关、双栏同步、响应式按钮标签和核心重建恢复。
+- `electron/test/dual-pane.mjs`：新增本地/远端点文件夹具、`clickExact()` 和 D26a/D26b/D26c。
+- `devDocs/kuikly-dual-pane-test-plan.md`、`devDocs/kuikly-file-transfer-module.md`、`AGENTS.md`：同步功能与验证说明。
+
+### 7.0.2 测试结果总览
+
+| 层级 | 命令/套件 | 结果 | 覆盖内容 |
+|---|---|---:|---|
+| L1 JVM | `./gradlew :core:file-manager:jvmTest` | **42/42** | 核心状态、导航、排序、过滤、选择、传输计划、路径安全、隐藏文件开关 |
+| L1 JS | `./gradlew :core:file-manager:jsNodeTest` | **42/42** | 与 JVM 共用的 KMP 核心逻辑 |
+| L2 Electron | `cd electron && npm run test:dual` | **37/37** | 双栏渲染、选择、上传/下载字节校验、目录 CRUD、越界安全、URL 凭据安全、隐藏文件切换 |
+| 安装版抽查 | `/Applications/Kuikly SFTP.app` + CDP | **7/7** | 首页入口、进入双栏、默认隐藏、点击显示、真实隐藏条目出现、再次隐藏、标签恢复 |
+| 静态检查 | `node --check electron/test/dual-pane.mjs`、`git diff --check`、代码 lint | **通过** | 测试脚本语法、空白、受影响 Kotlin 文件 |
+
+### 7.0.3 安装版视觉证据
+
+安装版抽查使用真实用户主目录中的点文件作为样本，验证结果如下：
+
+| 截图 | 场景 | 结果 |
+|---|---|---|
+| `I1-默认关.png` | 进入双栏后的默认状态 | 工具条为「显示隐藏:关」，本地栏不显示 `.CFUserTextEncoding` 等点文件 |
+| `I2-已显示.png` | 点击后显示隐藏文件 | 工具条为「显示隐藏:开」，本地栏显示 `.agents`、`.ai_completion`、`.anaconda` 等点目录 |
+| `I3-已重新隐藏.png` | 再次点击 | 工具条回到「显示隐藏:关」，点文件从列表消失 |
+
+截图目录：`/tmp/kr-installed-shots/`；Electron 自动化截图目录：`electron/test/artifacts/`。
 
 > 运行：`cd electron && npm run build:web`（或先跑 Gradle 打包）→ `npm run sync` → `npm run test:dual`
 > 脚本：`electron/test/dual-pane.mjs`；截图：`electron/test/artifacts/*.png`（关键步骤自动存图）

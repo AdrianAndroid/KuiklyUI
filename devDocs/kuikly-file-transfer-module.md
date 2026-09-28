@@ -1,7 +1,7 @@
 # Kuikly 跨端项目：文件双向传输模块 —— 抽离与开发计划（决策稿）
 
 > **本文件是「决定做不做 / 怎么做 / 加什么功能」的决策稿**，不是已落地的实现代码。
-> 实现（`packages/file-transfer/*`）待你确认方案后由 M1 起按 §5 逐步落地。
+> **文档状态说明（2026-09-28）**：顶部 §0–§5 仍描述未来独立 `packages/file-transfer` 传输引擎的决策稿；KuiklyUI 当前已经落地并验证的是 §6 的 `core/file-manager` 双栏状态机和 Electron/Web 页面。两者不是同一个模块，不能用“传输包尚未创建”否定双栏当前能力。
 >
 > 关联：
 > - **Janus 仓库**：`https://github.com/AdrianAndroid/janus`（本地路径 `/Users/zhaojian/bin/macmini/janus`）
@@ -391,7 +391,7 @@ KuiklyUI/
 | 本地 FS（宿主） | `electron/main.js` `localfs:*` + `electron/preload.js` `window.localFs.*` | `home/list/stat/mkdir/rename/remove/readFile/writeFile`；`LOCAL_ROOT = app.getPath('home')`，越界拒绝 |
 | 远端通道 | `SftpModule` + `sftp-gateway`（Node，`ssh2`） | 浏览器不能直连 SSH，经网关代持 |
 
-核心单测：`./gradlew :core:file-manager:jvmTest :core:file-manager:jsNodeTest` → **76/76**。
+核心单测：`./gradlew :core:file-manager:jvmTest :core:file-manager:jsNodeTest` → **42/42 JVM + 42/42 JS Node**。
 
 ### 6.2 入口（产品形态：先有远端，再有双栏）
 
@@ -419,6 +419,35 @@ KuiklyUI/
 - `upload`：无 `content` 时接受 `localPath`，由网关直接读本地文件（网关与调用方同机；仅 127.0.0.1）。
 - `download`：`localName` 为**绝对路径**时直接写该路径（双栏「下载到本地栏」用）。
 
-### 6.5 尚未落地（按 §5 继续）
+### 6.6 本轮新增：隐藏文件开关与验证结果（2026-09-28）
+
+#### 功能行为
+
+- 工具条按钮文案为「显示隐藏:关」或「显示隐藏:开」，反映当前视图状态。
+- 默认 `showHidden = false`，隐藏名称以 `.` 开头的条目，但保留 `.` 和 `..` 的特殊语义。
+- 点击一次显示本地栏和远端栏的隐藏文件；再次点击重新隐藏，两栏同步生效。
+- 过滤在共享 `FileManagerModule.applyView()` 中执行，切换只基于 `rawEntries` 重算视图，不重新发起目录 IO。
+- 关闭显示时会从 selection 中移除不可见的隐藏条目，避免其继续参与上传、下载、删除或重命名。
+- 目录导航和核心重建会保留当前开关状态。
+
+#### 实现与测试
+
+- `FileManagerModule`：`PaneState.showHidden`、`setShowHidden()`、隐藏条目过滤和 selection 清理。
+- `FilesDualPanePage`：observable 状态、两栏同步切换、核心重建恢复；动态标签使用 provider 在 `attr {}` 内读取，保证 Kuikly 响应式更新。
+- `ViewTest`：默认隐藏、显示/隐藏切换不重新拉取、隐藏时清理 selection、导航保持状态。
+- `electron/test/dual-pane.mjs`：本地/远端隐藏夹具、精确点击 `clickExact()`、D26a/D26b/D26c。
+
+#### 实测结果
+
+| 验证层 | 结果 |
+|---|---:|
+| `:core:file-manager:jvmTest` | **42/42** |
+| `:core:file-manager:jsNodeTest` | **42/42** |
+| `cd electron && npm run test:dual` | **37/37**，含 D26a/D26b/D26c |
+| 安装版 `/Applications/Kuikly SFTP.app` CDP 抽查 | **7/7** |
+| DMG 构建与覆盖安装 | 成功 |
+
+安装版证据截图：`/tmp/kr-installed-shots/I1-默认关.png`、`I2-已显示.png`、`I3-已重新隐藏.png`；自动化截图保存在 `electron/test/artifacts/`。
+
 
 目录递归传输（`isDir`）、字节偏移断点续传与重试退避、拖拽传输、远程编辑器、多远端同屏（三栏）、H5（非 Electron）本地栏（需 File System Access API）。
